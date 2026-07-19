@@ -7,11 +7,8 @@ export function discoverPipeline(pipelinePath: string): StepDefinition[] {
 }
 
 export function nextStep(blob: Blob, steps: StepDefinition[]): StepDefinition | null {
-  if (blob.forcedStepId) return requireStep(steps, blob.forcedStepId);
-  if (!blob.lastCompletedStepId) return steps[0] ?? null;
-  const index = steps.findIndex((step) => step.id === blob.lastCompletedStepId);
-  if (index >= 0) return steps[index + 1] ?? null;
-  return steps.find((step) => step.order > (blob.lastCompletedOrder ?? -1)) ?? null;
+  if (blob.state === "complete") return null;
+  return requireStep(steps, blob.state);
 }
 
 export function snapshotDefinition(step: StepDefinition, pipelinePath: string): DefinitionSnapshot {

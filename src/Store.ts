@@ -15,9 +15,10 @@ export class ConveyorStore {
       const existing = this.getBlob(id);
       if (existing) return this.existingBlob(existing, input);
       const at = this.now();
+      const initialState = discoverPipeline(input.pipelinePath)[0].id;
       this.database.connection.prepare(blobInsert).run(
         id, input.title, input.body, input.cwd, input.pipelinePath,
-        JSON.stringify(input.inputArtifacts), at, at,
+        JSON.stringify(input.inputArtifacts), initialState, at, at,
       );
       return { blob: this.requireBlob(id), already: false };
     });
@@ -32,9 +33,10 @@ export class ConveyorStore {
     return this.database.transaction(() => {
       this.requireActiveLease(ownerId);
       const blob = this.requireBlob(input.blobId);
-      if (blob.state !== "queued") throw new Error(`Blob ${blob.id} is not queued.`);
+      if (blob.state !== input.step.id || blob.paused) {
+        throw new Error(`Blob ${blob.id} is not ready for ${input.step.id}.`);
+      }
       const receipt = this.insertReceipt(blob, input);
-      this.database.connection.prepare(blobStateUpdate).run("running", this.now(), blob.id);
       return { blob: this.requireBlob(blob.id), receipt, step: input.step, definition: input.definition };
     });
   }
@@ -53,14 +55,14 @@ export class ConveyorStore {
   completeReceipt(
     receiptId: string,
     result: AdapterResult,
-    hasNextStep: boolean,
+    nextStepId: string | null,
     ownerId?: string,
   ): Blob {
     return this.database.transaction(() => {
       this.requireActiveLease(ownerId);
       const receipt = this.requireReceipt(receiptId);
       this.finishReceipt(receipt.id, result);
-      this.projectResult(receipt, result, hasNextStep);
+      this.projectResult(receipt, result, nextStepId);
       return this.requireBlob(receipt.blobId);
     });
   }
@@ -71,7 +73,7 @@ export class ConveyorStore {
       const receipt = this.requireReceipt(receiptId);
       const message = error instanceof Error ? error.message : String(error);
       this.database.connection.prepare(receiptFailureUpdate).run(message, this.now(), receipt.id);
-      this.database.connection.prepare(blobStateUpdate).run("failed", this.now(), receipt.blobId);
+      this.database.connection.prepare(blobPauseUpdate).run(1, this.now(), receipt.blobId);
     });
   }
 
@@ -80,7 +82,7 @@ export class ConveyorStore {
       this.requireActiveLease(ownerId);
       const receipt = this.requireReceipt(receiptId);
       this.database.connection.prepare(receiptInterruptUpdate).run(this.now(), receipt.id);
-      this.database.connection.prepare(blobStateUpdate).run("queued", this.now(), receipt.blobId);
+      this.database.connection.prepare(blobPauseUpdate).run(0, this.now(), receipt.blobId);
     });
   }
 
@@ -88,7 +90,7 @@ export class ConveyorStore {
     return this.database.transaction(() => {
       this.requireActiveLease(ownerId);
       const blob = this.requireBlob(blobId);
-      if (blob.state !== "queued") return blob;
+      if (blob.state === "complete") return blob;
       this.database.connection.prepare(blobCompleteUpdate).run(this.now(), blob.id);
       return this.requireBlob(blob.id);
     });
@@ -97,9 +99,8 @@ export class ConveyorStore {
   retryBlob(blobId: string): BlobMutationResult {
     return this.database.transaction(() => {
       const blob = this.requireBlob(blobId);
-      if (blob.state === "queued") return { blob, already: true };
-      if (!["failed", "blocked"].includes(blob.state)) throw new Error("Only failed or blocked blobs can retry.");
-      this.database.connection.prepare(blobStateUpdate).run("queued", this.now(), blob.id);
+      if (!blob.paused) return { blob, already: true };
+      this.database.connection.prepare(blobPauseUpdate).run(0, this.now(), blob.id);
       return { blob: this.requireBlob(blob.id), already: false };
     });
   }
@@ -107,15 +108,15 @@ export class ConveyorStore {
   rewindBlob(blobId: string, target: StepDefinition, steps: StepDefinition[]): BlobMutationResult {
     return this.database.transaction(() => {
       const blob = this.requireBlob(blobId);
-      if (blob.state === "running") throw new Error("A running blob cannot be rewound.");
+      if (this.hasRunningReceipt(blob.id)) throw new Error("A running blob cannot be rewound.");
       const at = this.now();
       const invalidated = this.invalidateReceipts(blob.id, target, steps, at);
       const previous = this.previousValidReceipt(blob.id, target, steps);
       const already = invalidated === 0
-        && blob.state === "queued"
+        && blob.state === target.id
         && blob.forcedStepId === target.id;
       this.database.connection.prepare(blobRewindUpdate).run(
-        previous?.stepId ?? null, previous?.stepOrder ?? null, target.id, at, blob.id,
+        target.id, previous?.stepId ?? null, previous?.stepOrder ?? null, target.id, at, blob.id,
       );
       return { blob: this.requireBlob(blob.id), already };
     });
@@ -192,24 +193,28 @@ export class ConveyorStore {
     );
   }
 
-  private projectResult(receipt: Receipt, result: AdapterResult, hasNext: boolean): void {
+  private projectResult(receipt: Receipt, result: AdapterResult, nextStepId: string | null): void {
     if (result.status === "retry") {
-      this.database.connection.prepare(blobStateUpdate).run("queued", this.now(), receipt.blobId);
+      this.database.connection.prepare(blobPauseUpdate).run(0, this.now(), receipt.blobId);
       return;
     }
     if (result.status === "blocked") {
-      this.database.connection.prepare(blobStateUpdate).run("blocked", this.now(), receipt.blobId);
+      this.database.connection.prepare(blobPauseUpdate).run(1, this.now(), receipt.blobId);
       return;
     }
-    const state = hasNext ? "queued" : "completed";
+    const state = nextStepId ?? "complete";
     this.database.connection.prepare(blobAdvanceUpdate).run(
-      state, receipt.stepId, receipt.stepOrder, this.now(), receipt.blobId,
+      state, 0, receipt.stepId, receipt.stepOrder, this.now(), receipt.blobId,
     );
   }
 
   private recoverReceipt(receipt: Receipt): void {
     this.database.connection.prepare(receiptInterruptUpdate).run(this.now(), receipt.id);
-    this.database.connection.prepare(blobStateUpdate).run("queued", this.now(), receipt.blobId);
+    this.database.connection.prepare(blobPauseUpdate).run(0, this.now(), receipt.blobId);
+  }
+
+  private hasRunningReceipt(blobId: string): boolean {
+    return Boolean(this.database.connection.prepare(runningReceiptByBlob).get(blobId));
   }
 
   private invalidateReceipts(
@@ -289,6 +294,7 @@ function mapBlob(row: Record<string, unknown>): Blob {
     pipelinePath: String(row.pipelinePath),
     inputArtifacts: JSON.parse(String(row.inputArtifactsJson)) as string[],
     state: row.state as BlobState,
+    paused: Boolean(row.paused),
     lastCompletedStepId: nullableString(row.lastCompletedStepId),
     lastCompletedOrder: nullableNumber(row.lastCompletedOrder),
     forcedStepId: nullableString(row.forcedStepId),
@@ -351,15 +357,19 @@ type BeginReceiptInput = {
 
 const blobInsert = `INSERT INTO blobs
   (id, title, body, cwd, pipelinePath, inputArtifactsJson, state, createdAt, updatedAt)
-  VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?)`;
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 const blobSelect = "SELECT * FROM blobs WHERE id = ?";
 const blobList = "SELECT * FROM blobs ORDER BY createdAt DESC";
-const blobNext = "SELECT * FROM blobs WHERE state = 'queued' ORDER BY updatedAt, createdAt LIMIT 1";
-const blobStateUpdate = "UPDATE blobs SET state = ?, updatedAt = ? WHERE id = ?";
-const blobCompleteUpdate = "UPDATE blobs SET state = 'completed', forcedStepId = NULL, updatedAt = ? WHERE id = ?";
-const blobAdvanceUpdate = `UPDATE blobs SET state = ?, lastCompletedStepId = ?,
+const blobNext = `SELECT * FROM blobs WHERE state != 'complete' AND paused = 0
+  AND NOT EXISTS (SELECT 1 FROM receipts WHERE receipts.blobId = blobs.id
+    AND receipts.status = 'running' AND receipts.invalidatedAt IS NULL)
+  ORDER BY updatedAt, createdAt LIMIT 1`;
+const blobPauseUpdate = "UPDATE blobs SET paused = ?, updatedAt = ? WHERE id = ?";
+const blobCompleteUpdate = `UPDATE blobs SET state = 'complete', paused = 0,
+  forcedStepId = NULL, updatedAt = ? WHERE id = ?`;
+const blobAdvanceUpdate = `UPDATE blobs SET state = ?, paused = ?, lastCompletedStepId = ?,
   lastCompletedOrder = ?, forcedStepId = NULL, updatedAt = ? WHERE id = ?`;
-const blobRewindUpdate = `UPDATE blobs SET state = 'queued', lastCompletedStepId = ?,
+const blobRewindUpdate = `UPDATE blobs SET state = ?, paused = 0, lastCompletedStepId = ?,
   lastCompletedOrder = ?, forcedStepId = ?, updatedAt = ? WHERE id = ?`;
 const receiptInsert = `INSERT INTO receipts
   (id, blobId, stepId, stepOrder, attempt, status, adapter, definitionGitSha,
@@ -377,7 +387,9 @@ const receiptInvalidate = "UPDATE receipts SET invalidatedAt = ? WHERE id = ?";
 const validAdvancedReceiptList = `SELECT * FROM receipts WHERE blobId = ?
   AND status = 'advance' AND invalidatedAt IS NULL ORDER BY stepOrder, finishedAt`;
 const runningReceiptList = `SELECT receipts.* FROM receipts JOIN blobs ON blobs.id = receipts.blobId
-  WHERE receipts.status = 'running' AND receipts.invalidatedAt IS NULL AND blobs.state = 'running'`;
+  WHERE receipts.status = 'running' AND receipts.invalidatedAt IS NULL`;
+const runningReceiptByBlob = `SELECT 1 FROM receipts WHERE blobId = ?
+  AND status = 'running' AND invalidatedAt IS NULL LIMIT 1`;
 const attemptSelect = "SELECT COALESCE(MAX(attempt), 0) + 1 AS attempt FROM receipts WHERE blobId = ? AND stepId = ?";
 const leaseDeleteExpired = "DELETE FROM dispatcherLeases WHERE name = 'runner' AND leaseUntil <= ?";
 const leaseInsert = `INSERT OR IGNORE INTO dispatcherLeases
@@ -401,3 +413,4 @@ import type {
 } from "./Types.ts";
 import type { FactorioDatabase } from "./Database.ts";
 import { randomUUID } from "node:crypto";
+import { discoverPipeline } from "./Pipeline.ts";

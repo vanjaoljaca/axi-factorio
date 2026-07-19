@@ -4,3 +4,5 @@ data/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+workbench-implementation.png
+workbench-comparison.png

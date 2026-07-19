@@ -1,4 +1,4 @@
-export type BlobState = "queued" | "running" | "blocked" | "failed" | "completed";
+export type BlobState = string;
 export type ReceiptStatus = "running" | "advance" | "retry" | "blocked" | "failed" | "interrupted";
 export type AdapterOutcome = "advance" | "retry" | "blocked";
 
@@ -27,6 +27,7 @@ export type BlobInput = {
 export type Blob = BlobInput & {
   id: string;
   state: BlobState;
+  paused: boolean;
   lastCompletedStepId: string | null;
   lastCompletedOrder: number | null;
   forcedStepId: string | null;

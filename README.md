@@ -31,6 +31,12 @@ The database has three small concerns:
 - `receipts` records every step execution and its definition identity;
 - `dispatcherLeases` ensures one local runner owns execution at a time.
 
+`blob.state` is conveyor position, not execution status. A blob on the default
+test harness moves through `g1.first`, `g2.second`, `g3.third`, then
+`complete`. Running, failed, blocked, retry, and interrupted are receipt
+statuses. A failed or blocked blob remains positioned at the responsible step
+and is paused until explicitly retried.
+
 Each receipt includes the blob ID, stable step ID, status, timestamps, adapter,
 definition Git SHA, definition content hash, input/output artifact references,
 and adapter run ID when available. Rewound receipts remain visible with an
@@ -128,12 +134,12 @@ Inspect state and receipts:
 
 ```sh
 axi-factorio
-axi-factorio list --state queued
+axi-factorio list --state plan.define
 axi-factorio show account-export-1 --full
 axi-factorio receipts account-export-1 --full
 ```
 
-Retry a failed or blocked blob:
+Restart a blob paused by a failed or blocked receipt:
 
 ```sh
 axi-factorio retry account-export-1

@@ -16,10 +16,10 @@ test("stores blobs and complete execution receipts", () => {
     reason: "done",
     outputArtifacts: ["commit:abc"],
     externalRunId: "run-1",
-  }, false);
+  }, null);
 
   const receipt = fixture.store.listReceipts(blob.id)[0];
-  assert.equal(fixture.store.getBlob(blob.id)?.state, "completed");
+  assert.equal(fixture.store.getBlob(blob.id)?.state, "complete");
   assert.equal(receipt.blobId, blob.id);
   assert.equal(receipt.stepId, "plan.define");
   assert.equal(receipt.status, "advance");
@@ -43,7 +43,7 @@ test("fresh storage is only blobs, receipts, and the dispatcher lease", () => {
   fixture.database.close();
 });
 
-test("identical adds and queued retries are idempotent", () => {
+test("identical adds and ready retries are idempotent", () => {
   const fixture = createStoreFixture();
   const first = fixture.store.createBlob("blob-1", blobInput(fixture));
   const second = fixture.store.createBlob("blob-1", blobInput(fixture));
@@ -65,7 +65,7 @@ test("rewind invalidates the target and later receipts", () => {
   const result = fixture.store.rewindBlob(blob.id, steps[1], steps);
   const receipts = fixture.store.listReceipts(blob.id);
 
-  assert.equal(result.blob.state, "queued");
+  assert.equal(result.blob.state, "dev.workbench");
   assert.equal(result.blob.forcedStepId, "dev.workbench");
   assert.equal(receipts[0].invalidatedAt, null);
   assert.ok(receipts[1].invalidatedAt);
@@ -131,7 +131,12 @@ function completeStep(
     reason: "done",
     outputArtifacts: [`artifact:${step.id}`],
     externalRunId: null,
-  }, hasNext);
+  }, hasNext ? nextStepId(blob.pipelinePath, step) : null);
+}
+
+function nextStepId(pipelinePath: string, step: StepDefinition): string | null {
+  const steps = discoverPipeline(pipelinePath);
+  return steps[steps.findIndex((candidate) => candidate.id === step.id) + 1]?.id ?? null;
 }
 
 function createStoreFixture(

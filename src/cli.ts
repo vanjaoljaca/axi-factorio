@@ -40,13 +40,13 @@ async function runCommand(
 
 function showHome(store: ConveyorStore, json: boolean): void {
   const blobs = store.listBlobs();
-  const active = blobs.filter((blob) => blob.state !== "completed").slice(0, 10);
+  const active = blobs.filter((blob) => blob.state !== "complete").slice(0, 10);
   printOutput({
     bin: displayPath(process.argv[1]),
     description: "Move blobs down Git-defined steps with SQLite receipts.",
     summary: stateCounts(blobs),
     blobs: active.map(blobSummary),
-    done: `${blobs.filter((blob) => blob.state === "completed").length} retained`,
+    done: `${blobs.filter((blob) => blob.state === "complete").length} retained`,
     help: homeHelp(blobs.length, active.length),
   }, json);
 }
@@ -259,10 +259,7 @@ function contentPreview(content: string, full: boolean): ContentPreview {
 }
 
 function blobSummary(blob: Blob): Record<string, unknown> {
-  const step = blob.state === "completed"
-    ? null
-    : nextStep(blob, discoverPipeline(blob.pipelinePath))?.id ?? null;
-  return { id: blob.id, title: blob.title, state: blob.state, step };
+  return { id: blob.id, title: blob.title, state: blob.state, paused: blob.paused };
 }
 
 function blobDetail(blob: Blob): Record<string, unknown> {
@@ -270,7 +267,8 @@ function blobDetail(blob: Blob): Record<string, unknown> {
     id: blob.id,
     title: blob.title,
     state: blob.state,
-    step: blobSummary(blob).step,
+    step: blob.state === "complete" ? null : blob.state,
+    paused: blob.paused,
     pipelinePath: blob.pipelinePath,
     cwd: blob.cwd,
     lastCompletedStep: blob.lastCompletedStepId,
@@ -305,8 +303,8 @@ function receiptSummary(receipt: Receipt, full: boolean): Record<string, unknown
 }
 
 function stateCounts(blobs: Blob[]): Record<string, number> {
-  const states = { queued: 0, running: 0, blocked: 0, failed: 0, completed: 0 };
-  for (const blob of blobs) states[blob.state] += 1;
+  const states: Record<string, number> = {};
+  for (const blob of blobs) states[blob.state] = (states[blob.state] ?? 0) + 1;
   return states;
 }
 
@@ -334,7 +332,7 @@ function serviceAbortController(): AbortController {
 }
 
 function printVersion(): void {
-  process.stdout.write("axi-factorio 0.1.0\n");
+  process.stdout.write("axi-factorio 0.1.0-rc.1\n");
 }
 
 function helpCommand(args: string[]): string | undefined {
@@ -380,7 +378,7 @@ const addFlags: FlagSpec = {
 };
 
 const helpText: Record<string, string> = {
-  root: `axi-factorio 0.1.0
+  root: `axi-factorio 0.1.0-rc.1
 
 Usage: axi-factorio <command> [flags]
 Commands: add, list, status, show, receipts, retry, rewind, kick, run, service, init

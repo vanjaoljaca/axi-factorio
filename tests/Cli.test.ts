@@ -23,7 +23,7 @@ test("add is idempotent and supports repeated artifact refs in JSON", () => {
   const first = JSON.parse(runCli(fixture, args).stdout);
   const second = JSON.parse(runCli(fixture, args).stdout);
 
-  assert.equal(first.ok, "add blob-1 -> queued");
+  assert.equal(first.ok, "add blob-1 -> plan.define");
   assert.equal(first.already, false);
   assert.equal(second.already, true);
 });

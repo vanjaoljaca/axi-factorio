@@ -5,7 +5,7 @@ test("runs a generic adapter and records artifact flow", async () => {
   assert.equal(await fixture.runner.runOnce(), true);
 
   const receipt = fixture.store.listReceipts("blob-1")[0];
-  assert.equal(fixture.store.getBlob("blob-1")?.state, "completed");
+  assert.equal(fixture.store.getBlob("blob-1")?.state, "complete");
   assert.equal(receipt.adapter, "fake");
   assert.equal(receipt.externalRunId, "fake-run-1");
   assert.deepEqual(receipt.inputArtifacts, ["ticket:1"]);
@@ -46,11 +46,11 @@ test("adding an earlier step does not pull passed work backward", async () => {
     fixture.store.listReceipts("blob-1").map((receipt) => receipt.stepId),
     ["plan.define", "qa.check"],
   );
-  assert.equal(fixture.store.getBlob("blob-1")?.state, "completed");
+  assert.equal(fixture.store.getBlob("blob-1")?.state, "complete");
   fixture.database.close();
 });
 
-test("completed work stays completed when a later step is added", async () => {
+test("complete work stays complete when a later step is added", async () => {
   const fixture = createRunnerFixture(["plan.define"]);
   fixture.store.createBlob("blob-1", blobInput(fixture));
   await fixture.runner.runOnce();
@@ -59,7 +59,7 @@ test("completed work stays completed when a later step is added", async () => {
 
   assert.equal(await fixture.runner.runOnce(), false);
   assert.equal(fixture.store.listReceipts("blob-1").length, 1);
-  assert.equal(fixture.store.getBlob("blob-1")?.state, "completed");
+  assert.equal(fixture.store.getBlob("blob-1")?.state, "complete");
   fixture.database.close();
 });
 

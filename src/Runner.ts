@@ -48,8 +48,8 @@ export class ConveyorRunner {
         { ...claim, inputArtifacts: claim.receipt.inputArtifacts, signal },
         (externalRunId) => this.store.recordExternalRun(claim.receipt.id, externalRunId, ownerId),
       );
-      const hasNext = followingStepExists(claim.step, steps);
-      const blob = this.store.completeReceipt(claim.receipt.id, result, hasNext, ownerId);
+      const nextStepId = followingStep(claim.step, steps)?.id ?? null;
+      const blob = this.store.completeReceipt(claim.receipt.id, result, nextStepId, ownerId);
       log("receipt_completed", { receiptId: claim.receipt.id, status: result.status, blobState: blob.state });
     } catch (error) {
       if (signal?.aborted) return this.interrupt(claim, ownerId);
@@ -65,9 +65,9 @@ export class ConveyorRunner {
   }
 }
 
-function followingStepExists(step: StepDefinition, steps: StepDefinition[]): boolean {
+function followingStep(step: StepDefinition, steps: StepDefinition[]): StepDefinition | null {
   const index = steps.findIndex((candidate) => candidate.id === step.id);
-  return index >= 0 && index + 1 < steps.length;
+  return index >= 0 ? steps[index + 1] ?? null : null;
 }
 
 function errorMessage(error: unknown): string {

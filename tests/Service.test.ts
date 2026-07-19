@@ -1,11 +1,11 @@
-test("service polls queued blobs directly and processes new work", async () => {
+test("service polls positioned blobs directly and processes new work", async () => {
   const fixture = createServiceFixture();
   const controller = new AbortController();
   const running = fixture.service.run(controller.signal);
   await delay(30);
   fixture.store.createBlob("blob-1", blobInput(fixture));
 
-  await waitUntil(() => fixture.store.getBlob("blob-1")?.state === "completed");
+  await waitUntil(() => fixture.store.getBlob("blob-1")?.state === "complete");
   controller.abort();
   await running;
 
@@ -19,10 +19,10 @@ test("service heartbeats while an adapter runs", async () => {
   const controller = new AbortController();
   const running = fixture.service.run(controller.signal);
 
-  await waitUntil(() => fixture.store.getBlob("blob-1")?.state === "running");
+  await waitUntil(() => fixture.store.listReceipts("blob-1")[0]?.status === "running");
   await delay(80);
   assert.equal(fixture.store.acquireLease("competitor", 100), false);
-  await waitUntil(() => fixture.store.getBlob("blob-1")?.state === "completed");
+  await waitUntil(() => fixture.store.getBlob("blob-1")?.state === "complete");
   controller.abort();
   await running;
   fixture.database.close();
@@ -38,17 +38,17 @@ test("one-shot run refuses a competing dispatcher", async () => {
   fixture.database.close();
 });
 
-test("service shutdown interrupts the receipt and requeues the blob", async () => {
+test("service shutdown interrupts the receipt without changing its position", async () => {
   const fixture = createServiceFixture(new AbortableAdapter());
   fixture.store.createBlob("blob-1", blobInput(fixture));
   const controller = new AbortController();
   const running = fixture.service.run(controller.signal);
 
-  await waitUntil(() => fixture.store.getBlob("blob-1")?.state === "running");
+  await waitUntil(() => fixture.store.listReceipts("blob-1")[0]?.status === "running");
   controller.abort();
   await running;
 
-  assert.equal(fixture.store.getBlob("blob-1")?.state, "queued");
+  assert.equal(fixture.store.getBlob("blob-1")?.state, "plan.define");
   assert.equal(fixture.store.listReceipts("blob-1")[0].status, "interrupted");
   fixture.database.close();
 });
@@ -60,11 +60,14 @@ test("service records a failure then continues to the next blob", async () => {
   const controller = new AbortController();
   const running = fixture.service.run(controller.signal);
 
-  await waitUntil(() => fixture.store.listBlobs().every((blob) => ["completed", "failed"].includes(blob.state)));
+  await waitUntil(() => fixture.store.listBlobs().every((blob) => blob.state === "complete" || blob.paused));
   controller.abort();
   await running;
 
-  assert.deepEqual(fixture.store.listBlobs().map((blob) => blob.state).sort(), ["completed", "failed"]);
+  assert.deepEqual(
+    fixture.store.listBlobs().map((blob) => [blob.state, blob.paused]),
+    [["plan.define", true], ["complete", false]],
+  );
   fixture.database.close();
 });
 

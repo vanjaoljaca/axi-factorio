@@ -6,6 +6,7 @@ export class FactorioDatabase {
     this.connection = new DatabaseSync(path);
     this.configure();
     this.connection.exec(schema);
+    this.migrate();
   }
 
   close(): void {
@@ -29,6 +30,13 @@ export class FactorioDatabase {
     this.connection.exec("PRAGMA foreign_keys = ON");
     this.connection.exec("PRAGMA busy_timeout = 5000");
   }
+
+  private migrate(): void {
+    const columns = this.connection.prepare("PRAGMA table_info(blobs)").all() as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === "paused")) {
+      this.connection.exec("ALTER TABLE blobs ADD COLUMN paused INTEGER NOT NULL DEFAULT 0");
+    }
+  }
 }
 
 const schema = `
@@ -40,6 +48,7 @@ const schema = `
     pipelinePath TEXT NOT NULL,
     inputArtifactsJson TEXT NOT NULL,
     state TEXT NOT NULL,
+    paused INTEGER NOT NULL DEFAULT 0,
     lastCompletedStepId TEXT,
     lastCompletedOrder INTEGER,
     forcedStepId TEXT,
