@@ -19,6 +19,12 @@ Then open `http://127.0.0.1:4317`. Use `-- --db path/to/factorio.db` to inspect
 a specific runtime database. The scenario lab and database inspector render
 through the same conveyor, receipt-stream, and assertion views.
 
+From an installed release, launch the same viewer with:
+
+```sh
+npx axi-factorio workbench --db path/to/factorio.db
+```
+
 The default happy-path scenario calls `createTestHarness()`, loads the paired
 definitions in `test/harness/default/`, creates a fresh temporary SQLite
 database, and moves a blob through the real `ConveyorRunner`.
@@ -97,16 +103,20 @@ state.
 
 ## Install
 
-```sh
-cd axi-factorio
-npm link
-```
-
-Or run without linking:
+Build an installable release candidate:
 
 ```sh
-npm run axi -- --help
+npm run build
 ```
+
+This recreates `release/` with:
+
+- `axi-factorio-0.1.0-rc.1.tgz`, the installable package;
+- `SHA256SUMS`, for artifact verification; and
+- `INSTALL.md`, with direct and vendored installation commands.
+
+Do not use `npm link` for a consuming project. Install the exact tarball so
+`package.json` and its lockfile identify the tested release candidate.
 
 ## Commands
 
@@ -174,6 +184,7 @@ The CLI follows the published AXI/tasks-axi house style:
 ```sh
 npm run check
 npm test
+npm run build
 ```
 
 Pipeline routing, fan-out, and multiple adapters can be added later without

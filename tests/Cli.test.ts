@@ -8,6 +8,14 @@ test("no-argument home is content-first TOON", () => {
   assert.match(result.stdout, /blobs: \[\]/);
 });
 
+test("root help exposes the packaged workbench command", () => {
+  const fixture = createCliFixture();
+  const result = runCli(fixture, ["--help"]);
+
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /workbench/);
+});
+
 test("add is idempotent and supports repeated artifact refs in JSON", () => {
   const fixture = createCliFixture();
   const args = [

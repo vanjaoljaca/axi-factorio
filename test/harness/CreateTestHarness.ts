@@ -10,6 +10,9 @@ export type TestHarness = {
 
 export function createTestHarness(): TestHarness {
   const root = mkdtempSync(join(tmpdir(), "axi-factorio-harness-"));
+  const pipelinePath = join(root, "pipeline");
+  cpSync(templatePath, pipelinePath, { recursive: true });
+  initializeGit(root);
   const database = new FactorioDatabase(join(root, "factorio.sqlite"));
   const store = new ConveyorStore(database);
   const adapter = new TestHarnessAdapter();
@@ -18,6 +21,14 @@ export function createTestHarness(): TestHarness {
     runner: new ConveyorRunner(store, adapter),
     dispose: () => dispose(database, root),
   };
+}
+
+function initializeGit(root: string): void {
+  execFileSync("git", ["init", "-q"], { cwd: root });
+  execFileSync("git", ["config", "user.email", "factorio@test.invalid"], { cwd: root });
+  execFileSync("git", ["config", "user.name", "Factorio Test"], { cwd: root });
+  execFileSync("git", ["add", "."], { cwd: root });
+  execFileSync("git", ["commit", "-q", "-m", "default harness"], { cwd: root });
 }
 
 export class TestHarnessAdapter implements ToolAdapter {
@@ -40,7 +51,7 @@ function dispose(database: FactorioDatabase, root: string): void {
   rmSync(root, { recursive: true, force: true });
 }
 
-const pipelinePath = join(dirname(fileURLToPath(import.meta.url)), "default");
+const templatePath = join(dirname(fileURLToPath(import.meta.url)), "default");
 
 import type { ExternalRunHandler, ToolAdapter } from "../../src/Adapter.ts";
 import type { AdapterInput, AdapterResult, StepDefinition } from "../../src/Types.ts";
@@ -48,7 +59,8 @@ import { FactorioDatabase } from "../../src/Database.ts";
 import { ConveyorRunner } from "../../src/Runner.ts";
 import { ConveyorStore } from "../../src/Store.ts";
 import { discoverPipeline } from "../../src/Pipeline.ts";
-import { mkdtempSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { cpSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";

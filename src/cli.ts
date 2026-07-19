@@ -3,6 +3,7 @@
 async function main(args = process.argv.slice(2)): Promise<void> {
   if (args.includes("--version") || args[0] === "version") return printVersion();
   if (args.includes("--help") || args[0] === "help") return showCommandHelp(helpCommand(args));
+  if (args[0] === "workbench") return runWorkbench(args.slice(1));
   const options = parseGlobalOptions(args);
   const databaseAlreadyExisted = existsSync(options.databasePath);
   const database = new FactorioDatabase(options.databasePath);
@@ -12,6 +13,11 @@ async function main(args = process.argv.slice(2)): Promise<void> {
   } finally {
     database.close();
   }
+}
+
+async function runWorkbench(args: string[]): Promise<void> {
+  process.argv = [process.argv[0], process.argv[1], ...args];
+  await import("./WorkbenchServer.ts");
 }
 
 async function runCommand(
@@ -381,7 +387,7 @@ const helpText: Record<string, string> = {
   root: `axi-factorio 0.1.0-rc.1
 
 Usage: axi-factorio <command> [flags]
-Commands: add, list, status, show, receipts, retry, rewind, kick, run, service, init
+Commands: add, list, status, show, receipts, retry, rewind, kick, run, service, workbench, init
 Globals: --db PATH, --json, --help, --version
 
 Run without arguments for the live conveyor dashboard.
@@ -399,6 +405,7 @@ Run without arguments for the live conveyor dashboard.
   run: `Usage: axi-factorio run\n`,
   evaluate: `Usage: axi-factorio evaluate\n`,
   service: `Usage: axi-factorio service [--poll-ms 1000]\n`,
+  workbench: `Usage: axi-factorio workbench [--db PATH] [--port 4317]\n`,
   init: `Usage: axi-factorio init\n`,
 };
 
