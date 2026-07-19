@@ -94,8 +94,9 @@ npx axi-factorio project show APP_ID --json
 \`\`\`
 
 New blobs use the project root as their Codex working directory and resolve the
-highest \`vN\` under the shared pipeline root. Existing rc.4 databases migrate
-on first open; use \`project upsert\` to replace the migrated
+highest \`vN\` under the shared pipeline root. Existing rc.4 and rc.5 databases
+migrate on first open, including imported-receipt provenance columns. Use
+\`project upsert\` to replace the migrated
 \`<old-cwd>/pipelines\` root with the shared workspace pipeline root.
 `;
 }

@@ -131,6 +131,25 @@ export class ConveyorStore {
     });
   }
 
+  adoptBlob(
+    blobId: string,
+    target: StepDefinition,
+    steps: StepDefinition[],
+    sourceIdentity: string,
+    attestations: ImportAttestation[],
+  ): Blob {
+    return this.database.transaction(() => {
+      const blob = this.requireBlob(blobId);
+      this.validateAdoption(blob, target, steps, sourceIdentity, attestations);
+      for (const attestation of attestations) this.insertImportedReceipt(blob, sourceIdentity, attestation);
+      const previous = attestations.at(-1)!;
+      this.database.connection.prepare(blobAdoptUpdate).run(
+        target.id, previous.step.id, previous.step.order, this.now(), blob.id,
+      );
+      return this.requireBlob(blob.id);
+    });
+  }
+
   armHumanGate(blobId: string, text = ""): HumanInput {
     return this.appendHumanInput(blobId, "review", text, []);
   }
@@ -238,6 +257,40 @@ export class ConveyorStore {
     );
     this.database.connection.prepare(humanInputReceiptUpdate).run(id, blob.id, input.step.id);
     return this.requireReceipt(id);
+  }
+
+  private insertImportedReceipt(
+    blob: Blob,
+    sourceIdentity: string,
+    attestation: ImportAttestation,
+  ): void {
+    const at = this.now();
+    this.database.connection.prepare(importedReceiptInsert).run(
+      randomUUID(), blob.id, attestation.step.id, attestation.step.order,
+      sourceIdentity, JSON.stringify(attestation.evidence),
+      attestation.definition.gitSha, attestation.definition.contentHash,
+      JSON.stringify(blob.inputArtifacts), JSON.stringify(attestation.evidence), at, at,
+    );
+  }
+
+  private validateAdoption(
+    blob: Blob,
+    target: StepDefinition,
+    steps: StepDefinition[],
+    sourceIdentity: string,
+    attestations: ImportAttestation[],
+  ): void {
+    if (this.hasRunningReceipt(blob.id)) throw new Error("A running blob cannot be adopted.");
+    if (!/^[^:\s]+:.+$/u.test(sourceIdentity)) throw new Error("Adoption requires an exact kind:value source identity.");
+    if (this.listReceipts(blob.id).length) throw new Error("Adoption requires a blob with no existing receipts.");
+    const prior = steps.slice(0, steps.findIndex((step) => step.id === target.id));
+    if (!prior.length) throw new Error("Adoption must attest at least one prior step.");
+    if (attestations.length !== prior.length) throw new Error("Adoption evidence must cover every prior step.");
+    for (const [index, step] of prior.entries()) {
+      const attestation = attestations[index];
+      if (attestation.step.id !== step.id) throw new Error(`Adoption evidence is out of order at ${step.id}.`);
+      if (!attestation.evidence.length) throw new Error(`Adoption evidence is required for ${step.id}.`);
+    }
   }
 
   private finishReceipt(receiptId: string, result: AdapterResult): void {
@@ -453,7 +506,10 @@ function mapReceipt(row: Record<string, unknown>): Receipt {
     stepOrder: Number(row.stepOrder),
     attempt: Number(row.attempt),
     status: row.status as ReceiptStatus,
+    executionKind: String(row.executionKind || "automated") as Receipt["executionKind"],
     adapter: String(row.adapter),
+    attestationSource: nullableString(row.attestationSource),
+    attestationEvidence: JSON.parse(String(row.attestationEvidenceJson || "[]")) as string[],
     definitionGitSha: String(row.definitionGitSha),
     definitionHash: String(row.definitionHash),
     inputArtifacts: JSON.parse(String(row.inputArtifactsJson)) as string[],
@@ -546,11 +602,20 @@ const blobRewindUpdate = `UPDATE blobs SET state = ?, paused = 0, lastCompletedS
   humanGateApprovalInputId = NULL, updatedAt = ? WHERE id = ?`;
 const blobHumanGateUpdate = `UPDATE blobs SET humanGateStepId = ?,
   humanGateApprovalInputId = ?, paused = ?, updatedAt = ? WHERE id = ?`;
+const blobAdoptUpdate = `UPDATE blobs SET state = ?, paused = 0, lastCompletedStepId = ?,
+  lastCompletedOrder = ?, forcedStepId = NULL, humanGateStepId = NULL,
+  humanGateApprovalInputId = NULL, updatedAt = ? WHERE id = ?`;
 const receiptInsert = `INSERT INTO receipts
   (id, blobId, stepId, stepOrder, attempt, status, adapter, definitionGitSha,
    definitionHash, inputArtifactsJson, outputArtifactsJson, continuationThreadId,
    humanInputJson, approvalEvidenceJson, startedAt)
   VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, '[]', ?, ?, ?, ?)`;
+const importedReceiptInsert = `INSERT INTO receipts
+  (id, blobId, stepId, stepOrder, attempt, status, executionKind, adapter,
+   attestationSource, attestationEvidenceJson, definitionGitSha, definitionHash,
+   inputArtifactsJson, outputArtifactsJson, reason, startedAt, finishedAt)
+  VALUES (?, ?, ?, ?, 1, 'advance', 'imported', 'attested-import', ?, ?, ?, ?, ?, ?,
+    'Imported completion attested; no automation was run.', ?, ?)`;
 const receiptSelect = "SELECT * FROM receipts WHERE id = ?";
 const receiptList = "SELECT * FROM receipts ORDER BY startedAt, stepOrder, attempt";
 const receiptListByBlob = "SELECT * FROM receipts WHERE blobId = ? ORDER BY startedAt, stepOrder, attempt";
@@ -609,6 +674,7 @@ import type {
   BlobState,
   Project,
   ProjectInput,
+  ImportAttestation,
 } from "./Types.ts";
 import type { FactorioDatabase } from "./Database.ts";
 import { randomUUID } from "node:crypto";

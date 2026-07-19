@@ -74,7 +74,10 @@ export type Receipt = {
   stepOrder: number;
   attempt: number;
   status: ReceiptStatus;
+  executionKind: "automated" | "imported";
   adapter: string;
+  attestationSource: string | null;
+  attestationEvidence: string[];
   definitionGitSha: string;
   definitionHash: string;
   inputArtifacts: string[];
@@ -88,6 +91,12 @@ export type Receipt = {
   startedAt: string;
   finishedAt: string | null;
   invalidatedAt: string | null;
+};
+
+export type ImportAttestation = {
+  step: StepDefinition;
+  definition: DefinitionSnapshot;
+  evidence: string[];
 };
 
 export type ClaimedExecution = {

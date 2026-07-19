@@ -34,6 +34,7 @@ async function runCommand(
     case "review": return armHumanReview(args.slice(1), store, json);
     case "feedback": return addHumanFeedback(args.slice(1), store, json);
     case "approve": return approveHumanReview(args.slice(1), store, json);
+    case "adopt": return adoptBlob(args.slice(1), store, json);
     case "rewind":
     case "kick": return rewindBlob(args.slice(1), store, json, args[0]);
     case "run":
@@ -220,6 +221,33 @@ function approveHumanReview(args: string[], store: ConveyorStore, json: boolean)
     parsed.positionals[0], firstFlag(parsed, "--note") ?? "", parsed.flags["--evidence"] ?? [],
   );
   printOutput({ ok: `approve ${input.blobId} -> ${input.stepId}`, humanInput: input }, json);
+}
+
+function adoptBlob(args: string[], store: ConveyorStore, json: boolean): void {
+  const parsed = parseArgs(args, { "--source": "value", "--evidence": "value" });
+  requirePositionals(parsed, 2, "adopt requires a blob ID and current step ID.");
+  const blob = requireBlob(store, parsed.positionals[0]);
+  const steps = discoverPipeline(blob.pipelinePath);
+  const target = requireStep(steps, parsed.positionals[1]);
+  const evidence = adoptionEvidence(parsed.flags["--evidence"] ?? [], steps, target);
+  const attestations = steps.slice(0, steps.indexOf(target)).map((step) => ({
+    step, definition: snapshotDefinition(step, blob.pipelinePath), evidence: evidence.get(step.id) ?? [],
+  }));
+  const adopted = store.adoptBlob(blob.id, target, steps, requireFlag(parsed, "--source"), attestations);
+  printOutput({ ok: `adopt ${blob.id} -> ${target.id}`, blob: blobSummary(adopted) }, json);
+}
+
+function adoptionEvidence(values: string[], steps: StepDefinition[], target: StepDefinition): Map<string, string[]> {
+  const prior = new Set(steps.slice(0, steps.indexOf(target)).map((step) => step.id));
+  const result = new Map<string, string[]>();
+  for (const value of values) {
+    const split = value.indexOf("=");
+    if (split < 1 || split === value.length - 1) throw usage("--evidence must use STEP_ID=REF.");
+    const stepId = value.slice(0, split);
+    if (!prior.has(stepId)) throw usage(`Evidence step ${stepId} is not prior to ${target.id}.`);
+    result.set(stepId, [...(result.get(stepId) ?? []), value.slice(split + 1)]);
+  }
+  return result;
 }
 
 function rewindBlob(
@@ -451,12 +479,15 @@ function receiptSummary(receipt: Receipt, full: boolean): Record<string, unknown
     step: receipt.stepId,
     attempt: receipt.attempt,
     status: receipt.status,
+    executionKind: receipt.executionKind,
     valid: !receipt.invalidatedAt,
     startedAt: receipt.startedAt,
     finishedAt: receipt.finishedAt,
   };
   if (full) Object.assign(base, {
     adapter: receipt.adapter,
+    attestationSource: receipt.attestationSource,
+    attestationEvidence: receipt.attestationEvidence,
     definitionGitSha: receipt.definitionGitSha,
     definitionHash: receipt.definitionHash,
     inputArtifacts: receipt.inputArtifacts,
@@ -539,7 +570,7 @@ function serviceAbortController(): AbortController {
 }
 
 function printVersion(): void {
-  process.stdout.write("axi-factorio 0.1.0-rc.5\n");
+  process.stdout.write("axi-factorio 0.1.0-rc.6\n");
 }
 
 function helpCommand(args: string[]): string | undefined {
@@ -588,10 +619,10 @@ const addFlags: FlagSpec = {
 };
 
 const helpText: Record<string, string> = {
-  root: `axi-factorio 0.1.0-rc.5
+  root: `axi-factorio 0.1.0-rc.6
 
 Usage: axi-factorio <command> [flags]
-Commands: project, add, list, status, show, receipts, retry, review, feedback, approve, rewind, kick, run, service, init
+Commands: project, add, adopt, list, status, show, receipts, retry, review, feedback, approve, rewind, kick, run, service, init
 Globals: --db PATH, --json, --help, --version
 
 Run without arguments for the live conveyor dashboard.
@@ -612,6 +643,7 @@ Run without arguments for the live conveyor dashboard.
   review: `Usage: axi-factorio review BLOB_ID [--note TEXT]\n`,
   feedback: `Usage: axi-factorio feedback BLOB_ID "TEXT" [--evidence REF...]\n`,
   approve: `Usage: axi-factorio approve BLOB_ID --evidence REF... [--note TEXT]\n`,
+  adopt: `Usage: axi-factorio adopt BLOB_ID CURRENT_STEP --source KIND:EXACT_ID --evidence STEP_ID=REF...\n`,
   rewind: `Usage: axi-factorio rewind BLOB_ID STEP_ID\n`,
   kick: `Usage: axi-factorio kick BLOB_ID STEP_ID\n`,
   run: `Usage: axi-factorio run\n`,
@@ -628,7 +660,7 @@ main().catch((error) => {
   process.exitCode = error instanceof UsageError ? 2 : 1;
 });
 
-import type { Receipt, Blob, Project } from "./Types.ts";
+import type { Receipt, Blob, Project, StepDefinition } from "./Types.ts";
 import { CodexAdapter } from "./CodexAdapter.ts";
 import { FactorioDatabase } from "./Database.ts";
 import { ConveyorStore } from "./Store.ts";

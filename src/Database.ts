@@ -76,6 +76,9 @@ export class FactorioDatabase {
     addColumn(this.connection, columns, "continuationThreadId", "TEXT");
     addColumn(this.connection, columns, "humanInputJson", "TEXT NOT NULL DEFAULT '[]'");
     addColumn(this.connection, columns, "approvalEvidenceJson", "TEXT");
+    addColumn(this.connection, columns, "executionKind", "TEXT NOT NULL DEFAULT 'automated'");
+    addColumn(this.connection, columns, "attestationSource", "TEXT");
+    addColumn(this.connection, columns, "attestationEvidenceJson", "TEXT NOT NULL DEFAULT '[]'");
   }
 }
 
@@ -120,7 +123,10 @@ const schema = `
     stepOrder INTEGER NOT NULL,
     attempt INTEGER NOT NULL,
     status TEXT NOT NULL,
+    executionKind TEXT NOT NULL DEFAULT 'automated',
     adapter TEXT NOT NULL,
+    attestationSource TEXT,
+    attestationEvidenceJson TEXT NOT NULL DEFAULT '[]',
     definitionGitSha TEXT NOT NULL,
     definitionHash TEXT NOT NULL,
     inputArtifactsJson TEXT NOT NULL,
@@ -194,6 +200,9 @@ const columnTables: Record<string, string> = {
   continuationThreadId: "receipts",
   humanInputJson: "receipts",
   approvalEvidenceJson: "receipts",
+  executionKind: "receipts",
+  attestationSource: "receipts",
+  attestationEvidenceJson: "receipts",
 };
 
 import { DatabaseSync } from "node:sqlite";

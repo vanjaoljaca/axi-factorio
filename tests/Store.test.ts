@@ -59,6 +59,48 @@ test("identical adds and ready retries are idempotent", () => {
   fixture.database.close();
 });
 
+test("adopt writes honest imported receipts for every attested prior step", () => {
+  const fixture = createStoreFixture(["plan.define", "dev.build", "workbench.review"]);
+  const blob = fixture.store.createBlob("blob-import", blobInput(fixture)).blob;
+  const steps = discoverPipeline(fixture.pipelinePath);
+  const attestations = steps.slice(0, 2).map((step) => ({
+    step,
+    definition: snapshotDefinition(step, fixture.pipelinePath),
+    evidence: [`proof:${step.id}`],
+  }));
+
+  const adopted = fixture.store.adoptBlob(blob.id, steps[2], steps, "git-sha:abc123", attestations);
+  const receipts = fixture.store.listReceipts(blob.id);
+
+  assert.equal(adopted.state, "workbench.review");
+  assert.equal(adopted.lastCompletedStepId, "dev.build");
+  assert.deepEqual(receipts.map((receipt) => receipt.stepId), ["plan.define", "dev.build"]);
+  assert(receipts.every((receipt) => receipt.executionKind === "imported"));
+  assert(receipts.every((receipt) => receipt.adapter === "attested-import"));
+  assert(receipts.every((receipt) => receipt.attestationSource === "git-sha:abc123"));
+  fixture.database.close();
+});
+
+test("adopt rejects missing evidence, non-exact sources, and order gaps", () => {
+  const fixture = createStoreFixture(["plan.define", "dev.build", "workbench.review"]);
+  const blob = fixture.store.createBlob("blob-import", blobInput(fixture)).blob;
+  const steps = discoverPipeline(fixture.pipelinePath);
+  const attestation = (step: StepDefinition) => ({
+    step, definition: snapshotDefinition(step, fixture.pipelinePath), evidence: [`proof:${step.id}`],
+  });
+
+  assert.throws(() => fixture.store.adoptBlob(blob.id, steps[2], steps, "HEAD", [
+    attestation(steps[0]), attestation(steps[1]),
+  ]), /exact kind:value/);
+  assert.throws(() => fixture.store.adoptBlob(blob.id, steps[2], steps, "git-sha:abc", [
+    attestation(steps[0]),
+  ]), /cover every prior step/);
+  assert.throws(() => fixture.store.adoptBlob(blob.id, steps[2], steps, "git-sha:abc", [
+    attestation(steps[1]), attestation(steps[0]),
+  ]), /out of order/);
+  fixture.database.close();
+});
+
 test("rewind invalidates the target and later receipts", () => {
   const fixture = createStoreFixture(["plan.define", "dev.workbench", "qa.check"]);
   const blob = fixture.store.createBlob("blob-1", blobInput(fixture)).blob;

@@ -109,12 +109,12 @@ records the Codex thread ID, and resumes that same thread with the exit prompt.
 When fresh human input is appended at the current step, the next receipt resumes
 that same Codex thread before evaluating the exit prompt again.
 
-In rc.5, continuation is intentionally step-scoped: retries, blocked reviews,
+In rc.6, continuation is intentionally step-scoped: retries, blocked reviews,
 feedback, and approval cycles reuse the current step's Codex thread, while the
 next pipeline step starts a fresh thread. This preserves phase isolation but
 repays Codex's startup context cost at every step. Reusing one blob-owned thread
 across ordinary steps is a separate adapter-lifecycle decision, not an implicit
-rc.5 behavior.
+rc.6 behavior.
 The exit result supplies output artifact references, and the adapter also adds
 the Codex thread as a receipt artifact. The runner itself has no Codex-specific
 state.
@@ -137,7 +137,7 @@ npm run build
 
 This recreates `release/` with:
 
-- `axi-factorio-0.1.0-rc.5.tgz`, the installable package;
+- `axi-factorio-0.1.0-rc.6.tgz`, the installable package;
 - `SHA256SUMS`, for artifact verification; and
 - `INSTALL.md`, with direct and vendored installation commands.
 
@@ -149,7 +149,7 @@ Do not use `npm link` for a consuming project. Install the exact tarball so
 Install the exact candidate in the consuming npm project:
 
 ```sh
-npm install --save-exact /path/to/axi-factorio-0.1.0-rc.5.tgz
+npm install --save-exact /path/to/axi-factorio-0.1.0-rc.6.tgz
 ```
 
 From the consuming project root, the defaults are:
@@ -222,6 +222,22 @@ Restart a blob paused by a failed or blocked receipt:
 npx axi-factorio retry account-export-1
 ```
 
+Adopt existing work at a later step by attesting every completed prior step:
+
+```sh
+npx axi-factorio adopt account-export-1 workbench.review \
+  --source git-sha:0123456789abcdef \
+  --evidence plan.define=review:plan \
+  --evidence dev.build=commit:0123456789abcdef \
+  --evidence qa.check=test-run:4821
+```
+
+The source must be an explicit `kind:value` identity, and every prior step must
+have at least one `STEP_ID=REF` evidence value in pipeline order. Adoption is
+only allowed before any receipts exist. It writes completed receipts marked
+`executionKind: imported` and `adapter: attested-import`; it never claims an
+automation run occurred.
+
 Append iterative human review input at the current step:
 
 ```sh
@@ -238,7 +254,8 @@ external task. Approval requires at least one evidence reference. The prompt
 still decides whether the step passes; Factorio only supplies and records the
 human evidence.
 
-Opening an rc.4 database with rc.5 migrates projects automatically. The old
+Opening an rc.4 or rc.5 database with rc.6 migrates projects and receipt
+provenance columns automatically. The old
 project `cwd` becomes the app root, and its initial pipeline root becomes
 `<old-cwd>/pipelines`. Run `project upsert` afterward to point projects at a
 shared workspace pipeline root.

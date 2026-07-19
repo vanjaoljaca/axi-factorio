@@ -20,7 +20,7 @@ test("root help exposes service installation and keeps workbench internal", () =
 test("every public command exposes concise help without opening runtime state", () => {
   const fixture = createCliFixture();
   const commands = [
-    "project", "add", "list", "status", "show", "receipts", "retry", "rewind",
+    "project", "add", "adopt", "list", "status", "show", "receipts", "retry", "rewind",
     "kick", "run", "evaluate", "service", "init",
   ];
   for (const command of commands) {
@@ -156,6 +156,30 @@ test("human feedback and approval append evidence to the current step", () => {
   ]);
 });
 
+test("adopt imports attested prior steps and positions existing work", () => {
+  const fixture = createCliFixture();
+  writeStep(fixture.pipelinePath, 1, "dev.build");
+  writeStep(fixture.pipelinePath, 2, "workbench.review");
+  runCli(fixture, [
+    "add", "blob-adopt", "Existing work", "--pipeline", fixture.pipelinePath,
+    "--cwd", fixture.root, "--json",
+  ]);
+  const steps = discoverPipeline(fixture.pipelinePath);
+  const target = steps.at(-1)!;
+  const evidence = steps.slice(0, -1).flatMap((step) => ["--evidence", `${step.id}=git:${step.id}`]);
+
+  const adoption = runCli(fixture, [
+    "adopt", "blob-adopt", target.id, "--source", "git-sha:abc123", ...evidence, "--json",
+  ]);
+  assert.equal(adoption.status, 0, adoption.stderr || adoption.stdout);
+  const result = JSON.parse(adoption.stdout);
+  const shown = JSON.parse(runCli(fixture, ["show", "blob-adopt", "--full", "--json"]).stdout);
+
+  assert.equal(result.blob.state, target.id);
+  assert(shown.receipts.every((receipt: { executionKind: string }) => receipt.executionKind === "imported"));
+  assert(shown.receipts.every((receipt: { attestationSource: string }) => receipt.attestationSource === "git-sha:abc123"));
+});
+
 function createCliFixture(): CliFixture {
   const pipeline = createPipeline();
   return { ...pipeline, databasePath: join(pipeline.root, "factorio.sqlite") };
@@ -176,6 +200,7 @@ const cliPath = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 import type { SpawnSyncReturns } from "node:child_process";
 import type { PipelineFixture } from "./Fixtures.ts";
 import { createPipeline, writeStep } from "./Fixtures.ts";
+import { discoverPipeline } from "../src/Pipeline.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, renameSync } from "node:fs";

@@ -16,6 +16,10 @@ test("rc.4 project cwd migrates to distinct project and pipeline roots", () => {
   assert.equal(project?.root, join(root, "apps", "app"));
   assert.equal(project?.pipelineRoot, join(root, "apps", "app", "pipelines"));
   assert.equal(project?.defaultPipeline, "default");
+  const receiptColumns = database.connection.prepare("PRAGMA table_info(receipts)").all() as
+    Array<{ name: string }>;
+  assert(["executionKind", "attestationSource", "attestationEvidenceJson"].every((name) =>
+    receiptColumns.some((column) => column.name === name)));
   database.close();
 });
 
