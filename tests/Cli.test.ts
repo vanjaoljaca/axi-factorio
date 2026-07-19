@@ -8,12 +8,13 @@ test("no-argument home is content-first TOON", () => {
   assert.match(result.stdout, /blobs: \[\]/);
 });
 
-test("root help exposes the packaged workbench command", () => {
+test("root help exposes service installation and keeps workbench internal", () => {
   const fixture = createCliFixture();
   const result = runCli(fixture, ["--help"]);
 
   assert.equal(result.status, 0);
-  assert.match(result.stdout, /workbench/);
+  assert.match(result.stdout, /service/);
+  assert.doesNotMatch(result.stdout, /workbench/);
 });
 
 test("add is idempotent and supports repeated artifact refs in JSON", () => {
@@ -34,6 +35,23 @@ test("add is idempotent and supports repeated artifact refs in JSON", () => {
   assert.equal(first.ok, "add blob-1 -> plan.define");
   assert.equal(first.already, false);
   assert.equal(second.already, true);
+});
+
+test("add defaults to the highest default pipeline version and records its identity", () => {
+  const fixture = createCliFixture();
+  const defaultRoot = join(fixture.root, "pipelines", "default");
+  mkdirSync(defaultRoot, { recursive: true });
+  renameSync(fixture.pipelinePath, join(defaultRoot, "v1"));
+  mkdirSync(join(defaultRoot, "v2"));
+  writeStep(join(defaultRoot, "v2"), 1, "g2.newest");
+
+  const added = JSON.parse(runCli(fixture, ["add", "blob-2", "Latest", "--json"]).stdout);
+  const shown = JSON.parse(runCli(fixture, ["show", "blob-2", "--json"]).stdout);
+
+  assert.equal(added.ok, "add blob-2 -> g2.newest");
+  assert.equal(shown.blob.pipeline, "default/v2");
+  assert.equal(shown.blob.pipelinePath.endsWith("/pipelines/default/v2"), true);
+  assert.equal(existsSync(join(fixture.root, "pipelines", "axi-factorio.db")), true);
 });
 
 test("unknown flags fail as structured usage errors", () => {
@@ -81,10 +99,10 @@ const cliPath = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 
 import type { SpawnSyncReturns } from "node:child_process";
 import type { PipelineFixture } from "./Fixtures.ts";
-import { createPipeline } from "./Fixtures.ts";
+import { createPipeline, writeStep } from "./Fixtures.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync } from "node:fs";
 import test from "node:test";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";

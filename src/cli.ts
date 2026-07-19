@@ -3,21 +3,15 @@
 async function main(args = process.argv.slice(2)): Promise<void> {
   if (args.includes("--version") || args[0] === "version") return printVersion();
   if (args.includes("--help") || args[0] === "help") return showCommandHelp(helpCommand(args));
-  if (args[0] === "workbench") return runWorkbench(args.slice(1));
   const options = parseGlobalOptions(args);
   const databaseAlreadyExisted = existsSync(options.databasePath);
   const database = new FactorioDatabase(options.databasePath);
   const store = new ConveyorStore(database);
   try {
-    await runCommand(options.args, store, options.json, databaseAlreadyExisted);
+    await runCommand(options.args, store, options.json, databaseAlreadyExisted, options.databasePath);
   } finally {
     database.close();
   }
-}
-
-async function runWorkbench(args: string[]): Promise<void> {
-  process.argv = [process.argv[0], process.argv[1], ...args];
-  await import("./WorkbenchServer.ts");
 }
 
 async function runCommand(
@@ -25,6 +19,7 @@ async function runCommand(
   store: ConveyorStore,
   json: boolean,
   databaseAlreadyExisted: boolean,
+  databasePath: string,
 ): Promise<void> {
   switch (args[0]) {
     case undefined: return showHome(store, json);
@@ -39,7 +34,7 @@ async function runCommand(
     case "kick": return rewindBlob(args.slice(1), store, json, args[0]);
     case "run":
     case "evaluate": return runOne(args.slice(1), store, json);
-    case "service": return runService(args.slice(1), store, json);
+    case "service": return runService(args.slice(1), store, json, databasePath);
     default: throw usage(`unknown command ${args[0]}`, "Run `axi-factorio --help`.");
   }
 }
@@ -65,13 +60,15 @@ function initialize(args: string[], json: boolean, already: boolean): void {
 function addBlob(args: string[], store: ConveyorStore, json: boolean): void {
   const parsed = parseArgs(args, addFlags);
   const identity = parseBlobIdentity(parsed);
-  const pipelinePath = resolve(requireFlag(parsed, "--pipeline"));
+  const pipeline = resolvePipeline(firstFlag(parsed, "--pipeline"));
+  const pipelinePath = pipeline.path;
   const steps = discoverPipeline(pipelinePath);
   snapshotDefinition(steps[0], pipelinePath);
   const result = store.createBlob(identity.id, {
     title: identity.title,
     body: readBody(parsed),
     cwd: resolve(firstFlag(parsed, "--cwd") ?? process.cwd()),
+    pipelineId: pipeline.id,
     pipelinePath,
     inputArtifacts: parsed.flags["--input-ref"] ?? [],
   });
@@ -94,7 +91,7 @@ function listBlobs(args: string[], store: ConveyorStore, json: boolean): void {
     blobs: all.slice(0, limit).map(blobSummary),
     help: all.length
       ? ["Run `axi-factorio show <id>` for blob details."]
-      : ["Run `axi-factorio add <id> \"<title>\" --pipeline <dir>`."],
+      : ["Run `axi-factorio add <id> \"<title>\"`."],
   }, json);
 }
 
@@ -163,15 +160,34 @@ async function runOne(args: string[], store: ConveyorStore, json: boolean): Prom
   }, json);
 }
 
-async function runService(args: string[], store: ConveyorStore, json: boolean): Promise<void> {
-  const parsed = parseArgs(args, { "--poll-ms": "value" });
-  requirePositionals(parsed, 0, "service accepts no positional arguments.");
+async function runService(
+  args: string[],
+  store: ConveyorStore,
+  json: boolean,
+  databasePath: string,
+): Promise<void> {
+  const parsed = parseArgs(args, { "--poll-ms": "value", "--port": "value" });
+  const action = parsed.positionals[0] ?? "run";
+  if (action === "install") return installService(databasePath, servicePort(parsed));
+  if (action === "status") return showServiceStatus();
+  if (action === "uninstall") return uninstallService();
+  if (action !== "run") throw usage("service accepts run, install, status, or uninstall.");
+  requirePositionals(
+    parsed,
+    parsed.positionals.length ? 1 : 0,
+    "service run accepts no additional positional arguments.",
+  );
   const pollMs = positiveInteger(firstFlag(parsed, "--poll-ms") ?? "1000", "--poll-ms");
   if (pollMs < 50) throw usage("--poll-ms must be at least 50.");
   const controller = serviceAbortController();
+  const viewer = startServiceViewer(databasePath, servicePort(parsed), controller);
   const runner = new ConveyorRunner(store, new CodexAdapter());
-  await new ConveyorService(store, runner, pollMs).run(controller.signal);
+  await Promise.all([new ConveyorService(store, runner, pollMs).run(controller.signal), viewer]);
   printOutput({ ok: "service -> stopped" }, json);
+}
+
+function servicePort(parsed: ParsedArgs): number {
+  return positiveInteger(firstFlag(parsed, "--port") ?? "4317", "--port");
 }
 
 function parseGlobalOptions(args: string[]): GlobalOptions {
@@ -275,6 +291,7 @@ function blobDetail(blob: Blob): Record<string, unknown> {
     state: blob.state,
     step: blob.state === "complete" ? null : blob.state,
     paused: blob.paused,
+    pipeline: blob.pipelineId,
     pipelinePath: blob.pipelinePath,
     cwd: blob.cwd,
     lastCompletedStep: blob.lastCompletedStepId,
@@ -315,7 +332,7 @@ function stateCounts(blobs: Blob[]): Record<string, number> {
 }
 
 function homeHelp(total: number, shown: number): string[] {
-  const help = ["Run `axi-factorio add <id> \"<title>\" --pipeline <dir>` to add a blob."];
+  const help = ["Run `axi-factorio add <id> \"<title>\"` to add a blob."];
   if (total) help.unshift("Run `axi-factorio show <id>` for blob and receipt details.");
   if (total > shown) help.unshift(`Run \`axi-factorio list\` for all ${total} blobs.`);
   return help;
@@ -327,7 +344,41 @@ function displayPath(path: string): string {
 }
 
 function defaultDatabasePath(): string {
-  return process.env.AXI_FACTORIO_DB ?? join(process.cwd(), ".axi-factorio", "factorio.sqlite");
+  return process.env.AXI_FACTORIO_DB ?? join(process.cwd(), "pipelines", "axi-factorio.db");
+}
+
+function resolvePipeline(selector = "default"): PipelineSelection {
+  const root = join(process.cwd(), "pipelines");
+  const direct = resolve(selector);
+  if (isDirectory(direct)) return { id: pipelineId(root, direct), path: direct };
+  const selected = join(root, selector);
+  if (isDirectory(selected) && /^v\d+$/.test(basename(selected))) {
+    return { id: pipelineId(root, selected), path: selected };
+  }
+  const path = latestPipelineVersion(selected);
+  return { id: pipelineId(root, path), path };
+}
+
+function latestPipelineVersion(pipelineRoot: string): string {
+  if (!isDirectory(pipelineRoot)) throw new Error(`Pipeline ${pipelineRoot} was not found.`);
+  const versions = readdirSync(pipelineRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && /^v\d+$/.test(entry.name))
+    .sort((left, right) => Number(right.name.slice(1)) - Number(left.name.slice(1)));
+  if (!versions[0]) throw new Error(`Pipeline ${pipelineRoot} has no vN versions.`);
+  return join(pipelineRoot, versions[0].name);
+}
+
+function pipelineId(root: string, path: string): string {
+  const identity = relative(root, path);
+  return identity.startsWith("..") ? path : identity.split(sep).join("/");
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 function serviceAbortController(): AbortController {
@@ -338,7 +389,7 @@ function serviceAbortController(): AbortController {
 }
 
 function printVersion(): void {
-  process.stdout.write("axi-factorio 0.1.0-rc.1\n");
+  process.stdout.write("axi-factorio 0.1.0-rc.2\n");
 }
 
 function helpCommand(args: string[]): string | undefined {
@@ -372,6 +423,7 @@ type ParsedArgs = { positionals: string[]; flags: Record<string, string[]> };
 type ExtractedGlobals = { flags: Record<string, string[]>; args: string[] };
 type GlobalOptions = { databasePath: string; json: boolean; args: string[] };
 type ContentPreview = { text: string; truncated: boolean };
+type PipelineSelection = { id: string; path: string };
 
 const bodyLimit = 800;
 const addFlags: FlagSpec = {
@@ -384,16 +436,16 @@ const addFlags: FlagSpec = {
 };
 
 const helpText: Record<string, string> = {
-  root: `axi-factorio 0.1.0-rc.1
+  root: `axi-factorio 0.1.0-rc.2
 
 Usage: axi-factorio <command> [flags]
-Commands: add, list, status, show, receipts, retry, rewind, kick, run, service, workbench, init
+Commands: add, list, status, show, receipts, retry, rewind, kick, run, service, init
 Globals: --db PATH, --json, --help, --version
 
 Run without arguments for the live conveyor dashboard.
 `,
-  add: `Usage: axi-factorio add BLOB_ID "TITLE" --pipeline DIR [--cwd DIR] [--body TEXT|--body-file PATH] [--input-ref REF...]
-       axi-factorio add --mint "TITLE" --pipeline DIR
+  add: `Usage: axi-factorio add BLOB_ID "TITLE" [--pipeline NAME|NAME/vN|DIR] [--cwd DIR] [--body TEXT|--body-file PATH] [--input-ref REF...]
+       axi-factorio add --mint "TITLE" [--pipeline NAME|NAME/vN|DIR]
 `,
   list: `Usage: axi-factorio list [--state STATE] [--limit 50]\n`,
   status: `Usage: axi-factorio status [--state STATE] [--limit 50]\n`,
@@ -404,8 +456,7 @@ Run without arguments for the live conveyor dashboard.
   kick: `Usage: axi-factorio kick BLOB_ID STEP_ID\n`,
   run: `Usage: axi-factorio run\n`,
   evaluate: `Usage: axi-factorio evaluate\n`,
-  service: `Usage: axi-factorio service [--poll-ms 1000]\n`,
-  workbench: `Usage: axi-factorio workbench [--db PATH] [--port 4317]\n`,
+  service: `Usage: axi-factorio service [run|install|status|uninstall] [--poll-ms 1000] [--port 4317]\n`,
   init: `Usage: axi-factorio init\n`,
 };
 
@@ -426,7 +477,13 @@ import { printOutput } from "./Output.ts";
 import { discoverPipeline, nextStep, requireStep, snapshotDefinition } from "./Pipeline.ts";
 import { ConveyorRunner } from "./Runner.ts";
 import { ConveyorService } from "./Service.ts";
+import {
+  installService,
+  showServiceStatus,
+  startServiceViewer,
+  uninstallService,
+} from "./ServiceInstall.ts";
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, relative, resolve, sep } from "node:path";

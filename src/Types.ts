@@ -20,12 +20,14 @@ export type BlobInput = {
   title: string;
   body: string;
   cwd: string;
+  pipelineId?: string;
   pipelinePath: string;
   inputArtifacts: string[];
 };
 
-export type Blob = BlobInput & {
+export type Blob = Omit<BlobInput, "pipelineId"> & {
   id: string;
+  pipelineId: string;
   state: BlobState;
   paused: boolean;
   lastCompletedStepId: string | null;

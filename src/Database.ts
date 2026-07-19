@@ -36,6 +36,9 @@ export class FactorioDatabase {
     if (!columns.some((column) => column.name === "paused")) {
       this.connection.exec("ALTER TABLE blobs ADD COLUMN paused INTEGER NOT NULL DEFAULT 0");
     }
+    if (!columns.some((column) => column.name === "pipelineId")) {
+      this.connection.exec("ALTER TABLE blobs ADD COLUMN pipelineId TEXT NOT NULL DEFAULT ''");
+    }
   }
 }
 
@@ -45,6 +48,7 @@ const schema = `
     title TEXT NOT NULL,
     body TEXT NOT NULL,
     cwd TEXT NOT NULL,
+    pipelineId TEXT NOT NULL,
     pipelinePath TEXT NOT NULL,
     inputArtifactsJson TEXT NOT NULL,
     state TEXT NOT NULL,

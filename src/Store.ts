@@ -16,8 +16,9 @@ export class ConveyorStore {
       if (existing) return this.existingBlob(existing, input);
       const at = this.now();
       const initialState = discoverPipeline(input.pipelinePath)[0].id;
+      const pipelineId = input.pipelineId ?? input.pipelinePath;
       this.database.connection.prepare(blobInsert).run(
-        id, input.title, input.body, input.cwd, input.pipelinePath,
+        id, input.title, input.body, input.cwd, pipelineId, input.pipelinePath,
         JSON.stringify(input.inputArtifacts), initialState, at, at,
       );
       return { blob: this.requireBlob(id), already: false };
@@ -291,6 +292,7 @@ function mapBlob(row: Record<string, unknown>): Blob {
     title: String(row.title),
     body: String(row.body),
     cwd: String(row.cwd),
+    pipelineId: String(row.pipelineId || row.pipelinePath),
     pipelinePath: String(row.pipelinePath),
     inputArtifacts: JSON.parse(String(row.inputArtifactsJson)) as string[],
     state: row.state as BlobState,
@@ -329,6 +331,7 @@ function sameBlobInput(blob: Blob, input: BlobInput): boolean {
   return blob.title === input.title
     && blob.body === input.body
     && blob.cwd === input.cwd
+    && blob.pipelineId === (input.pipelineId ?? input.pipelinePath)
     && blob.pipelinePath === input.pipelinePath
     && JSON.stringify(blob.inputArtifacts) === JSON.stringify(input.inputArtifacts);
 }
@@ -356,8 +359,8 @@ type BeginReceiptInput = {
 };
 
 const blobInsert = `INSERT INTO blobs
-  (id, title, body, cwd, pipelinePath, inputArtifactsJson, state, createdAt, updatedAt)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+  (id, title, body, cwd, pipelineId, pipelinePath, inputArtifactsJson, state, createdAt, updatedAt)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 const blobSelect = "SELECT * FROM blobs WHERE id = ?";
 const blobList = "SELECT * FROM blobs ORDER BY createdAt DESC";
 const blobNext = `SELECT * FROM blobs WHERE state != 'complete' AND paused = 0

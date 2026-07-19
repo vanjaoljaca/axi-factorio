@@ -7,9 +7,9 @@ runtime state and one receipt for every execution.
 There is no workflow DSL, pipeline-version object, event bus, dependency graph,
 or durable-workflow engine.
 
-## Workbench
+## Internal development workbench
 
-Launch the local scenario lab and SQLite viewer:
+The source repo contains a scenario lab for developing axi-factorio itself:
 
 ```sh
 npm run workbench
@@ -19,15 +19,12 @@ Then open `http://127.0.0.1:4317`. Use `-- --db path/to/factorio.db` to inspect
 a specific runtime database. The scenario lab and database inspector render
 through the same conveyor, receipt-stream, and assertion views.
 
-From an installed release, launch the same viewer with:
-
-```sh
-npx axi-factorio workbench --db path/to/factorio.db
-```
-
 The default happy-path scenario calls `createTestHarness()`, loads the paired
 definitions in `test/harness/default/`, creates a fresh temporary SQLite
 database, and moves a blob through the real `ConveyorRunner`.
+
+The workbench is not included as an installed CLI command. The installed
+service exposes only the read-only database visualization.
 
 ## Model
 
@@ -73,8 +70,9 @@ Definitions are read when a blob becomes runnable:
 - `rewind` or `kick` explicitly moves a blob to a named step and invalidates
   receipts for that step and everything after it.
 
-The files are the authority. The database does not contain pipeline versions or
-frozen step arrays. A receipt captures the exact Git SHA and combined
+The files are the authority. The database records the pipeline identity selected
+for each blob, such as `default/v1`, but contains no pipeline definition objects
+or frozen step arrays. A receipt captures the exact Git SHA and combined
 entry/exit SHA-256 content hash used for that execution.
 
 ## Adapter contract
@@ -111,7 +109,7 @@ npm run build
 
 This recreates `release/` with:
 
-- `axi-factorio-0.1.0-rc.1.tgz`, the installable package;
+- `axi-factorio-0.1.0-rc.2.tgz`, the installable package;
 - `SHA256SUMS`, for artifact verification; and
 - `INSTALL.md`, with direct and vendored installation commands.
 
@@ -120,11 +118,29 @@ Do not use `npm link` for a consuming project. Install the exact tarball so
 
 ## Commands
 
+Install the exact candidate in the consuming npm project:
+
+```sh
+npm install --save-exact /path/to/axi-factorio-0.1.0-rc.2.tgz
+```
+
+From the consuming project root, the defaults are:
+
+```text
+pipeline name:  default
+pipeline:       ./pipelines/default/<highest-vN>
+database:       ./pipelines/axi-factorio.db
+```
+
+Adding a blob resolves the highest numbered version currently present and saves
+that concrete identity in SQLite. For example, if `v1` and `v2` exist, a new
+blob stores `default/v2`; existing blobs remain pinned to the version selected
+when they were created. A future `./.factorio` file may override these defaults.
+
 Add a blob with a caller-owned join ID:
 
 ```sh
-axi-factorio add account-export-1 "Add account export" \
-  --pipeline ../pipelines/app-feature/v1 \
+npx axi-factorio add account-export-1 "Add account export" \
   --cwd ../apps/example \
   --body-file ./ticket.md \
   --input-ref ticket:account-export-1
@@ -136,37 +152,46 @@ add is an idempotent no-op.
 Run one item or keep the conveyor moving:
 
 ```sh
-axi-factorio run
-axi-factorio service
+npx axi-factorio run
+npx axi-factorio service
+```
+
+The foreground service owns both the automated runner and the read-only web
+view at `http://127.0.0.1:4317`. Install it as a macOS user service from the
+consuming project root:
+
+```sh
+npx axi-factorio service install
+npx axi-factorio service status
+npx axi-factorio service uninstall
 ```
 
 Inspect state and receipts:
 
 ```sh
-axi-factorio
-axi-factorio list --state plan.define
-axi-factorio show account-export-1 --full
-axi-factorio receipts account-export-1 --full
+npx axi-factorio
+npx axi-factorio list --state plan.define
+npx axi-factorio show account-export-1 --full
+npx axi-factorio receipts account-export-1 --full
 ```
 
 Restart a blob paused by a failed or blocked receipt:
 
 ```sh
-axi-factorio retry account-export-1
+npx axi-factorio retry account-export-1
 ```
 
 Explicitly move it back to a step:
 
 ```sh
-axi-factorio rewind account-export-1 plan.research
-axi-factorio kick account-export-1 dev.workbench
+npx axi-factorio rewind account-export-1 plan.research
+npx axi-factorio kick account-export-1 dev.workbench
 ```
 
 Both commands invalidate receipts for the target step and later steps, set the
 target as the next step, and leave earlier valid receipts intact.
 
-Use `--db PATH` or `AXI_FACTORIO_DB` to choose the SQLite file. The default is
-`.axi-factorio/factorio.sqlite`.
+Use `--db PATH` or `AXI_FACTORIO_DB` to choose another SQLite file.
 
 ## AXI behavior
 

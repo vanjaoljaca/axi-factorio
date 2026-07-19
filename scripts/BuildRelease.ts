@@ -22,7 +22,6 @@ function buildDistribution(): void {
   const distribution = join(root, "dist");
   rmSync(distribution, { recursive: true, force: true });
   compileDirectory(join(root, "src"), join(distribution, "src"));
-  compileDirectory(join(root, "test", "harness"), join(distribution, "test", "harness"));
   chmodSync(join(distribution, "src", "cli.js"), 0o755);
 }
 
