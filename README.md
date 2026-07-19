@@ -1,5 +1,10 @@
 # axi-factorio
 
+> **Work in progress.** This is an early public release candidate. The storage
+> model, CLI, adapter lifecycle, and UI are still being actively shaped.
+
+![axi-factorio scenario workbench](workbench-implementation.png)
+
 `axi-factorio` is a deliberately dumb local blob conveyor. Blobs move downward
 through ordered steps defined by ordinary Markdown files in Git. SQLite stores
 runtime state and one receipt for every execution.
