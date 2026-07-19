@@ -17,6 +17,36 @@ test("root help exposes service installation and keeps workbench internal", () =
   assert.doesNotMatch(result.stdout, /workbench/);
 });
 
+test("every public command exposes concise help without opening runtime state", () => {
+  const fixture = createCliFixture();
+  const commands = [
+    "project", "add", "list", "status", "show", "receipts", "retry", "rewind",
+    "kick", "run", "evaluate", "service", "init",
+  ];
+  for (const command of commands) {
+    const result = runCli(fixture, [command, "--help"]);
+    assert.equal(result.status, 0, command);
+    assert.match(result.stdout, /^Usage: axi-factorio /, command);
+  }
+});
+
+test("projects own default pipeline selectors and blobs attach to projects", () => {
+  const fixture = createCliFixture();
+  const defaultRoot = join(fixture.root, "pipelines", "default");
+  mkdirSync(defaultRoot, { recursive: true });
+  renameSync(fixture.pipelinePath, join(defaultRoot, "v1"));
+
+  const project = JSON.parse(runCli(fixture, [
+    "project", "add", "app", "App", "--cwd", fixture.root, "--json",
+  ]).stdout);
+  const blob = JSON.parse(runCli(fixture, [
+    "add", "blob-project", "Project blob", "--project", "app", "--json",
+  ]).stdout);
+
+  assert.equal(project.project.defaultPipeline, "default");
+  assert.equal(blob.blob.project, "app");
+});
+
 test("add is idempotent and supports repeated artifact refs in JSON", () => {
   const fixture = createCliFixture();
   const args = [

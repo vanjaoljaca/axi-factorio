@@ -20,15 +20,14 @@ type ViewSnapshot = {
 type Scenario = { id: string; frames: ViewSnapshot[] };
 
 const port = Number(argument("--port") ?? "4317");
-const databaseOnly = process.argv.includes("--database-only");
 const databasePath = resolve(argument("--db") ?? "pipelines/axi-factorio.db");
 const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? "/", `http://127.0.0.1:${port}`);
   try {
-    if (url.pathname === "/api/scenarios") return json(response, databaseOnly ? [] : scenarioIndex());
+    if (url.pathname === "/api/scenarios") return json(response, scenarioIndex());
     if (url.pathname === "/api/database") return json(response, databaseSnapshot());
-    if (!databaseOnly && url.pathname.startsWith("/api/scenarios/")) return json(response, await scenario(url));
-    if (url.pathname === "/") return html(response, databaseOnly ? serviceHtml : workbenchHtml);
+    if (url.pathname.startsWith("/api/scenarios/")) return json(response, await scenario(url));
+    if (url.pathname === "/") return html(response, workbenchHtml);
     response.writeHead(404).end("Not found");
   } catch (error) {
     json(response, { error: error instanceof Error ? error.message : String(error) }, 500);
@@ -36,9 +35,7 @@ const server = createServer(async (request, response) => {
 });
 
 server.listen(port, "127.0.0.1", () => {
-  log(databaseOnly ? "viewer.ready" : "workbench.ready", {
-    url: `http://127.0.0.1:${port}`, databasePath,
-  });
+  log("workbench.ready", { url: `http://127.0.0.1:${port}`, databasePath });
 });
 
 function scenarioIndex(): object[] {
@@ -201,14 +198,6 @@ $("checks").innerHTML=s.assertions.length?s.assertions.map(a=>'<div class="check
 function run(){clearInterval(timer);frame=0;render();timer=setInterval(()=>{if(frame>=frames.length-1)return clearInterval(timer);frame++;render();$("belt").classList.add("pulse");setTimeout(()=>$("belt").classList.remove("pulse"),500)},650)}
 document.querySelectorAll(".source").forEach(b=>b.onclick=()=>{source=b.dataset.source;document.querySelectorAll(".source").forEach(x=>x.classList.toggle("active",x===b));load()});$("run").onclick=run;$("refresh").onclick=load;init();
 </script></body></html>`;
-
-const serviceHtml = workbenchHtml
-  .replace('let source="scenario"', 'let source="database"')
-  .replace('<button class="btn primary" id="run">▶ Run scenario</button>', '<span id="run"></span>')
-  .replace(
-    '<div class="eyebrow">Source</div>\n<button class="source active" data-source="scenario">Scenario lab</button><button class="source" data-source="database">SQLite database</button>\n<div class="eyebrow">Scenarios</div><div id="scenarios"></div>',
-    '<div class="eyebrow">Live service</div><button class="source active" data-source="database">SQLite database</button><div id="scenarios"></div>',
-  );
 
 import { createServer, type ServerResponse } from "node:http";
 import { basename, resolve } from "node:path";

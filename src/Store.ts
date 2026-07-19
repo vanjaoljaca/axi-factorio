@@ -10,6 +10,19 @@ export class ConveyorStore {
     this.now = now;
   }
 
+  createProject(id: string, input: ProjectInput): ProjectMutationResult {
+    return this.database.transaction(() => this.ensureProject(id, input));
+  }
+
+  getProject(id: string): Project | null {
+    const row = this.database.connection.prepare(projectSelect).get(id);
+    return row ? mapProject(asRecord(row)) : null;
+  }
+
+  listProjects(): Project[] {
+    return this.database.connection.prepare(projectList).all().map((row) => mapProject(asRecord(row)));
+  }
+
   createBlob(id: string, input: BlobInput): BlobMutationResult {
     return this.database.transaction(() => {
       const existing = this.getBlob(id);
@@ -17,8 +30,14 @@ export class ConveyorStore {
       const at = this.now();
       const initialState = discoverPipeline(input.pipelinePath)[0].id;
       const pipelineId = input.pipelineId ?? input.pipelinePath;
+      const projectId = input.projectId ?? "default";
+      if (!this.getProject(projectId)) this.ensureProject(projectId, {
+        name: projectId === "default" ? "Default" : projectId,
+        cwd: input.cwd,
+        defaultPipeline: "default",
+      });
       this.database.connection.prepare(blobInsert).run(
-        id, input.title, input.body, input.cwd, pipelineId, input.pipelinePath,
+        id, projectId, input.title, input.body, input.cwd, pipelineId, input.pipelinePath,
         JSON.stringify(input.inputArtifacts), initialState, at, at,
       );
       return { blob: this.requireBlob(id), already: false };
@@ -284,11 +303,36 @@ export class ConveyorStore {
     if (sameBlobInput(blob, input)) return { blob, already: true };
     throw new Error(`Blob ${blob.id} already exists with different input.`);
   }
+
+  private ensureProject(id: string, input: ProjectInput): ProjectMutationResult {
+    const existing = this.getProject(id);
+    if (existing) {
+      if (sameProjectInput(existing, input)) return { project: existing, already: true };
+      throw new Error(`Project ${id} already exists with different input.`);
+    }
+    const at = this.now();
+    this.database.connection.prepare(projectInsert).run(
+      id, input.name, input.cwd, input.defaultPipeline, at, at,
+    );
+    return { project: this.getProject(id)!, already: false };
+  }
+}
+
+function mapProject(row: Record<string, unknown>): Project {
+  return {
+    id: String(row.id),
+    name: String(row.name),
+    cwd: String(row.cwd),
+    defaultPipeline: String(row.defaultPipeline),
+    createdAt: String(row.createdAt),
+    updatedAt: String(row.updatedAt),
+  };
 }
 
 function mapBlob(row: Record<string, unknown>): Blob {
   return {
     id: String(row.id),
+    projectId: String(row.projectId || "default"),
     title: String(row.title),
     body: String(row.body),
     cwd: String(row.cwd),
@@ -329,11 +373,18 @@ function mapReceipt(row: Record<string, unknown>): Receipt {
 
 function sameBlobInput(blob: Blob, input: BlobInput): boolean {
   return blob.title === input.title
+    && blob.projectId === (input.projectId ?? "default")
     && blob.body === input.body
     && blob.cwd === input.cwd
     && blob.pipelineId === (input.pipelineId ?? input.pipelinePath)
     && blob.pipelinePath === input.pipelinePath
     && JSON.stringify(blob.inputArtifacts) === JSON.stringify(input.inputArtifacts);
+}
+
+function sameProjectInput(project: Project, input: ProjectInput): boolean {
+  return project.name === input.name
+    && project.cwd === input.cwd
+    && project.defaultPipeline === input.defaultPipeline;
 }
 
 function nullableString(value: unknown): string | null {
@@ -349,6 +400,7 @@ function asRecord(value: unknown): Record<string, unknown> {
 }
 
 export type BlobMutationResult = { blob: Blob; already: boolean };
+export type ProjectMutationResult = { project: Project; already: boolean };
 
 type BeginReceiptInput = {
   blobId: string;
@@ -359,8 +411,8 @@ type BeginReceiptInput = {
 };
 
 const blobInsert = `INSERT INTO blobs
-  (id, title, body, cwd, pipelineId, pipelinePath, inputArtifactsJson, state, createdAt, updatedAt)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+  (id, projectId, title, body, cwd, pipelineId, pipelinePath, inputArtifactsJson, state, createdAt, updatedAt)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 const blobSelect = "SELECT * FROM blobs WHERE id = ?";
 const blobList = "SELECT * FROM blobs ORDER BY createdAt DESC";
 const blobNext = `SELECT * FROM blobs WHERE state != 'complete' AND paused = 0
@@ -402,6 +454,10 @@ const leaseRenew = `UPDATE dispatcherLeases SET leaseUntil = ?, updatedAt = ?
 const leaseRelease = "DELETE FROM dispatcherLeases WHERE name = 'runner' AND ownerId = ?";
 const activeLeaseSelect = `SELECT 1 FROM dispatcherLeases
   WHERE name = 'runner' AND ownerId = ? AND leaseUntil > ?`;
+const projectInsert = `INSERT INTO projects
+  (id, name, cwd, defaultPipeline, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?)`;
+const projectSelect = "SELECT * FROM projects WHERE id = ?";
+const projectList = "SELECT * FROM projects ORDER BY name, id";
 
 import type {
   AdapterResult,
@@ -413,6 +469,8 @@ import type {
   Blob,
   BlobInput,
   BlobState,
+  Project,
+  ProjectInput,
 } from "./Types.ts";
 import type { FactorioDatabase } from "./Database.ts";
 import { randomUUID } from "node:crypto";

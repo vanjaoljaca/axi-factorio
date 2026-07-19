@@ -4,13 +4,13 @@ export function startServiceViewer(
   controller: AbortController,
 ): Promise<void> {
   const child = spawn(process.execPath, [
-    viewerPath, "--database-only", "--db", databasePath, "--port", String(port),
+    viewerPath, "--db", databasePath, "--port", String(port),
   ], { cwd: process.cwd(), stdio: "inherit" });
   controller.signal.addEventListener("abort", () => child.kill("SIGTERM"), { once: true });
   return childResult(child, controller);
 }
 
-export function installService(databasePath: string, port: number): void {
+export function installService(databasePath: string, port: number): ServiceStatus {
   const paths = servicePaths();
   mkdirSync(dirname(paths.plist), { recursive: true });
   mkdirSync(paths.logs, { recursive: true });
@@ -19,18 +19,26 @@ export function installService(databasePath: string, port: number): void {
   execFileSync("launchctl", ["bootstrap", domain(), paths.plist], { stdio: "inherit" });
   execFileSync("launchctl", ["kickstart", "-k", `${domain()}/${label}`], { stdio: "inherit" });
   log("service.installed", { plist: paths.plist, url: `http://127.0.0.1:${port}` });
+  return { label, state: "running", pid: null, url: `http://127.0.0.1:${port}` };
 }
 
-export function showServiceStatus(): void {
-  process.stdout.write(execFileSync("launchctl", ["print", `${domain()}/${label}`], {
-    encoding: "utf8",
-  }));
+export function showServiceStatus(): ServiceStatus {
+  const output = execFileSync("launchctl", ["print", `${domain()}/${label}`], { encoding: "utf8" });
+  const port = output.match(/--port\s+(\d+)/)?.[1] ?? "4317";
+  return {
+    label,
+    state: output.match(/^\s*state = (.+)$/m)?.[1] ?? "unknown",
+    pid: numberMatch(output, /^\s*pid = (\d+)$/m),
+    url: `http://127.0.0.1:${port}`,
+  };
 }
 
-export function uninstallService(): void {
+export function uninstallService(): ServiceStatus {
   const paths = servicePaths();
   bootout(paths);
+  rmSync(paths.plist, { force: true });
   log("service.uninstalled", { plist: paths.plist });
+  return { label, state: "uninstalled", pid: null, url: null };
 }
 
 function childResult(child: ChildProcess, controller: AbortController): Promise<void> {
@@ -98,21 +106,29 @@ function escapeXml(value: string): string {
   return value.replace(/[<>&"']/gu, (character) => xmlCharacters[character]);
 }
 
-function log(event: string, fields: Record<string, unknown>): void {
-  console.log(JSON.stringify({ event, ...fields, at: new Date().toISOString() }));
+function numberMatch(value: string, pattern: RegExp): number | null {
+  const match = value.match(pattern)?.[1];
+  return match ? Number(match) : null;
 }
 
 type ServicePaths = { plist: string; logs: string };
+export type ServiceStatus = {
+  label: string;
+  state: string;
+  pid: number | null;
+  url: string | null;
+};
 
 const label = "me.oljaca.axi-factorio";
 const xmlCharacters: Record<string, string> = {
   "\"": "&quot;", "&": "&amp;", "'": "&apos;", "<": "&lt;", ">": "&gt;",
 };
-const viewerPath = fileURLToPath(new URL("./WorkbenchServer.ts", import.meta.url));
+const viewerPath = fileURLToPath(new URL("./ViewerServer.ts", import.meta.url));
 
 import type { ChildProcess } from "node:child_process";
 import { execFileSync, spawn } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { log } from "./Logger.ts";

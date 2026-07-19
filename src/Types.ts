@@ -16,17 +16,31 @@ export type DefinitionSnapshot = {
   exit: string;
 };
 
+export type ProjectInput = {
+  name: string;
+  cwd: string;
+  defaultPipeline: string;
+};
+
+export type Project = ProjectInput & {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type BlobInput = {
   title: string;
   body: string;
   cwd: string;
+  projectId?: string;
   pipelineId?: string;
   pipelinePath: string;
   inputArtifacts: string[];
 };
 
-export type Blob = Omit<BlobInput, "pipelineId"> & {
+export type Blob = Omit<BlobInput, "pipelineId" | "projectId"> & {
   id: string;
+  projectId: string;
   pipelineId: string;
   state: BlobState;
   paused: boolean;

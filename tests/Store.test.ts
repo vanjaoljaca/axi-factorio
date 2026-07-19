@@ -33,13 +33,13 @@ test("stores blobs and complete execution receipts", () => {
   fixture.database.close();
 });
 
-test("fresh storage is only blobs, receipts, and the dispatcher lease", () => {
+test("fresh storage includes projects, blobs, receipts, and the dispatcher lease", () => {
   const fixture = createStoreFixture();
   const rows = fixture.database.connection.prepare(
     "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
   ).all() as Array<{ name: string }>;
 
-  assert.deepEqual(rows.map((row) => row.name), ["blobs", "dispatcherLeases", "receipts"]);
+  assert.deepEqual(rows.map((row) => row.name), ["blobs", "dispatcherLeases", "projects", "receipts"]);
   fixture.database.close();
 });
 

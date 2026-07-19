@@ -23,13 +23,17 @@ The default happy-path scenario calls `createTestHarness()`, loads the paired
 definitions in `test/harness/default/`, creates a fresh temporary SQLite
 database, and moves a blob through the real `ConveyorRunner`.
 
-The workbench is not included as an installed CLI command. The installed
-service exposes only the read-only database visualization.
+The workbench is not included in the release artifact or exposed as an
+installed CLI command. The installed service has a separate read-only user
+view: project-grouped task rows, pipeline beads, status, and updated time. Raw
+receipts, assertions, scenario playback, and database paths stay in the source
+workbench.
 
 ## Model
 
-The database has three small concerns:
+The database has four small concerns:
 
+- `projects` groups work and stores a default pipeline selector;
 - `blobs` stores incoming work and its current conveyor position;
 - `receipts` records every step execution and its definition identity;
 - `dispatcherLeases` ensures one local runner owns execution at a time.
@@ -109,7 +113,7 @@ npm run build
 
 This recreates `release/` with:
 
-- `axi-factorio-0.1.0-rc.2.tgz`, the installable package;
+- `axi-factorio-0.1.0-rc.3.tgz`, the installable package;
 - `SHA256SUMS`, for artifact verification; and
 - `INSTALL.md`, with direct and vendored installation commands.
 
@@ -121,7 +125,7 @@ Do not use `npm link` for a consuming project. Install the exact tarball so
 Install the exact candidate in the consuming npm project:
 
 ```sh
-npm install --save-exact /path/to/axi-factorio-0.1.0-rc.2.tgz
+npm install --save-exact /path/to/axi-factorio-0.1.0-rc.3.tgz
 ```
 
 From the consuming project root, the defaults are:
@@ -137,10 +141,20 @@ that concrete identity in SQLite. For example, if `v1` and `v2` exist, a new
 blob stores `default/v2`; existing blobs remain pinned to the version selected
 when they were created. A future `./.factorio` file may override these defaults.
 
+Every blob belongs to a project. A project stores its working directory and a
+default pipeline selector, initially `default`. Create one explicitly or let the
+first blob for a working directory create it from that directory name:
+
+```sh
+npx axi-factorio project add codex "Codex" --cwd . --pipeline default
+npx axi-factorio project list
+```
+
 Add a blob with a caller-owned join ID:
 
 ```sh
 npx axi-factorio add account-export-1 "Add account export" \
+  --project codex \
   --cwd ../apps/example \
   --body-file ./ticket.md \
   --input-ref ticket:account-export-1
@@ -195,7 +209,9 @@ Use `--db PATH` or `AXI_FACTORIO_DB` to choose another SQLite file.
 
 ## AXI behavior
 
-The CLI follows the published AXI/tasks-axi house style:
+The CLI implements nine of the ten published AXI principles. See
+[`AXI-CONFORMANCE.md`](AXI-CONFORMANCE.md) for the evidence and the remaining
+ambient-context gap. Its current agent-facing behavior includes:
 
 - no arguments shows a content-first dashboard;
 - stdout is compact TOON by default and `--json` is available everywhere;

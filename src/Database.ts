@@ -39,12 +39,27 @@ export class FactorioDatabase {
     if (!columns.some((column) => column.name === "pipelineId")) {
       this.connection.exec("ALTER TABLE blobs ADD COLUMN pipelineId TEXT NOT NULL DEFAULT ''");
     }
+    if (!columns.some((column) => column.name === "projectId")) {
+      const at = new Date().toISOString();
+      this.connection.prepare(projectMigrationInsert).run(at, at);
+      this.connection.exec("ALTER TABLE blobs ADD COLUMN projectId TEXT NOT NULL DEFAULT 'default'");
+    }
   }
 }
 
 const schema = `
+  CREATE TABLE IF NOT EXISTS projects (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    cwd TEXT NOT NULL,
+    defaultPipeline TEXT NOT NULL,
+    createdAt TEXT NOT NULL,
+    updatedAt TEXT NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS blobs (
     id TEXT PRIMARY KEY,
+    projectId TEXT NOT NULL REFERENCES projects(id),
     title TEXT NOT NULL,
     body TEXT NOT NULL,
     cwd TEXT NOT NULL,
@@ -92,6 +107,10 @@ const schema = `
     updatedAt TEXT NOT NULL
   );
 `;
+
+const projectMigrationInsert = `INSERT OR IGNORE INTO projects
+  (id, name, cwd, defaultPipeline, createdAt, updatedAt)
+  VALUES ('default', 'Default', '', 'default', ?, ?)`;
 
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";

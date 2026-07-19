@@ -28,6 +28,7 @@ function buildDistribution(): void {
 function compileDirectory(source: string, destination: string): void {
   mkdirSync(destination, { recursive: true });
   for (const entry of readdirSync(source, { withFileTypes: true })) {
+    if (entry.name === "WorkbenchServer.ts") continue;
     const input = join(source, entry.name);
     const output = join(destination, entry.name.replace(/\.ts$/, ".js"));
     if (entry.isDirectory()) compileDirectory(input, output);
