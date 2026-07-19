@@ -1,0 +1,27 @@
+{
+  "name": "axi-factorio",
+  "version": "0.1.0-rc.1",
+  "description": "A deliberately dumb SQLite conveyor for tool-driven work.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "axi-factorio": "./src/cli.ts"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "axi": "node --disable-warning=ExperimentalWarning src/cli.ts",
+    "check": "node --disable-warning=ExperimentalWarning src/cli.ts --version",
+    "test": "node --disable-warning=ExperimentalWarning --test tests/*.test.ts",
+    "workbench": "node --disable-warning=ExperimentalWarning src/WorkbenchServer.ts"
+  },
+  "engines": {
+    "node": ">=23.6"
+  },
+  "dependencies": {
+    "@toon-format/toon": "2.3.1"
+  }
+}

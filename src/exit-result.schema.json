@@ -1,0 +1,20 @@
+{
+  "type": "object",
+  "properties": {
+    "decision": {
+      "type": "string",
+      "enum": ["advance", "retry", "blocked"]
+    },
+    "reason": {
+      "type": "string"
+    },
+    "outputArtifacts": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": ["decision", "reason", "outputArtifacts"],
+  "additionalProperties": false
+}
