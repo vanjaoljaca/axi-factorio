@@ -62,6 +62,23 @@ test("viewer distinguishes imported work awaiting review from failed work", () =
   });
 });
 
+test("viewer keeps paused zero-receipt inventory neutral", () => {
+  const fixture = createPipeline(["g1.first", "g2.second"]);
+  const databasePath = join(fixture.root, "factorio.sqlite");
+  const database = new FactorioDatabase(databasePath);
+  const store = new ConveyorStore(database);
+  const inventory = store.createBlob("inventory", blobInput(fixture, "Inventory item")).blob;
+  database.connection.prepare("UPDATE blobs SET paused = 1 WHERE id = ?").run(inventory.id);
+  database.close();
+
+  const snapshot = createViewSnapshot(databasePath) as ViewSnapshot;
+  const blobs = snapshot.projects.flatMap((project) => project.blobs);
+
+  assert.deepEqual(selectState(blobs, "inventory"), {
+    id: "inventory", status: "held", importedStepIds: [],
+  });
+});
+
 function selectState(
   blobs: Array<{ id: string; status: string; importedStepIds: string[] }>,
   id: string,

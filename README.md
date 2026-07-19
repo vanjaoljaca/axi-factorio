@@ -109,12 +109,12 @@ records the Codex thread ID, and resumes that same thread with the exit prompt.
 When fresh human input is appended at the current step, the next receipt resumes
 that same Codex thread before evaluating the exit prompt again.
 
-In rc.7, continuation is intentionally step-scoped: retries, blocked reviews,
+In rc.8, continuation is intentionally step-scoped: retries, blocked reviews,
 feedback, and approval cycles reuse the current step's Codex thread, while the
 next pipeline step starts a fresh thread. This preserves phase isolation but
 repays Codex's startup context cost at every step. Reusing one blob-owned thread
 across ordinary steps is a separate adapter-lifecycle decision, not an implicit
-rc.7 behavior.
+rc.8 behavior.
 The exit result supplies output artifact references, and the adapter also adds
 the Codex thread as a receipt artifact. The runner itself has no Codex-specific
 state.
@@ -137,7 +137,7 @@ npm run build
 
 This recreates `release/` with:
 
-- `axi-factorio-0.1.0-rc.7.tgz`, the installable package;
+- `axi-factorio-0.1.0-rc.8.tgz`, the installable package;
 - `SHA256SUMS`, for artifact verification; and
 - `INSTALL.md`, with direct and vendored installation commands.
 
@@ -149,7 +149,7 @@ Do not use `npm link` for a consuming project. Install the exact tarball so
 Install the exact candidate in the consuming npm project:
 
 ```sh
-npm install --save-exact /path/to/axi-factorio-0.1.0-rc.7.tgz
+npm install --save-exact /path/to/axi-factorio-0.1.0-rc.8.tgz
 ```
 
 From the consuming project root, the defaults are:
@@ -254,7 +254,7 @@ external task. Approval requires at least one evidence reference. The prompt
 still decides whether the step passes; Factorio only supplies and records the
 human evidence.
 
-Opening an rc.4, rc.5, or rc.6 database with rc.7 migrates projects and receipt
+Opening an rc.4, rc.5, rc.6, or rc.7 database with rc.8 migrates projects and receipt
 provenance columns automatically. The old
 project `cwd` becomes the app root, and its initial pipeline root becomes
 `<old-cwd>/pipelines`. Run `project upsert` afterward to point projects at a
@@ -265,11 +265,12 @@ shared workspace pipeline root.
 Pipeline position is neutral: completed work uses a solid checked bead, current
 work an outlined bead, and pending work a muted bead. Imported completion uses
 a dashed checked diamond so attested work remains visibly distinct without a
-new position color. Orange means human attention is needed; red is reserved for
+new position color. Paused blobs with no receipts are neutral `Inventory`, not
+blocked work. Orange means human attention is needed; red is reserved for
 failure or broken execution.
 
 Future multi-pipeline integration is deliberately parked in [ROADMAP.md](ROADMAP.md)
-under **pipeline merger**. rc.7 does not implement it.
+under **pipeline merger**. rc.8 does not implement it.
 
 Explicitly move it back to a step:
 

@@ -14,13 +14,13 @@ test("service polls positioned blobs directly and processes new work", async () 
 });
 
 test("service heartbeats while an adapter runs", async () => {
-  const fixture = createServiceFixture(new SlowAdapter(), 30);
+  const fixture = createServiceFixture(new SlowAdapter(), 300);
   fixture.store.createBlob("blob-1", blobInput(fixture));
   const controller = new AbortController();
   const running = fixture.service.run(controller.signal);
 
   await waitUntil(() => fixture.store.listReceipts("blob-1")[0]?.status === "running");
-  await delay(80);
+  await delay(500);
   assert.equal(fixture.store.acquireLease("competitor", 100), false);
   await waitUntil(() => fixture.store.getBlob("blob-1")?.state === "complete");
   controller.abort();
@@ -87,7 +87,7 @@ class ServiceAdapter implements ToolAdapter {
 
 class SlowAdapter extends ServiceAdapter {
   override async execute(input: AdapterInput, onExternalRun: ExternalRunHandler): Promise<AdapterResult> {
-    await delay(120);
+    await delay(800);
     return super.execute(input, onExternalRun);
   }
 }

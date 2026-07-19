@@ -11,5 +11,5 @@ the merge operation and evidence, conflicts and their disposition, and the
 resulting head. The likely first use is feature blobs becoming one app-release
 blob for Dev, Beta, and Production.
 
-This is parked pending a later design pass. rc.7 does not implement merger,
+This is parked pending a later design pass. rc.8 does not implement merger,
 composite-blob, integration-workspace, or multi-pipeline behavior.
