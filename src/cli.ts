@@ -216,6 +216,7 @@ async function runService(
   if (action === "status") return printService("status", showServiceStatus(), json);
   if (action === "uninstall") return printService("uninstalled", uninstallService(), json);
   if (action !== "run") throw usage("service accepts run, install, status, or uninstall.");
+  process.title = "axi-factorio-service";
   requirePositionals(
     parsed,
     parsed.positionals.length ? 1 : 0,
@@ -466,7 +467,7 @@ function serviceAbortController(): AbortController {
 }
 
 function printVersion(): void {
-  process.stdout.write("axi-factorio 0.1.0-rc.3\n");
+  process.stdout.write("axi-factorio 0.1.0-rc.4\n");
 }
 
 function helpCommand(args: string[]): string | undefined {
@@ -514,7 +515,7 @@ const addFlags: FlagSpec = {
 };
 
 const helpText: Record<string, string> = {
-  root: `axi-factorio 0.1.0-rc.3
+  root: `axi-factorio 0.1.0-rc.4
 
 Usage: axi-factorio <command> [flags]
 Commands: project, add, list, status, show, receipts, retry, rewind, kick, run, service, init

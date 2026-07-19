@@ -414,7 +414,7 @@ const blobInsert = `INSERT INTO blobs
   (id, projectId, title, body, cwd, pipelineId, pipelinePath, inputArtifactsJson, state, createdAt, updatedAt)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 const blobSelect = "SELECT * FROM blobs WHERE id = ?";
-const blobList = "SELECT * FROM blobs ORDER BY createdAt DESC";
+const blobList = "SELECT * FROM blobs ORDER BY createdAt DESC, id ASC";
 const blobNext = `SELECT * FROM blobs WHERE state != 'complete' AND paused = 0
   AND NOT EXISTS (SELECT 1 FROM receipts WHERE receipts.blobId = blobs.id
     AND receipts.status = 'running' AND receipts.invalidatedAt IS NULL)

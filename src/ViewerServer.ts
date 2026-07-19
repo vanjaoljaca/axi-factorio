@@ -1,25 +1,19 @@
-type ViewStep = { id: string; label: string };
+type ViewStep = { id: string; label: string; group: string; groupLabel: string };
+type ViewGroup = { id: string; label: string; count: number };
 type ViewBlob = {
   id: string;
   title: string;
-  pipeline: string;
-  status: string;
   stepId: string;
-  steps: ViewStep[];
+  paused: boolean;
+  running: boolean;
   completedStepIds: string[];
-  updatedAt: string;
+  steps: ViewStep[];
 };
-type ViewProject = {
-  id: string;
-  name: string;
-  blobs: ViewBlob[];
-};
-type ProjectRecord = { id: string; name: string };
-type ProjectAwareBlob = Blob & { projectId?: string };
-type ProjectAwareStore = ConveyorStore & { listProjects?: () => ProjectRecord[] };
+type ViewProject = { id: string; name: string; steps: ViewStep[]; blobs: ViewBlob[] };
 
 const port = Number(argument("--port") ?? "4317");
 const databasePath = resolve(argument("--db") ?? "pipelines/axi-factorio.db");
+process.title = "axi-factorio-viewer";
 const server = createServer((request, response) => {
   const url = new URL(request.url ?? "/", `http://127.0.0.1:${port}`);
   try {
@@ -39,12 +33,14 @@ function viewSnapshot(): object {
   const database = new FactorioDatabase(databasePath);
   try {
     const store = new ConveyorStore(database);
-    const blobs = store.listBlobs();
     const receipts = store.listReceipts();
-    const projects = groupProjects(blobs, receipts, listProjects(store));
+    const projects = groupProjects(store.listProjects(), store.listBlobs(), receipts);
+    const steps = sharedSteps(projects);
     return {
-      name: "Factorio Command Center",
-      stats: { tasks: blobs.length, projects: projects.length },
+      name: "Factorio Dashboard",
+      stats: { tasks: projects.reduce((sum, project) => sum + project.blobs.length, 0), projects: projects.length },
+      groups: stepGroups(steps),
+      steps,
       projects,
     };
   } finally {
@@ -52,22 +48,22 @@ function viewSnapshot(): object {
   }
 }
 
-function listProjects(store: ConveyorStore): ProjectRecord[] {
-  return (store as ProjectAwareStore).listProjects?.() ?? [];
-}
-
-function groupProjects(blobs: Blob[], receipts: Receipt[], records: ProjectRecord[]): ViewProject[] {
-  const projects = new Map(records.map((record) => [record.id, {
-    id: record.id, name: record.name, blobs: [],
-  }]));
+function groupProjects(records: Project[], blobs: Blob[], receipts: Receipt[]): ViewProject[] {
+  const projects = new Map(records.map((project) => [
+    project.id,
+    { id: project.id, name: project.name, steps: projectSteps(project), blobs: [] as ViewBlob[] },
+  ]));
   for (const blob of blobs) {
-    const id = (blob as ProjectAwareBlob).projectId ?? projectId(blob.cwd);
-    const record = records.find((candidate) => candidate.id === id);
-    const project = projects.get(id) ?? { id, name: record?.name ?? projectName(id), blobs: [] };
+    const project = projects.get(blob.projectId) ?? fallbackProject(blob);
     project.blobs.push(viewBlob(blob, receipts));
-    projects.set(id, project);
+    projects.set(project.id, project);
   }
   return [...projects.values()].sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function fallbackProject(blob: Blob): ViewProject {
+  const id = blob.projectId || projectId(blob.cwd);
+  return { id, name: projectName(id), steps: discoverPipeline(blob.pipelinePath).map(viewStep), blobs: [] };
 }
 
 function projectId(cwd: string): string {
@@ -86,32 +82,87 @@ function projectName(id: string): string {
 
 function viewBlob(blob: Blob, receipts: Receipt[]): ViewBlob {
   const relevant = receipts.filter((receipt) => receipt.blobId === blob.id && !receipt.invalidatedAt);
-  const steps = discoverPipeline(blob.pipelinePath).map((step) => ({
-    id: step.id,
-    label: stepLabel(step.id),
-  }));
   return {
     id: blob.id,
     title: blob.title,
-    pipeline: blob.pipelineId,
-    status: displayStatus(blob, relevant),
     stepId: blob.state,
-    steps: [...steps, { id: "complete", label: "Done" }],
+    paused: blob.paused,
+    running: relevant.at(-1)?.status === "running",
     completedStepIds: relevant.filter((receipt) => receipt.status === "advance").map((receipt) => receipt.stepId),
-    updatedAt: blob.updatedAt,
+    steps: discoverPipeline(blob.pipelinePath).map(viewStep),
   };
 }
 
-function stepLabel(id: string): string {
-  const label = id.split(".").at(-1) ?? id;
-  return label.replace(/[-_]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+function viewStep(step: StepDefinition): ViewStep {
+  const [group = "pipeline", name = step.id] = step.id.split(".");
+  return {
+    id: step.id,
+    label: titleCase(name),
+    group,
+    groupLabel: titleCase(group),
+  };
 }
 
-function displayStatus(blob: Blob, receipts: Receipt[]): string {
-  if (blob.state === "complete") return "Done";
-  if (receipts.at(-1)?.status === "running") return "In progress";
-  if (blob.paused) return "Needs attention";
-  return "Planned";
+function sharedSteps(projects: ViewProject[]): ViewStep[] {
+  const ordered = new Map<string, ViewStep>();
+  for (const project of projects) {
+    for (const step of project.steps) if (!ordered.has(step.id)) ordered.set(step.id, step);
+    for (const blob of project.blobs) {
+      for (const step of blob.steps) if (!ordered.has(step.id)) ordered.set(step.id, step);
+    }
+  }
+  return [...ordered.values()];
+}
+
+function projectSteps(project: Project): ViewStep[] {
+  try {
+    const pipelinePath = resolveProjectPipeline(project);
+    return discoverPipeline(pipelinePath).map(viewStep);
+  } catch (error) {
+    log("viewer.pipeline_unavailable", {
+      projectId: project.id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return [];
+  }
+}
+
+function resolveProjectPipeline(project: Project): string {
+  const direct = resolve(project.cwd, project.defaultPipeline);
+  if (isDirectory(direct)) return direct;
+  const selected = join(project.cwd, "pipelines", project.defaultPipeline);
+  if (/^v\d+$/.test(basename(selected)) && isDirectory(selected)) return selected;
+  const versions = readdirSync(selected, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && /^v\d+$/.test(entry.name))
+    .sort((left, right) => Number(right.name.slice(1)) - Number(left.name.slice(1)));
+  if (!versions[0]) throw new Error(`Pipeline ${selected} has no vN versions.`);
+  return join(selected, versions[0].name);
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function stepGroups(steps: ViewStep[]): ViewGroup[] {
+  const groups: ViewGroup[] = [];
+  for (const step of steps) {
+    const current = groups.at(-1);
+    if (current?.id === step.group) current.count += 1;
+    else groups.push({ id: step.group, label: step.groupLabel, count: 1 });
+  }
+  return groups;
+}
+
+function titleCase(value: string): string {
+  return value.replace(/[-_]+/g, " ").split(" ").map((word) => {
+    if (word === "ios") return "iOS";
+    if (["qa", "e2e", "api"].includes(word)) return word.toUpperCase();
+    return word.charAt(0).toUpperCase() + word.slice(1);
+  }).join(" ");
 }
 
 function argument(name: string): string | undefined {
@@ -129,58 +180,49 @@ function html(response: ServerResponse, value: string): void {
   response.end(value);
 }
 
-function log(event: string, fields: Record<string, unknown>): void {
-  console.log(JSON.stringify({ event, ...fields, at: new Date().toISOString() }));
-}
-
 const viewerHtml = String.raw`<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
-<title>Factorio Command Center</title><style>
-:root{color-scheme:light;--canvas:#fff;--rail:#fbfbfb;--panel:#fff;--line:#e6e8e6;--line-strong:#daddda;--muted:#747b76;--quiet:#aeb4b0;--ink:#171a18;--green:#0caf69;--green-soft:#e2f6ed;--selected:#eef0ef;--danger:#cf4e4e}
-*{box-sizing:border-box}html,body{min-height:100%}body{margin:0;background:var(--canvas);color:var(--ink);font:14px/1.4 Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
-button,input{font:inherit;color:inherit}.app{min-height:100vh;display:grid;grid-template-columns:164px minmax(0,1fr)}.rail{position:fixed;inset:0 auto 0 0;width:164px;border-right:1px solid var(--line);background:var(--rail);padding:35px 14px}.brandmark{margin:0 8px 34px;font-size:13px;font-weight:750;letter-spacing:-.02em}
-.nav{display:grid;gap:8px}.nav button{height:42px;border:0;border-radius:7px;background:transparent;text-align:left;padding:0 12px;cursor:pointer;color:#444945}.nav button:hover{background:#f3f4f3}.nav button.active{background:var(--selected);color:var(--ink);font-weight:600}
-.main{grid-column:2;min-width:0}.topbar{height:72px;border-bottom:1px solid var(--line);display:flex;align-items:center;padding:0 30px;gap:24px}.identity{min-width:235px}.identity strong{display:block;font-size:18px;line-height:1.25;letter-spacing:-.025em}.online{font-size:11px;color:var(--muted)}.online:before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--green);margin-right:6px}.search{position:relative;margin-left:auto;width:min(326px,36vw)}.search input{width:100%;height:35px;border:1px solid var(--line);border-radius:6px;background:#fff;padding:0 39px 0 12px;outline:none;box-shadow:0 1px 2px #00000005}.search input:focus{border-color:#aeb7b1;box-shadow:0 0 0 3px #0caf6914}.shortcut{position:absolute;right:8px;top:7px;width:21px;height:21px;border:1px solid var(--line-strong);border-radius:4px;text-align:center;color:var(--muted);font-size:11px;line-height:19px}.refresh{height:35px;border:1px solid var(--line);border-radius:6px;background:#fff;padding:0 12px;cursor:pointer;color:var(--muted);font-size:11px}.refresh:hover{background:#f8f9f8;color:var(--ink)}.refresh:focus-visible{outline:3px solid #0caf6920}
-.content{padding:20px 30px 40px;max-width:1180px}.intro{margin-bottom:30px}.intro h1{font-size:18px;line-height:1.25;margin:0 0 2px;letter-spacing:-.02em}.intro p{margin:0;color:var(--muted);font-size:12px}.table-labels{display:grid;grid-template-columns:minmax(250px,1.05fr) minmax(390px,1.4fr) 110px 70px;gap:20px;padding:0 12px 10px;font-size:11px;font-weight:600}.project-list{border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--panel)}.project+.project{border-top:1px solid var(--line)}
-.project-head{width:100%;height:48px;display:grid;grid-template-columns:minmax(250px,1.05fr) minmax(390px,1.4fr) 110px 70px;gap:20px;align-items:center;padding:0 12px;border:0;background:#fff;text-align:left;cursor:pointer}.project-head:hover{background:#fafbfa}.project-title{display:flex;align-items:center;gap:10px;font-weight:650}.count{font-size:11px;color:var(--muted);font-weight:400}.pipeline-labels{display:grid;align-items:center;grid-template-columns:repeat(var(--steps),minmax(52px,1fr));color:#505651;font-size:10px;text-align:center}.chevron{grid-column:4;justify-self:end;color:var(--muted);font-size:10px}.project.collapsed .taskrows{display:none}
-.taskrow{min-height:43px;display:grid;grid-template-columns:minmax(250px,1.05fr) minmax(390px,1.4fr) 110px 70px;gap:20px;align-items:center;padding:0 12px;border-top:1px solid var(--line)}.taskrow:hover{background:#fcfdfc}.task-title{min-width:0;padding-left:34px}.title{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px}.track{display:grid;grid-template-columns:repeat(var(--steps),minmax(52px,1fr));position:relative;height:20px;align-items:center}.cell{height:20px;position:relative}.cell:before{content:"";position:absolute;left:0;right:0;top:10px;height:1px;background:var(--line-strong)}.cell:first-child:before{left:50%}.cell:last-child:before{right:50%}.bead{position:absolute;left:50%;top:5px;transform:translateX(-50%);z-index:1;width:10px;height:10px;border-radius:50%;background:#b7bcb8}.bead.done{background:var(--green)}.bead.current{top:3px;width:14px;height:14px;border:2px solid #fff;background:var(--green);box-shadow:0 0 0 1px var(--green),0 0 0 4px var(--green-soft)}.bead.attention{background:#fff;box-shadow:0 0 0 1px var(--danger),0 0 0 4px #cf4e4e15}.status{white-space:nowrap;color:#69706b;font-size:11px}.status:before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:8px;background:#b7bcb8;vertical-align:1px}.status.done:before,.status.in-progress:before{background:var(--green)}.status.planned:before{background:#fff;border:1px solid #9da49f}.status.needs-attention{color:var(--danger)}.status.needs-attention:before{background:var(--danger)}.updated{font-size:10px;color:var(--muted);white-space:nowrap;text-align:right}
-.footer{display:flex;align-items:center;min-height:55px;padding:13px 12px 0;color:var(--muted);font-size:10px}.legend{display:flex;align-items:center;gap:18px}.legend span{display:flex;align-items:center;gap:7px}.key{width:10px;height:10px;border-radius:50%;background:#b7bcb8}.key.complete{background:var(--green)}.key.progress{background:var(--green);border:2px solid #fff;box-shadow:0 0 0 1px var(--green),0 0 0 3px var(--green-soft)}.key.skipped{background:#fff;border:1px solid #aeb4b0}.total{margin-left:auto;margin-right:15px}.view-runs{height:32px;border:1px solid var(--line);border-radius:6px;background:#fff;padding:0 12px;cursor:pointer;font-size:11px}.view-runs:hover{background:#f7f8f7}.empty{padding:70px 24px;text-align:center;color:var(--muted)}.empty b{display:block;color:var(--ink);font-size:14px;margin-bottom:4px}.no-results{padding:32px;text-align:center;color:var(--muted);font-size:12px}.error{margin-top:18px;padding:12px;border:1px solid #f0cdcd;border-radius:7px;background:#fff7f7;color:#9e3f3f;font-size:12px}
-@media(max-width:900px){.app{grid-template-columns:72px minmax(0,1fr)}.rail{width:72px;padding-inline:10px}.nav button{padding:0;text-align:center;font-size:0}.nav-kicker{margin:0;font-size:10px}.main{grid-column:2}.identity{min-width:190px}.content,.topbar{padding-left:20px;padding-right:20px}.table-labels{display:none}.project-head,.taskrow{grid-template-columns:minmax(180px,.8fr) minmax(300px,1.4fr) 105px}.project-head{height:52px}.project-head .chevron{grid-column:3}.project-head .pipeline-labels{display:none}.updated{display:none}.task-title{padding-left:22px}.footer{padding-top:16px;flex-wrap:wrap;gap:14px}}
-@media(max-width:650px){.app{display:block}.rail{position:static;width:100%;height:58px;border:0;border-bottom:1px solid var(--line);display:flex;align-items:center;padding:8px 14px}.brandmark{margin:0 18px 0 0}.nav{display:flex;gap:4px}.nav button{width:42px}.main{display:block}.topbar{height:auto;min-height:82px;flex-wrap:wrap;padding:14px 18px;gap:10px}.identity{min-width:calc(100% - 54px)}.search{order:3;width:100%;margin:0}.content{padding:20px 14px}.project-list{overflow-x:auto}.project{min-width:650px}.footer{min-width:650px}}
+<title>Factorio Dashboard</title><style>
+:root{color-scheme:light;--canvas:#fff;--rail:#fbfcfb;--line:#e7ebe8;--line-strong:#dce2de;--muted:#737d77;--quiet:#bfc6c2;--ink:#18201b;--green:#0caf69;--green-soft:#e5f7ef;--blue:#2d95ea;--blue-soft:#e8f4ff;--purple:#8a63d8;--danger:#ce5353}
+*{box-sizing:border-box}html,body{min-height:100%}body{margin:0;background:var(--canvas);color:var(--ink);font:12px/1.4 Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
+button,input{font:inherit;color:inherit}.app{min-height:100vh;display:grid;grid-template-columns:132px minmax(0,1fr)}.rail{position:fixed;inset:0 auto 0 0;width:132px;height:100vh;border-right:1px solid var(--line);background:var(--rail);padding:20px 10px;display:flex;flex-direction:column}.brand{margin:0 9px 24px;font-size:14px;font-weight:780;letter-spacing:-.03em}.nav{display:grid;gap:5px}.nav-item{height:35px;display:flex;align-items:center;padding:0 10px;border-radius:6px;color:#626c66;font-size:10px}.nav-item.active{background:#eaf3fe;color:#2781c8;font-weight:650}.agent{margin-top:auto;border:1px solid var(--line);border-radius:6px;padding:8px 9px;font-size:9px}.agent strong{display:block}.agent span{color:var(--green)}
+.main{grid-column:2;min-width:0}.topbar{height:58px;border-bottom:1px solid var(--line);display:flex;align-items:center;padding:0 22px;gap:8px}.identity{display:flex;align-items:center;gap:8px;min-width:220px}.identity strong{font-size:13px;letter-spacing:-.02em}.online{font-size:9px;color:var(--muted)}.online:before{content:"";display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--green);margin-right:5px;vertical-align:1px}.search{margin-left:auto;width:min(320px,38vw)}.search input{width:100%;height:30px;border:1px solid var(--line);border-radius:5px;background:#fff;padding:0 10px;outline:none}.search input:focus{border-color:#9eb9aa;box-shadow:0 0 0 3px #0caf6914}.refresh{height:30px;border:1px solid var(--line);border-radius:5px;background:#fff;padding:0 10px;cursor:pointer;color:var(--muted)}.refresh:hover{background:#f7f9f8;color:var(--ink)}
+.content{padding:14px 20px 26px;min-width:0}.toolbar{height:34px;display:flex;align-items:center}.toolbar strong{font-size:11px}.workspace{border:1px solid var(--line);background:#fff;overflow:auto;max-width:100%}.matrix{width:100%}.matrix-head{display:grid;grid-template-columns:170px repeat(var(--steps),minmax(72px,1fr));position:sticky;top:0;z-index:3;background:#fff}.corner{grid-row:span 2;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}.band{height:30px;display:flex;align-items:center;justify-content:center;border-right:1px solid var(--line);border-bottom:1px solid var(--line);font-size:9px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;background:#f4f8fc;color:#397ea8}.band:nth-of-type(3n){background:#fff7eb;color:#aa7b35}.band:nth-of-type(4n){background:#eef8f2;color:#3b865e}.step{height:56px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:center;padding:7px;text-align:center;color:#505b55;font-size:9px;line-height:1.25}.project+.project{border-top:1px solid var(--line)}.project-head{position:sticky;left:0;z-index:2;width:100%;height:37px;display:flex;align-items:center;border:0;background:#fff;padding:0 10px;text-align:left;font-weight:700;font-size:10px;cursor:pointer}.project-head:hover{background:#fafbfa}.project-head .count{margin-left:6px;color:var(--muted);font-weight:400}.project-head .toggle{margin-left:auto;color:var(--muted);font-size:9px}.project.collapsed .taskrows{display:none}
+.taskrow{display:grid;grid-template-columns:170px repeat(var(--steps),minmax(72px,1fr));height:34px;align-items:center}.taskrow:hover{background:#fcfdfc}.task-title{position:sticky;left:0;z-index:2;height:34px;display:flex;align-items:center;background:inherit;padding:0 12px 0 24px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#3f4944;font-size:10px}.taskrow:hover .task-title{background:#fcfdfc}.track-cell{height:34px;position:relative}.track-cell:before{content:"";position:absolute;left:0;right:0;top:17px;height:1px;background:var(--line-strong)}.track-cell.first:before{left:50%}.track-cell.last:before{right:50%}.bead{position:absolute;z-index:1;left:50%;top:50%;width:8px;height:8px;margin:-4px;border-radius:50%;background:var(--quiet)}.bead.done{background:var(--green)}.bead.current{width:10px;height:10px;margin:-5px;background:#fff;border:2px solid var(--blue);box-shadow:0 0 0 2px var(--blue-soft)}.bead.running{background:var(--blue)}.bead.blocked{border-color:var(--danger);box-shadow:0 0 0 2px #fbeaea}.bead.unavailable{background:#fff;border:1px solid #c7ceca}.bead.beta{background:var(--purple)}.empty-project{padding:11px 24px;color:var(--muted);font-size:10px}.footer{display:flex;align-items:center;gap:18px;padding:12px 4px 0;color:var(--muted);font-size:9px}.legend{display:flex;align-items:center;gap:15px;flex-wrap:wrap}.legend span{display:flex;align-items:center;gap:6px}.key{width:7px;height:7px;border-radius:50%;background:var(--quiet)}.key.complete{background:var(--green)}.key.current{background:#fff;border:2px solid var(--blue);box-shadow:0 0 0 2px var(--blue-soft)}.key.beta{background:var(--purple)}.key.blocked{background:#fff;border:1px solid var(--danger)}.total{margin-left:auto}.empty{padding:72px 24px;text-align:center;color:var(--muted)}.empty b{display:block;color:var(--ink);font-size:12px;margin-bottom:4px}.no-results{padding:42px 24px;text-align:center;color:var(--muted)}.error{margin-top:12px;padding:10px;border:1px solid #efcece;border-radius:6px;background:#fff7f7;color:#9d3f3f}
+@media(max-width:760px){.app{grid-template-columns:76px minmax(0,1fr)}.rail{width:76px;padding-inline:7px}.brand{margin-inline:4px}.nav-item{justify-content:center;padding:0;font-size:9px}.agent{display:none}.identity{min-width:auto}.identity strong{font-size:11px}.content{padding-inline:12px}.topbar{padding-inline:12px}.search{width:min(240px,45vw)}}
+@media(max-width:520px){.app{display:block}.rail{position:static;width:100%;height:48px;border-right:0;border-bottom:1px solid var(--line);display:flex;flex-direction:row;align-items:center;padding:6px 10px}.brand{margin:0 14px 0 0}.nav{display:flex}.nav-item{height:30px;padding:0 8px}.nav-item:not(.active){display:none}.main{display:block}.topbar{height:auto;min-height:92px;flex-wrap:wrap;padding-block:12px}.identity{width:calc(100% - 72px)}.search{order:3;width:100%;margin:0}.content{padding-top:10px}.matrix-head{grid-template-columns:145px repeat(var(--steps),minmax(66px,1fr))}.taskrow{grid-template-columns:145px repeat(var(--steps),minmax(66px,1fr))}.task-title{padding-left:14px}}
 </style></head><body><div class="app">
-<aside class="rail" aria-label="Primary navigation"><div class="brandmark">axi-factorio</div><nav class="nav">
-<button class="active" data-nav="overview">Overview</button>
-<button data-nav="projects">Projects</button>
-<button data-nav="runs">Runs</button>
-<button data-nav="settings">Settings</button>
-</nav></aside>
-<main class="main"><header class="topbar"><div class="identity"><strong>Factorio Command Center</strong><span class="online">Online</span></div>
-<label class="search"><span class="shortcut">/</span><input id="search" type="search" placeholder="Search projects or tasks…" aria-label="Search projects or tasks"></label>
+<aside class="rail" aria-label="Primary navigation"><div class="brand">axi-factorio</div><nav class="nav">
+<span class="nav-item active">Overview</span><span class="nav-item">Projects</span><span class="nav-item">Runs</span><span class="nav-item">Alerts</span><span class="nav-item">Settings</span>
+</nav><div class="agent"><strong>Factorio</strong><span>Service online</span></div></aside>
+<main class="main"><header class="topbar"><div class="identity"><strong>Factorio Dashboard</strong><span class="online">Online</span></div>
+<label class="search"><input id="search" type="search" placeholder="Search projects or tasks…" aria-label="Search projects or tasks"></label>
 <button class="refresh" id="refresh">Refresh</button></header>
-<section class="content"><div class="intro"><h1>Overview</h1><p id="summary">Loading your workspace…</p></div>
-<div class="table-labels"><span>Project / Task</span><span>Pipeline</span><span>Status</span><span>Updated</span></div>
-<div class="project-list" id="projects"><div class="empty"><b>Loading workspace</b>Your tasks will appear here.</div></div>
-<div class="footer"><div class="legend"><span><i class="key complete"></i>Complete</span><span><i class="key progress"></i>In progress</span><span><i class="key"></i>Pending</span><span><i class="key skipped"></i>Skipped</span></div><span class="total" id="total"></span><button class="view-runs" id="view-runs">View Runs</button></div>
+<section class="content"><div class="toolbar"><strong>All Projects</strong></div>
+<div class="workspace" id="workspace"><div class="empty"><b>Loading workspace</b>Your projects will appear here.</div></div>
+<div class="footer"><div class="legend"><span><i class="key complete"></i>Complete</span><span><i class="key current"></i>Current step</span><span><i class="key beta"></i>Later group</span><span><i class="key"></i>Pending</span><span><i class="key blocked"></i>Blocked</span></div><span class="total" id="total"></span></div>
 <div id="error" role="status"></div></section></main></div>
 <script>
 const byId=id=>document.getElementById(id);let snapshot=null;
 async function load(){try{const response=await fetch('/api/view');if(!response.ok)throw new Error('Could not refresh the workspace.');snapshot=await response.json();render();byId('error').innerHTML=''}catch(error){byId('error').innerHTML='<div class="error">'+escapeHtml(error.message)+'</div>'}}
-function render(){const query=byId('search').value.trim().toLowerCase();const projects=snapshot.projects.map(project=>({...project,blobs:project.blobs.filter(blob=>!query||project.name.toLowerCase().includes(query)||blob.title.toLowerCase().includes(query)||blob.id.toLowerCase().includes(query))})).filter(project=>project.blobs.length||!query||project.name.toLowerCase().includes(query));byId('summary').textContent='1 command center · '+snapshot.stats.projects+' '+plural(snapshot.stats.projects,'project')+' · '+snapshot.stats.tasks+' '+plural(snapshot.stats.tasks,'task');byId('total').textContent=snapshot.stats.tasks+' '+plural(snapshot.stats.tasks,'task')+' total';byId('projects').innerHTML=projects.length?projects.map(projectCard).join(''):'<div class="no-results">'+(query?'No projects or tasks match your search.':'No projects yet. New work will appear here automatically.')+'</div>'}
-function projectCard(project){const steps=sharedSteps(project.blobs);return '<section class="project" data-project="'+escapeHtml(project.id)+'"><button class="project-head" aria-expanded="true"><span class="project-title">'+escapeHtml(project.name)+' <small class="count">'+project.blobs.length+' '+plural(project.blobs.length,'task')+'</small></span><span class="pipeline-labels" style="--steps:'+steps.length+'">'+steps.map(step=>'<span>'+escapeHtml(step.label)+'</span>').join('')+'</span><span class="chevron">Hide</span></button><div class="taskrows">'+project.blobs.map(blob=>taskRow(blob,steps)).join('')+'</div></section>'}
-function sharedSteps(blobs){return blobs.reduce((chosen,blob)=>blob.steps.length>chosen.length?blob.steps:chosen,[])}
-function taskRow(blob,steps){const beads=steps.map(step=>{const known=blob.steps.some(candidate=>candidate.id===step.id);const atStep=blob.stepId===step.id;const planned=atStep&&blob.status==='Planned';const complete=blob.stepId==='complete'||blob.completedStepIds.includes(step.id)||planned;const current=atStep&&!planned&&blob.status!=='Done';const attention=current&&blob.status==='Needs attention';return '<span class="cell"><i class="bead '+(complete?'done ':'')+(current?'current ':'')+(attention?'attention ':'')+(!known?'skipped':'')+'"></i></span>'}).join('');const statusClass=blob.status.toLowerCase().replaceAll(' ','-');return '<div class="taskrow"><div class="task-title"><span class="title" title="'+escapeHtml(blob.title)+'">'+escapeHtml(blob.title)+'</span></div><div class="track" style="--steps:'+steps.length+'">'+beads+'</div><span class="status '+statusClass+'">'+escapeHtml(blob.status)+'</span><time class="updated" datetime="'+escapeHtml(blob.updatedAt)+'">'+relativeTime(blob.updatedAt)+'</time></div>'}
-function relativeTime(value){const seconds=Math.max(0,Math.round((Date.now()-Date.parse(value))/1000));if(seconds<60)return 'now';if(seconds<3600)return Math.floor(seconds/60)+'m ago';if(seconds<86400)return Math.floor(seconds/3600)+'h ago';const days=Math.floor(seconds/86400);return days<30?days+'d ago':new Date(value).toLocaleDateString(undefined,{month:'short',day:'numeric'})}
+function render(){const query=byId('search').value.trim().toLowerCase();const projects=snapshot.projects.map(project=>({...project,blobs:project.blobs.filter(blob=>matches(blob,project,query))})).filter(project=>project.blobs.length||(!query&&snapshot.projects.length)||project.name.toLowerCase().includes(query));byId('total').textContent=snapshot.stats.tasks+' '+plural(snapshot.stats.tasks,'task')+' across '+snapshot.stats.projects+' '+plural(snapshot.stats.projects,'project');byId('workspace').innerHTML=projects.length?matrix(projects):'<div class="no-results">'+(query?'No projects or tasks match your search.':'No projects yet. Add a project and its work will appear here.')+'</div>'}
+function matches(blob,project,query){return !query||project.name.toLowerCase().includes(query)||blob.title.toLowerCase().includes(query)||blob.id.toLowerCase().includes(query)}
+function matrix(projects){const steps=snapshot.steps;return '<div class="matrix" style="--steps:'+Math.max(steps.length,1)+'"><div class="matrix-head" style="--steps:'+Math.max(steps.length,1)+'"><div class="corner"></div>'+snapshot.groups.map(group=>'<div class="band" style="grid-column:span '+group.count+'">'+escapeHtml(group.label)+'</div>').join('')+steps.map(step=>'<div class="step">'+escapeHtml(step.label)+'</div>').join('')+'</div>'+projects.map(projectCard).join('')+'</div>'}
+function projectCard(project){const rows=project.blobs.length?project.blobs.map(taskRow).join(''):'<div class="empty-project">No tasks in this project.</div>';return '<section class="project" data-project="'+escapeHtml(project.id)+'"><button class="project-head" aria-expanded="true"><span>'+escapeHtml(project.name)+'</span><span class="count">'+project.blobs.length+'</span><span class="toggle">Hide</span></button><div class="taskrows">'+rows+'</div></section>'}
+function taskRow(blob){const cells=snapshot.steps.map((step,index)=>beadCell(blob,step,index)).join('');return '<div class="taskrow" style="--steps:'+Math.max(snapshot.steps.length,1)+'"><div class="task-title" title="'+escapeHtml(blob.title)+'">'+escapeHtml(blob.title)+'</div>'+cells+'</div>'}
+function beadCell(blob,step,index){const known=blob.steps.some(candidate=>candidate.id===step.id);const done=blob.stepId==='complete'||blob.completedStepIds.includes(step.id);const current=blob.stepId===step.id;const groupIndex=snapshot.groups.findIndex(group=>group.id===step.group);const classes=['bead',done?'done':'',current?'current':'',current&&blob.running?'running':'',current&&blob.paused?'blocked':'',!known?'unavailable':'',groupIndex>0&&done?'beta':''].filter(Boolean).join(' ');return '<div class="track-cell '+(index===0?'first ':'')+(index===snapshot.steps.length-1?'last':'')+'"><i class="'+classes+'"></i></div>'}
 function plural(count,word){return count===1?word:word+'s'}function escapeHtml(value){const node=document.createElement('span');node.textContent=String(value);return node.innerHTML}
-byId('refresh').onclick=load;byId('view-runs').onclick=()=>{byId('search').focus()};byId('search').oninput=render;document.addEventListener('keydown',event=>{if(event.key==='/'&&document.activeElement!==byId('search')){event.preventDefault();byId('search').focus()}});
-byId('projects').onclick=event=>{const head=event.target.closest('.project-head');if(!head)return;const project=head.closest('.project');project.classList.toggle('collapsed');const expanded=!project.classList.contains('collapsed');head.setAttribute('aria-expanded',String(expanded));head.querySelector('.chevron').textContent=expanded?'Hide':'Show'};
-document.querySelectorAll('[data-nav]').forEach(button=>button.onclick=()=>{document.querySelectorAll('[data-nav]').forEach(item=>item.classList.remove('active'));button.classList.add('active');if(button.dataset.nav!=='overview')byId('search').focus()});
+byId('refresh').onclick=load;byId('search').oninput=render;document.addEventListener('keydown',event=>{if(event.key==='/'&&document.activeElement!==byId('search')){event.preventDefault();byId('search').focus()}});
+byId('workspace').onclick=event=>{const head=event.target.closest('.project-head');if(!head)return;const project=head.closest('.project');project.classList.toggle('collapsed');const expanded=!project.classList.contains('collapsed');head.setAttribute('aria-expanded',String(expanded));head.querySelector('.toggle').textContent=expanded?'Hide':'Show'};
 load();setInterval(load,5000);
 </script></body></html>`;
 
 import type { ServerResponse } from "node:http";
-import type { Blob, Receipt } from "./Types.ts";
+import type { Blob, Project, Receipt, StepDefinition } from "./Types.ts";
 import { createServer } from "node:http";
-import { resolve } from "node:path";
+import { readdirSync, statSync } from "node:fs";
+import { basename, join, resolve } from "node:path";
 import { FactorioDatabase } from "./Database.ts";
+import { log } from "./Logger.ts";
 import { discoverPipeline } from "./Pipeline.ts";
 import { ConveyorStore } from "./Store.ts";

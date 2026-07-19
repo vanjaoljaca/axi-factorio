@@ -51,7 +51,7 @@ function childResult(child: ChildProcess, controller: AbortController): Promise<
 
 function renderPlist(paths: ServicePaths, databasePath: string, port: number): string {
   const argumentsList = [
-    npxPath(), "--no-install", "axi-factorio", "service", "run",
+    process.execPath, cliPath, "service", "run",
     "--db", databasePath, "--port", String(port),
   ].map((value) => `    <string>${escapeXml(value)}</string>`).join("\n");
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -62,8 +62,11 @@ function renderPlist(paths: ServicePaths, databasePath: string, port: number): s
 ${argumentsList}
   </array>
   <key>WorkingDirectory</key><string>${escapeXml(process.cwd())}</string>
+  <key>ProcessType</key><string>Background</string>
   <key>EnvironmentVariables</key><dict>
     <key>PATH</key><string>${escapeXml(servicePath())}</string>
+    <key>AXI_FACTORIO_SERVICE_ID</key><string>${label}</string>
+    <key>AXI_FACTORIO_SOURCE_REVISION</key><string>${packageVersion()}</string>
   </dict>
   <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>3</integer>
@@ -77,16 +80,23 @@ function servicePaths(): ServicePaths {
   const home = homedir();
   return {
     plist: join(home, "Library", "LaunchAgents", `${label}.plist`),
-    logs: join(home, "Library", "Logs", "axi-factorio"),
+    logs: join(home, "Library", "Logs", label),
   };
 }
 
-function npxPath(): string {
-  return execFileSync("which", ["npx"], { encoding: "utf8" }).trim();
+function servicePath(): string {
+  return [dirname(process.execPath), dirname(toolPath("codex")), "/usr/bin", "/bin"].join(":");
 }
 
-function servicePath(): string {
-  return [dirname(process.execPath), dirname(npxPath()), "/usr/bin", "/bin"].join(":");
+function toolPath(name: string): string {
+  return execFileSync("which", [name], { encoding: "utf8" }).trim();
+}
+
+function packageVersion(): string {
+  const path = packagePaths.find((candidate) => existsSync(candidate));
+  if (!path) return "unknown";
+  const value = JSON.parse(readFileSync(path, "utf8")) as { version?: string };
+  return value.version ?? "unknown";
 }
 
 function domain(): string {
@@ -124,10 +134,15 @@ const xmlCharacters: Record<string, string> = {
   "\"": "&quot;", "&": "&amp;", "'": "&apos;", "<": "&lt;", ">": "&gt;",
 };
 const viewerPath = fileURLToPath(new URL("./ViewerServer.ts", import.meta.url));
+const cliPath = fileURLToPath(new URL("./cli.ts", import.meta.url));
+const packagePaths = [
+  fileURLToPath(new URL("../package.json", import.meta.url)),
+  fileURLToPath(new URL("../../package.json", import.meta.url)),
+];
 
 import type { ChildProcess } from "node:child_process";
 import { execFileSync, spawn } from "node:child_process";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";

@@ -1,0 +1,95 @@
+{
+  "packetType": "combined",
+  "gatePhase": "final",
+  "title": "axi-factorio corrected user viewer",
+  "sourceThread": "019f7866-71bb-7fd3-9714-44d9a9232f24",
+  "owner": "axi-factorio viewer implementation lane",
+  "branch": "main",
+  "worktree": "/Users/codex/Documents/axi-factorio",
+  "target": "http://127.0.0.1:4317/",
+  "targetSurface": "web",
+  "viewport": "1280x720 desktop, light mode",
+  "intent": {
+    "requestBullets": [
+      "Replace the earlier command-center reference with the newly supplied compact pipeline-matrix reference.",
+      "Show projects as grouped sections with every task named at the left and one continuous bead track across the pipeline.",
+      "Derive step columns and their grouped top bands from the actual checked-in pipeline definitions rather than inventing DEV, BETA, or PROD stages.",
+      "Keep the shipped user viewer calm and operational, separate from the internal scenario-debugging workbench."
+    ]
+  },
+  "currentAppAnchor": {
+    "verdict": "Anchored to the supplied corrected screenshot and the existing shipped ViewerServer data model.",
+    "inspectedPaths": [
+      "reference.png",
+      "../../src/ViewerServer.ts"
+    ],
+    "stateInventory": [
+      "corrected reference dashboard",
+      "fixture with three projects and three tasks",
+      "empty project using its default checked-in pipeline",
+      "search and collapsed-project interactions"
+    ],
+    "missingEvidence": []
+  },
+  "viewStates": [
+    {
+      "id": "matrix-ready",
+      "label": "Three projects share G1, G2, and G3 columns; tasks render as bead tracks.",
+      "requests": [1, 2, 3]
+    },
+    {
+      "id": "matrix-empty-project",
+      "label": "A project with no tasks still exposes the checked-in default pipeline columns.",
+      "requests": [3]
+    },
+    {
+      "id": "viewer-only",
+      "label": "The shipped surface contains overview controls and no internal test harness diagnostics.",
+      "requests": [4]
+    }
+  ],
+  "storyboardMatrix": [],
+  "pairedStateMatrix": [],
+  "screenshots": [
+    {
+      "id": "shot-reference",
+      "path": "reference.png",
+      "title": "Supplied corrected visual reference",
+      "sourceIdentity": "local attachment anchored to local diff dd8a9488ff22ddcf5e6d6148670b531a13fdb452",
+      "sourceIdentityStatus": "verified",
+      "pixelDimensions": { "width": 680, "height": 453 },
+      "sha256": "874127e01b4e00699d095a4077c4c8acf2be4c7998e24e5430ef07bc0ede328f"
+    },
+    {
+      "id": "shot-implementation",
+      "path": "matrix-fixture.png",
+      "title": "Rendered viewer fixture",
+      "sourceIdentity": "local diff from commit dd8a9488ff22ddcf5e6d6148670b531a13fdb452",
+      "sourceIdentityStatus": "verified",
+      "pixelDimensions": { "width": 597, "height": 503 },
+      "sha256": "3820d685ac26e05b2cb50708e8eecaa1e576e08cbbb2ee0b02bff25bc4362595"
+    },
+    {
+      "id": "shot-comparison",
+      "path": "comparison.png",
+      "title": "Reference and implementation combined comparison",
+      "sourceIdentity": "local diff from commit dd8a9488ff22ddcf5e6d6148670b531a13fdb452",
+      "sourceIdentityStatus": "verified",
+      "pixelDimensions": { "width": 1280, "height": 720 },
+      "sha256": "54c769ccd49bbba15a440a01412f139db4ec204de252fdbeefb5cfe012fcb1ae"
+    }
+  ],
+  "requestScreenshotMap": [
+    { "request": 1, "screenshots": ["shot-reference", "shot-comparison"], "status": "covered" },
+    { "request": 2, "screenshots": ["shot-implementation", "shot-comparison"], "status": "covered" },
+    { "request": 3, "screenshots": ["shot-implementation", "shot-comparison"], "status": "covered" },
+    { "request": 4, "screenshots": ["shot-implementation"], "status": "covered" }
+  ],
+  "review": {
+    "verdict": "passed",
+    "reviewer": "Independent corrected_viewer_visual_qa lane",
+    "nextOwner": "builder for release and deployment",
+    "findings": []
+  },
+  "knownLimits": "The fixture has three pipeline steps rather than the thirteen illustrative columns in the reference. This is intentional: the viewer renders the current checked-in definitions. The supplied iconography was not approximated; nonessential icons are omitted until a real matching asset library is shipped."
+}

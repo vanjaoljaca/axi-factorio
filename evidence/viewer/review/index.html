@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>axi-factorio corrected user viewer</title>
+  <style>
+    :root { color-scheme: light; --ink:#111827; --muted:#5b6472; --line:#d8dee8; --bg:#f7f8fa; --panel:#fff; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--ink); background: var(--bg); }
+    header { padding: 20px 16px 12px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 1; }
+    h1 { margin: 0; font-size: 22px; line-height: 1.2; }
+    h2 { margin: 28px 0 10px; font-size: 17px; }
+    h3 { margin: 0 0 8px; font-size: 15px; }
+    main { max-width: 1120px; margin: 0 auto; padding: 16px; }
+    .meta, .section { border: 1px solid var(--line); background: var(--panel); padding: 12px; border-radius: 8px; }
+    .muted { color: var(--muted); }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+    .shot { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); overflow: hidden; }
+    .shot div { padding: 10px; border-bottom: 1px solid var(--line); }
+    .shot img { display: block; width: 100%; height: auto; background: #eef1f6; }
+    .missing { padding: 24px; color: #9a3412; background: #fff7ed; }
+    table { width: 100%; border-collapse: collapse; background: var(--panel); }
+    th, td { border: 1px solid var(--line); padding: 8px; text-align: left; vertical-align: top; font-size: 13px; }
+    th { background: #eef1f6; }
+    code { background: #eef1f6; padding: 1px 4px; border-radius: 4px; }
+    @media (max-width: 520px) { header { position: static; } main { padding: 10px; } .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>axi-factorio corrected user viewer</h1>
+    <div class="muted">Phone-viewable visual review packet</div>
+  </header>
+  <main>
+    <section class="meta"><table><tbody><tr><th>Source thread</th><td>019f7866-71bb-7fd3-9714-44d9a9232f24</td></tr><tr><th>Owner</th><td>axi-factorio viewer implementation lane</td></tr><tr><th>Branch</th><td>main</td></tr><tr><th>Worktree</th><td>/Users/codex/Documents/axi-factorio</td></tr><tr><th>Gate phase</th><td>final</td></tr><tr><th>Target</th><td>http://127.0.0.1:4317/</td></tr><tr><th>Target surface</th><td>web</td></tr><tr><th>Viewport</th><td>1280x720 desktop, light mode</td></tr><tr><th>Known limits</th><td>The fixture has three pipeline steps rather than the thirteen illustrative columns in the reference. This is intentional: the viewer renders the current checked-in definitions. The supplied iconography was not approximated; nonessential icons are omitted until a real matching asset library is shipped.</td></tr></tbody></table></section>
+    <section class="section"><h2>Intent</h2><ol><li>Replace the earlier command-center reference with the newly supplied compact pipeline-matrix reference.</li><li>Show projects as grouped sections with every task named at the left and one continuous bead track across the pipeline.</li><li>Derive step columns and their grouped top bands from the actual checked-in pipeline definitions rather than inventing DEV, BETA, or PROD stages.</li><li>Keep the shipped user viewer calm and operational, separate from the internal scenario-debugging workbench.</li></ol></section>
+    <section class="section"><h2>View States</h2><ol><li>{&quot;id&quot;:&quot;matrix-ready&quot;,&quot;label&quot;:&quot;Three projects share G1, G2, and G3 columns; tasks render as bead tracks.&quot;,&quot;requests&quot;:[1,2,3]}</li><li>{&quot;id&quot;:&quot;matrix-empty-project&quot;,&quot;label&quot;:&quot;A project with no tasks still exposes the checked-in default pipeline columns.&quot;,&quot;requests&quot;:[3]}</li><li>{&quot;id&quot;:&quot;viewer-only&quot;,&quot;label&quot;:&quot;The shipped surface contains overview controls and no internal test harness diagnostics.&quot;,&quot;requests&quot;:[4]}</li></ol></section>
+    
+    
+    <section><h2>Request Coverage</h2><table><thead><tr><th>Request</th><th>Screenshots</th><th>Status</th></tr></thead><tbody>
+    <tr>
+      <td>1</td>
+      <td>[&quot;shot-reference&quot;,&quot;shot-comparison&quot;]</td>
+      <td>covered</td>
+    </tr>
+    <tr>
+      <td>2</td>
+      <td>[&quot;shot-implementation&quot;,&quot;shot-comparison&quot;]</td>
+      <td>covered</td>
+    </tr>
+    <tr>
+      <td>3</td>
+      <td>[&quot;shot-implementation&quot;,&quot;shot-comparison&quot;]</td>
+      <td>covered</td>
+    </tr>
+    <tr>
+      <td>4</td>
+      <td>[&quot;shot-implementation&quot;]</td>
+      <td>covered</td>
+    </tr></tbody></table></section>
+    
+    <h2>Screenshots</h2>
+    <div class="grid">
+      <article class="shot">
+    <div><h3>Supplied corrected visual reference</h3><p class="muted"><code>shot-reference</code></p></div>
+    <img src="assets/01-shot-reference.png" alt="Supplied corrected visual reference">
+    <table><tbody><tr><th>Dimensions</th><td>680 × 453 px</td></tr><tr><th>Source identity</th><td>local attachment anchored to local diff dd8a9488ff22ddcf5e6d6148670b531a13fdb452</td></tr><tr><th>Source status</th><td>verified</td></tr><tr><th>SHA-256</th><td>874127e01b4e00699d095a4077c4c8acf2be4c7998e24e5430ef07bc0ede328f</td></tr></tbody></table>
+  </article>
+<article class="shot">
+    <div><h3>Rendered viewer fixture</h3><p class="muted"><code>shot-implementation</code></p></div>
+    <img src="assets/02-shot-implementation.png" alt="Rendered viewer fixture">
+    <table><tbody><tr><th>Dimensions</th><td>597 × 503 px</td></tr><tr><th>Source identity</th><td>local diff from commit dd8a9488ff22ddcf5e6d6148670b531a13fdb452</td></tr><tr><th>Source status</th><td>verified</td></tr><tr><th>SHA-256</th><td>3820d685ac26e05b2cb50708e8eecaa1e576e08cbbb2ee0b02bff25bc4362595</td></tr></tbody></table>
+  </article>
+<article class="shot">
+    <div><h3>Reference and implementation combined comparison</h3><p class="muted"><code>shot-comparison</code></p></div>
+    <img src="assets/03-shot-comparison.png" alt="Reference and implementation combined comparison">
+    <table><tbody><tr><th>Dimensions</th><td>1280 × 720 px</td></tr><tr><th>Source identity</th><td>local diff from commit dd8a9488ff22ddcf5e6d6148670b531a13fdb452</td></tr><tr><th>Source status</th><td>verified</td></tr><tr><th>SHA-256</th><td>54c769ccd49bbba15a440a01412f139db4ec204de252fdbeefb5cfe012fcb1ae</td></tr></tbody></table>
+  </article>
+    </div>
+    <section><h2>Independent Review</h2><table><tbody><tr><th>Verdict</th><td>passed</td></tr><tr><th>Reviewer</th><td>Independent corrected_viewer_visual_qa lane</td></tr><tr><th>Next owner</th><td>builder for release and deployment</td></tr></tbody></table></section>
+  </main>
+</body>
+</html>
