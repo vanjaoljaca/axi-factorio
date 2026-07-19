@@ -21,14 +21,12 @@ type Scenario = { id: string; frames: ViewSnapshot[] };
 
 const port = Number(argument("--port") ?? "4317");
 const databasePath = resolve(argument("--db") ?? ".axi-factorio/factorio.db");
-const scenarios = buildScenarios();
-
 const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? "/", `http://127.0.0.1:${port}`);
   try {
     if (url.pathname === "/api/scenarios") return json(response, scenarioIndex());
     if (url.pathname === "/api/database") return json(response, databaseSnapshot());
-    if (url.pathname.startsWith("/api/scenarios/")) return json(response, scenario(url));
+    if (url.pathname.startsWith("/api/scenarios/")) return json(response, await scenario(url));
     if (url.pathname === "/") return html(response, workbenchHtml);
     response.writeHead(404).end("Not found");
   } catch (error) {
@@ -41,18 +39,17 @@ server.listen(port, "127.0.0.1", () => {
 });
 
 function scenarioIndex(): object[] {
-  return scenarios.map(({ id, frames }) => ({
-    id,
-    name: frames.at(-1)?.name,
-    description: frames.at(-1)?.description,
-  }));
+  return [{
+    id: "happy",
+    name: "Default happy path",
+    description: "Real runner + empty SQLite + test/harness/default.",
+  }];
 }
 
-function scenario(url: URL): Scenario {
+async function scenario(url: URL): Promise<Scenario> {
   const id = url.pathname.split("/").at(-1);
-  const selected = scenarios.find((candidate) => candidate.id === id);
-  if (!selected) throw new Error(`Unknown scenario: ${id}`);
-  return selected;
+  if (id !== "happy") throw new Error(`Unknown scenario: ${id}`);
+  return runHappyPath();
 }
 
 function databaseSnapshot(): ViewSnapshot {
@@ -84,64 +81,53 @@ function databaseSnapshot(): ViewSnapshot {
   }
 }
 
-function buildScenarios(): Scenario[] {
-  const steps = ["plan.define", "dev.workbench", "qa.nomistakes", "human.review"]
-    .map((id) => ({ id, label: id }));
-  return [
-    scenarioFrames("happy", "Happy path", "A blob advances through every station.", steps, [
-      ["queued", null], ["running", "plan.define"], ["queued", "plan.define"],
-      ["running", "dev.workbench"], ["queued", "dev.workbench"],
-      ["running", "qa.nomistakes"], ["queued", "qa.nomistakes"],
-      ["running", "human.review"], ["completed", "human.review"],
-    ]),
-    scenarioFrames("blocked", "Blocked at QA", "Exit evaluation parks the blob with a reason.", steps, [
-      ["queued", null], ["running", "plan.define"], ["queued", "plan.define"],
-      ["running", "dev.workbench"], ["queued", "dev.workbench"],
-      ["running", "qa.nomistakes"], ["blocked", "qa.nomistakes"],
-    ]),
-    scenarioFrames("retry", "Retry then advance", "A retry creates another receipt without losing history.", steps, [
-      ["queued", null], ["running", "plan.define"], ["queued", "plan.define"],
-      ["running", "dev.workbench"], ["queued", "plan.define"],
-      ["running", "dev.workbench"], ["queued", "dev.workbench"],
-    ]),
-    scenarioFrames("rewind", "Manual rewind", "Later receipts are invalidated and the blob returns to a named step.", steps, [
-      ["completed", "human.review"], ["queued", "dev.workbench"],
-    ], true),
-  ];
-}
-
-function scenarioFrames(
-  id: string,
-  name: string,
-  description: string,
-  steps: ViewStep[],
-  states: [string, string | null][],
-  rewound = false,
-): Scenario {
-  const receipts: ViewReceipt[] = [];
-  const frames = states.map(([state, stepId], index) => {
-    if (stepId && state !== "queued") receipts.push({
-      id: `${id}-${index}`, blobId: "blob-1042", stepId, status: state,
-      at: `00:${String(index).padStart(2, "0")}`, detail: detailFor(state, rewound),
+async function runHappyPath(): Promise<Scenario> {
+  const harness = createTestHarness();
+  const frames: ViewSnapshot[] = [];
+  try {
+    harness.store.createBlob("blob-happy", {
+      title: "Default harness blob", body: "", cwd: process.cwd(),
+      pipelinePath: harness.pipelinePath, inputArtifacts: [],
     });
-    return {
-      name, description, source: "scenario" as const, steps,
-      blobs: [{ id: "blob-1042", title: "Add a visible conveyor workbench", state, stepId }],
-      receipts: receipts.map((receipt) => ({ ...receipt })),
-      assertions: [
-        { label: "No receipt disappeared", passed: true },
-        { label: rewound ? "Later receipts invalidated" : "State projection matches receipts", passed: true },
-      ],
-    };
-  });
-  return { id, frames };
+    const capture = () => frames.push(harnessSnapshot(harness));
+    harness.adapter.onExecute = capture;
+    capture();
+    while (harness.store.getBlob("blob-happy")?.state !== "completed") {
+      await harness.runner.runOnce();
+      capture();
+    }
+    return { id: "happy", frames };
+  } finally {
+    harness.dispose();
+  }
 }
 
-function detailFor(state: string, rewound: boolean): string {
-  if (rewound) return "invalidated by manual rewind";
-  if (state === "blocked") return "exit requested human attention";
-  if (state === "running") return "worker claimed receipt";
-  return "exit advanced blob";
+function harnessSnapshot(harness: TestHarness): ViewSnapshot {
+  const blobs = harness.store.listBlobs();
+  const receipts = harness.store.listReceipts();
+  const final = blobs[0]?.state === "completed";
+  return {
+    name: "Default happy path",
+    description: "Executed by ConveyorRunner against test/harness/default and a fresh SQLite database.",
+    source: "scenario",
+    steps: harness.steps.map((step) => ({ id: step.id, label: step.id })),
+    blobs: blobs.map((blob) => ({
+      id: blob.id, title: blob.title, state: blob.state,
+      stepId: blob.state === "running"
+        ? receipts.findLast((receipt) => receipt.status === "running")?.stepId ?? null
+        : blob.lastCompletedStepId,
+    })),
+    receipts: receipts.map((receipt) => ({
+      id: receipt.id, blobId: receipt.blobId, stepId: receipt.stepId,
+      status: receipt.status, at: receipt.startedAt.slice(11, 19),
+      detail: receipt.reason ?? receipt.error ?? `attempt ${receipt.attempt}`,
+    })),
+    assertions: [
+      { label: "Loaded 3 paired Markdown stages", passed: harness.steps.length === 3 },
+      { label: "Actual runner wrote one receipt per completed stage", passed: receipts.length <= 3 },
+      { label: "Blob completed through g3.third", passed: !final || blobs[0]?.lastCompletedStepId === "g3.third" },
+    ],
+  };
 }
 
 function argument(name: string): string | undefined {
@@ -205,3 +191,5 @@ import { createServer, type ServerResponse } from "node:http";
 import { basename, resolve } from "node:path";
 import { FactorioDatabase } from "./Database.ts";
 import { ConveyorStore } from "./Store.ts";
+import type { TestHarness } from "../test/harness/CreateTestHarness.ts";
+import { createTestHarness } from "../test/harness/CreateTestHarness.ts";
