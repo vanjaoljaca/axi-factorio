@@ -31,11 +31,13 @@ workbench.
 
 ## Model
 
-The database has four small concerns:
+The database has five small concerns:
 
-- `projects` groups work and stores a default pipeline selector;
+- `projects` separates each app working root from its shared pipeline-definition
+  root and stores a default pipeline selector;
 - `blobs` stores incoming work and its current conveyor position;
 - `receipts` records every step execution and its definition identity;
+- `humanInputs` appends review, feedback, and approval evidence; and
 - `dispatcherLeases` ensures one local runner owns execution at a time.
 
 `blob.state` is conveyor position, not execution status. A blob on the default
@@ -48,6 +50,10 @@ Each receipt includes the blob ID, stable step ID, status, timestamps, adapter,
 definition Git SHA, definition content hash, input/output artifact references,
 and adapter run ID when available. Rewound receipts remain visible with an
 `invalidatedAt` timestamp.
+
+Human-gated work can remain on one step and one external Codex task across
+multiple feedback cycles. Each resumed receipt snapshots the fresh human input,
+the reused task ID, and any approval evidence.
 
 ## Pipeline files
 
@@ -91,6 +97,15 @@ blob, current step definition, and input artifact references, then returns:
 
 Codex is the first adapter. It runs the entry prompt with `codex exec --json`,
 records the Codex thread ID, and resumes that same thread with the exit prompt.
+When fresh human input is appended at the current step, the next receipt resumes
+that same Codex thread before evaluating the exit prompt again.
+
+In rc.5, continuation is intentionally step-scoped: retries, blocked reviews,
+feedback, and approval cycles reuse the current step's Codex thread, while the
+next pipeline step starts a fresh thread. This preserves phase isolation but
+repays Codex's startup context cost at every step. Reusing one blob-owned thread
+across ordinary steps is a separate adapter-lifecycle decision, not an implicit
+rc.5 behavior.
 The exit result supplies output artifact references, and the adapter also adds
 the Codex thread as a receipt artifact. The runner itself has no Codex-specific
 state.
@@ -113,7 +128,7 @@ npm run build
 
 This recreates `release/` with:
 
-- `axi-factorio-0.1.0-rc.4.tgz`, the installable package;
+- `axi-factorio-0.1.0-rc.5.tgz`, the installable package;
 - `SHA256SUMS`, for artifact verification; and
 - `INSTALL.md`, with direct and vendored installation commands.
 
@@ -125,7 +140,7 @@ Do not use `npm link` for a consuming project. Install the exact tarball so
 Install the exact candidate in the consuming npm project:
 
 ```sh
-npm install --save-exact /path/to/axi-factorio-0.1.0-rc.4.tgz
+npm install --save-exact /path/to/axi-factorio-0.1.0-rc.5.tgz
 ```
 
 From the consuming project root, the defaults are:
@@ -141,21 +156,24 @@ that concrete identity in SQLite. For example, if `v1` and `v2` exist, a new
 blob stores `default/v2`; existing blobs remain pinned to the version selected
 when they were created. A future `./.factorio` file may override these defaults.
 
-Every blob belongs to a project. A project stores its working directory and a
-default pipeline selector, initially `default`. Create one explicitly or let the
-first blob for a working directory create it from that directory name:
+Every blob belongs to a project. A project stores the app working root, a
+separate shared pipeline-definition root, and a default pipeline selector.
+Register or update each app explicitly:
 
 ```sh
-npx axi-factorio project add codex "Codex" --cwd . --pipeline default
+npx axi-factorio project upsert example "Example" \
+  --root ./apps/example \
+  --pipeline-root ./pipelines \
+  --pipeline default
 npx axi-factorio project list
+npx axi-factorio project show example
 ```
 
 Add a blob with a caller-owned join ID:
 
 ```sh
 npx axi-factorio add account-export-1 "Add account export" \
-  --project codex \
-  --cwd ../apps/example \
+  --project example \
   --body-file ./ticket.md \
   --input-ref ticket:account-export-1
 ```
@@ -194,6 +212,27 @@ Restart a blob paused by a failed or blocked receipt:
 ```sh
 npx axi-factorio retry account-export-1
 ```
+
+Append iterative human review input at the current step:
+
+```sh
+npx axi-factorio review account-export-1 --note "Await Workbench review"
+npx axi-factorio feedback account-export-1 "Reduce the visual chrome" \
+  --evidence voice-note:1
+npx axi-factorio approve account-export-1 \
+  --note "Approved at exact head" \
+  --evidence git-head:abc123
+```
+
+Feedback and approval unpause the blob so the service can resume its current
+external task. Approval requires at least one evidence reference. The prompt
+still decides whether the step passes; Factorio only supplies and records the
+human evidence.
+
+Opening an rc.4 database with rc.5 migrates projects automatically. The old
+project `cwd` becomes the app root, and its initial pipeline root becomes
+`<old-cwd>/pipelines`. Run `project upsert` afterward to point projects at a
+shared workspace pipeline root.
 
 Explicitly move it back to a step:
 

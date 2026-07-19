@@ -33,18 +33,37 @@ test("every public command exposes concise help without opening runtime state", 
 test("projects own default pipeline selectors and blobs attach to projects", () => {
   const fixture = createCliFixture();
   const defaultRoot = join(fixture.root, "pipelines", "default");
+  const appRoot = join(fixture.root, "apps", "app");
   mkdirSync(defaultRoot, { recursive: true });
+  mkdirSync(appRoot, { recursive: true });
   renameSync(fixture.pipelinePath, join(defaultRoot, "v1"));
 
   const project = JSON.parse(runCli(fixture, [
-    "project", "add", "app", "App", "--cwd", fixture.root, "--json",
+    "project", "add", "app", "App",
+    "--root", appRoot,
+    "--pipeline-root", join(fixture.root, "pipelines"),
+    "--json",
+  ]).stdout);
+  const updated = JSON.parse(runCli(fixture, [
+    "project", "upsert", "app", "Renamed App",
+    "--root", appRoot,
+    "--pipeline-root", join(fixture.root, "pipelines"),
+    "--json",
   ]).stdout);
   const blob = JSON.parse(runCli(fixture, [
     "add", "blob-project", "Project blob", "--project", "app", "--json",
   ]).stdout);
+  const shown = JSON.parse(runCli(fixture, ["show", "blob-project", "--json"]).stdout);
 
   assert.equal(project.project.defaultPipeline, "default");
+  assert.equal(project.project.root, appRoot);
+  assert.equal(project.project.pipelineRoot, join(fixture.root, "pipelines"));
+  assert.equal(project.project.resolvedPipeline, "default/v1");
+  assert.equal(updated.project.name, "Renamed App");
+  assert.equal(updated.already, false);
   assert.equal(blob.blob.project, "app");
+  assert.equal(shown.blob.cwd, appRoot);
+  assert.equal(shown.blob.pipeline, "default/v1");
 });
 
 test("add is idempotent and supports repeated artifact refs in JSON", () => {
@@ -108,6 +127,33 @@ test("init reports whether the database already existed", () => {
 
   assert.equal(JSON.parse(runCli(fixture, args).stdout).already, false);
   assert.equal(JSON.parse(runCli(fixture, args).stdout).already, true);
+});
+
+test("human feedback and approval append evidence to the current step", () => {
+  const fixture = createCliFixture();
+  runCli(fixture, [
+    "add", "blob-review", "Review me", "--pipeline", fixture.pipelinePath,
+    "--cwd", fixture.root, "--json",
+  ]);
+
+  const review = JSON.parse(runCli(fixture, [
+    "review", "blob-review", "--note", "Await Workbench", "--json",
+  ]).stdout);
+  const feedback = JSON.parse(runCli(fixture, [
+    "feedback", "blob-review", "Use less chrome", "--evidence", "voice-note:1", "--json",
+  ]).stdout);
+  const approval = JSON.parse(runCli(fixture, [
+    "approve", "blob-review", "--note", "Approved", "--evidence", "git-head:abc", "--json",
+  ]).stdout);
+  const shown = JSON.parse(runCli(fixture, ["show", "blob-review", "--json"]).stdout);
+
+  assert.equal(review.humanInput.kind, "review");
+  assert.deepEqual(feedback.humanInput.evidence, ["voice-note:1"]);
+  assert.equal(approval.humanInput.kind, "approval");
+  assert.equal(shown.blob.humanGateApproved, true);
+  assert.deepEqual(shown.humanInputs.map((input: { kind: string }) => input.kind), [
+    "review", "feedback", "approval",
+  ]);
 });
 
 function createCliFixture(): CliFixture {

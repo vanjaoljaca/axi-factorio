@@ -8,8 +8,7 @@ export class CodexAdapter implements ToolAdapter {
   }
 
   async execute(input: AdapterInput, onExternalRun: ExternalRunHandler): Promise<AdapterResult> {
-    const entryPrompt = buildEntryPrompt(input);
-    const entry = await runCodex(entryArgs(input.blob.cwd, entryPrompt), input.signal, onExternalRun);
+    const entry = await runEntry(input, onExternalRun);
     const exitPrompt = buildExitPrompt(input);
     const exit = await runCodex(
       exitArgs(input.blob.cwd, entry.externalRunId, exitPrompt),
@@ -26,6 +25,14 @@ export class CodexAdapter implements ToolAdapter {
   }
 }
 
+async function runEntry(input: AdapterInput, onExternalRun: ExternalRunHandler): Promise<ProcessResult> {
+  const prompt = input.continuationThreadId ? buildContinuationPrompt(input) : buildEntryPrompt(input);
+  const args = input.continuationThreadId
+    ? continuationArgs(input.blob.cwd, input.continuationThreadId, prompt)
+    : entryArgs(input.blob.cwd, prompt);
+  return runCodex(args, input.signal, onExternalRun);
+}
+
 function entryArgs(cwd: string, prompt: string): string[] {
   return ["exec", "--json", "--color", "never", "--sandbox", "workspace-write", "-C", cwd, prompt];
 }
@@ -35,6 +42,10 @@ function exitArgs(cwd: string, threadId: string, prompt: string): string[] {
     "exec", "--json", "--color", "never", "-C", cwd,
     "--output-schema", exitSchemaPath, "resume", threadId, prompt,
   ];
+}
+
+function continuationArgs(cwd: string, threadId: string, prompt: string): string[] {
+  return ["exec", "--json", "--color", "never", "-C", cwd, "resume", threadId, prompt];
 }
 
 async function runCodex(
@@ -188,6 +199,17 @@ function buildEntryPrompt(input: AdapterInput): string {
     title: input.blob.title,
     body: input.blob.body,
     stepId: input.step.id,
+    inputArtifacts: input.inputArtifacts,
+  }, null, 2)}`.trim();
+}
+
+function buildContinuationPrompt(input: AdapterInput): string {
+  return `${runtimeMarker}
+Continue blob ${input.blob.id} at the same step ${input.step.id} using the fresh human input below.
+${JSON.stringify({
+    phase: "continuation",
+    humanInputs: input.humanInputs,
+    approvalEvidence: input.approvalEvidence,
     inputArtifacts: input.inputArtifacts,
   }, null, 2)}`.trim();
 }

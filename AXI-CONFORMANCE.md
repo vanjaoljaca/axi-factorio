@@ -18,7 +18,7 @@ Audited against the ten Agent eXperience Interface principles published at
 
 ## Verdict
 
-The rc.4 CLI conforms to nine of the ten published AXI principles. It is not
+The rc.5 CLI conforms to nine of the ten published AXI principles. It is not
 yet accurate to claim complete AXI conformance because ambient agent context is
 missing. The `axi-` name currently describes the interface direction and the
 nine implemented principles, not a completed certification.

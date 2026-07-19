@@ -9,27 +9,19 @@ type ViewBlob = {
   completedStepIds: string[];
   steps: ViewStep[];
 };
-type ViewProject = { id: string; name: string; steps: ViewStep[]; blobs: ViewBlob[] };
+type ViewProject = {
+  id: string;
+  name: string;
+  root: string;
+  pipelineRoot: string;
+  defaultPipeline: string;
+  resolvedPipeline: string | null;
+  resolvedPipelinePath: string | null;
+  steps: ViewStep[];
+  blobs: ViewBlob[];
+};
 
-const port = Number(argument("--port") ?? "4317");
-const databasePath = resolve(argument("--db") ?? "pipelines/axi-factorio.db");
-process.title = "axi-factorio-viewer";
-const server = createServer((request, response) => {
-  const url = new URL(request.url ?? "/", `http://127.0.0.1:${port}`);
-  try {
-    if (url.pathname === "/api/view") return json(response, viewSnapshot());
-    if (url.pathname === "/") return html(response, viewerHtml);
-    response.writeHead(404).end("Not found");
-  } catch (error) {
-    json(response, { error: error instanceof Error ? error.message : String(error) }, 500);
-  }
-});
-
-server.listen(port, "127.0.0.1", () => {
-  log("viewer.ready", { url: `http://127.0.0.1:${port}`, databasePath });
-});
-
-function viewSnapshot(): object {
+export function createViewSnapshot(databasePath: string): object {
   const database = new FactorioDatabase(databasePath);
   try {
     const store = new ConveyorStore(database);
@@ -48,10 +40,29 @@ function viewSnapshot(): object {
   }
 }
 
+function startViewer(): void {
+  const port = Number(argument("--port") ?? "4317");
+  const databasePath = resolve(argument("--db") ?? "pipelines/axi-factorio.db");
+  process.title = "axi-factorio-viewer";
+  const server = createServer((request, response) => {
+    const url = new URL(request.url ?? "/", `http://127.0.0.1:${port}`);
+    try {
+      if (url.pathname === "/api/view") return json(response, createViewSnapshot(databasePath));
+      if (url.pathname === "/") return html(response, viewerHtml);
+      response.writeHead(404).end("Not found");
+    } catch (error) {
+      json(response, { error: error instanceof Error ? error.message : String(error) }, 500);
+    }
+  });
+  server.listen(port, "127.0.0.1", () => {
+    log("viewer.ready", { url: `http://127.0.0.1:${port}`, databasePath });
+  });
+}
+
 function groupProjects(records: Project[], blobs: Blob[], receipts: Receipt[]): ViewProject[] {
   const projects = new Map(records.map((project) => [
     project.id,
-    { id: project.id, name: project.name, steps: projectSteps(project), blobs: [] as ViewBlob[] },
+    viewProject(project),
   ]));
   for (const blob of blobs) {
     const project = projects.get(blob.projectId) ?? fallbackProject(blob);
@@ -61,9 +72,34 @@ function groupProjects(records: Project[], blobs: Blob[], receipts: Receipt[]): 
   return [...projects.values()].sort((left, right) => left.name.localeCompare(right.name));
 }
 
+function viewProject(project: Project): ViewProject {
+  const selection = projectPipelineSelection(project);
+  return {
+    id: project.id,
+    name: project.name,
+    root: project.root,
+    pipelineRoot: project.pipelineRoot,
+    defaultPipeline: project.defaultPipeline,
+    resolvedPipeline: selection?.id ?? null,
+    resolvedPipelinePath: selection?.path ?? null,
+    steps: selection ? discoverPipeline(selection.path).map(viewStep) : [],
+    blobs: [],
+  };
+}
+
 function fallbackProject(blob: Blob): ViewProject {
   const id = blob.projectId || projectId(blob.cwd);
-  return { id, name: projectName(id), steps: discoverPipeline(blob.pipelinePath).map(viewStep), blobs: [] };
+  return {
+    id,
+    name: projectName(id),
+    root: blob.cwd,
+    pipelineRoot: dirname(blob.pipelinePath),
+    defaultPipeline: blob.pipelineId,
+    resolvedPipeline: blob.pipelineId,
+    resolvedPipelinePath: blob.pipelinePath,
+    steps: discoverPipeline(blob.pipelinePath).map(viewStep),
+    blobs: [],
+  };
 }
 
 function projectId(cwd: string): string {
@@ -114,24 +150,23 @@ function sharedSteps(projects: ViewProject[]): ViewStep[] {
   return [...ordered.values()];
 }
 
-function projectSteps(project: Project): ViewStep[] {
+function projectPipelineSelection(project: Project): { id: string; path: string } | null {
   try {
-    const pipelinePath = resolveProjectPipeline(project);
-    return discoverPipeline(pipelinePath).map(viewStep);
+    const selected = join(project.pipelineRoot, project.defaultPipeline);
+    const path = /^v\d+$/.test(basename(selected)) && isDirectory(selected)
+      ? selected
+      : latestVersion(selected);
+    return { id: relative(project.pipelineRoot, path).split(sep).join("/"), path };
   } catch (error) {
     log("viewer.pipeline_unavailable", {
       projectId: project.id,
       error: error instanceof Error ? error.message : String(error),
     });
-    return [];
+    return null;
   }
 }
 
-function resolveProjectPipeline(project: Project): string {
-  const direct = resolve(project.cwd, project.defaultPipeline);
-  if (isDirectory(direct)) return direct;
-  const selected = join(project.cwd, "pipelines", project.defaultPipeline);
-  if (/^v\d+$/.test(basename(selected)) && isDirectory(selected)) return selected;
+function latestVersion(selected: string): string {
   const versions = readdirSync(selected, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && /^v\d+$/.test(entry.name))
     .sort((left, right) => Number(right.name.slice(1)) - Number(left.name.slice(1)));
@@ -217,11 +252,14 @@ byId('workspace').onclick=event=>{const head=event.target.closest('.project-head
 load();setInterval(load,5000);
 </script></body></html>`;
 
+if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) startViewer();
+
 import type { ServerResponse } from "node:http";
 import type { Blob, Project, Receipt, StepDefinition } from "./Types.ts";
 import { createServer } from "node:http";
 import { readdirSync, statSync } from "node:fs";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { FactorioDatabase } from "./Database.ts";
 import { log } from "./Logger.ts";
 import { discoverPipeline } from "./Pipeline.ts";

@@ -18,7 +18,8 @@ export type DefinitionSnapshot = {
 
 export type ProjectInput = {
   name: string;
-  cwd: string;
+  root: string;
+  pipelineRoot: string;
   defaultPipeline: string;
 };
 
@@ -47,8 +48,23 @@ export type Blob = Omit<BlobInput, "pipelineId" | "projectId"> & {
   lastCompletedStepId: string | null;
   lastCompletedOrder: number | null;
   forcedStepId: string | null;
+  humanGateStepId: string | null;
+  humanGateApprovalInputId: string | null;
   createdAt: string;
   updatedAt: string;
+};
+
+export type HumanInputKind = "review" | "feedback" | "approval";
+
+export type HumanInput = {
+  id: string;
+  blobId: string;
+  stepId: string;
+  kind: HumanInputKind;
+  text: string;
+  evidence: string[];
+  createdAt: string;
+  receiptId: string | null;
 };
 
 export type Receipt = {
@@ -64,6 +80,9 @@ export type Receipt = {
   inputArtifacts: string[];
   outputArtifacts: string[];
   externalRunId: string | null;
+  continuationThreadId: string | null;
+  humanInputs: HumanInput[];
+  approvalEvidence: HumanInput | null;
   reason: string | null;
   error: string | null;
   startedAt: string;
@@ -83,6 +102,9 @@ export type AdapterInput = {
   step: StepDefinition;
   definition: DefinitionSnapshot;
   inputArtifacts: string[];
+  continuationThreadId: string | null;
+  humanInputs: HumanInput[];
+  approvalEvidence: HumanInput | null;
   signal?: AbortSignal;
 };
 

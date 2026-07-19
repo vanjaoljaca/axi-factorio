@@ -82,6 +82,21 @@ npx axi-factorio --version
 Commit the archive, \`package.json\`, and lockfile together. This makes the
 exact release candidate reproducible without \`npm link\` or an unpublished
 registry version.
+
+## Configure app projects
+
+\`\`\`sh
+npx axi-factorio project upsert APP_ID "APP NAME" \\
+  --root /absolute/path/to/workspace/apps/APP_ID \\
+  --pipeline-root /absolute/path/to/workspace/pipelines \\
+  --pipeline default
+npx axi-factorio project show APP_ID --json
+\`\`\`
+
+New blobs use the project root as their Codex working directory and resolve the
+highest \`vN\` under the shared pipeline root. Existing rc.4 databases migrate
+on first open; use \`project upsert\` to replace the migrated
+\`<old-cwd>/pipelines\` root with the shared workspace pipeline root.
 `;
 }
 

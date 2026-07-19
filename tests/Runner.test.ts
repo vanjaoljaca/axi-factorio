@@ -95,6 +95,27 @@ test("retry repeats a step and increments its attempt", async () => {
   fixture.database.close();
 });
 
+test("human review cycles reuse one external thread and retain approval provenance", async () => {
+  const fixture = createRunnerFixture(["workbench.review"]);
+  fixture.store.createBlob("blob-1", blobInput(fixture));
+  fixture.store.armHumanGate("blob-1", "Show this in Workbench.");
+
+  await fixture.runner.runOnce();
+  fixture.store.addHumanFeedback("blob-1", "Tighten the empty state.", ["voice-note:1"]);
+  await fixture.runner.runOnce();
+  fixture.store.approveHumanGate("blob-1", "Approved at exact head.", ["git-head:abc"]);
+  await fixture.runner.runOnce();
+
+  const receipts = fixture.store.listReceipts("blob-1");
+  assert.deepEqual(receipts.map((receipt) => receipt.status), ["blocked", "blocked", "advance"]);
+  assert.deepEqual(receipts.map((receipt) => receipt.externalRunId), ["fake-run-1", "fake-run-1", "fake-run-1"]);
+  assert.equal(receipts[1].continuationThreadId, "fake-run-1");
+  assert.equal(receipts[1].humanInputs[0].text, "Tighten the empty state.");
+  assert.deepEqual(receipts[2].approvalEvidence?.evidence, ["git-head:abc"]);
+  assert.equal(fixture.store.getBlob("blob-1")?.state, "complete");
+  fixture.database.close();
+});
+
 class FakeAdapter implements ToolAdapter {
   readonly name = "fake";
   readonly inputs: AdapterInput[] = [];
@@ -106,7 +127,7 @@ class FakeAdapter implements ToolAdapter {
 
   async execute(input: AdapterInput, onExternalRun: ExternalRunHandler): Promise<AdapterResult> {
     this.inputs.push(input);
-    const externalRunId = `fake-run-${this.inputs.length}`;
+    const externalRunId = input.continuationThreadId ?? `fake-run-${this.inputs.length}`;
     onExternalRun(externalRunId);
     const status = this.outcomes.shift() ?? "advance";
     return {

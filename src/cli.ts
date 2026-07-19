@@ -31,6 +31,9 @@ async function runCommand(
     case "show": return showBlob(args.slice(1), store, json);
     case "receipts": return showReceipts(args.slice(1), store, json);
     case "retry": return retryBlob(args.slice(1), store, json);
+    case "review": return armHumanReview(args.slice(1), store, json);
+    case "feedback": return addHumanFeedback(args.slice(1), store, json);
+    case "approve": return approveHumanReview(args.slice(1), store, json);
     case "rewind":
     case "kick": return rewindBlob(args.slice(1), store, json, args[0]);
     case "run":
@@ -65,10 +68,14 @@ function addBlob(args: string[], store: ConveyorStore, json: boolean): void {
   const requestedCwd = resolve(firstFlag(parsed, "--cwd") ?? process.cwd());
   const projectId = firstFlag(parsed, "--project") ?? defaultProjectId(requestedCwd);
   const project = store.getProject(projectId) ?? store.createProject(projectId, {
-    name: basename(requestedCwd), cwd: requestedCwd, defaultPipeline: firstFlag(parsed, "--pipeline") ?? "default",
+    name: basename(requestedCwd),
+    root: requestedCwd,
+    pipelineRoot: resolve(firstFlag(parsed, "--pipeline-root") ?? join(requestedCwd, "pipelines")),
+    defaultPipeline: firstFlag(parsed, "--pipeline") ?? "default",
   }).project;
-  const cwd = resolve(firstFlag(parsed, "--cwd") ?? project.cwd);
-  const pipeline = resolvePipeline(firstFlag(parsed, "--pipeline") ?? project.defaultPipeline, cwd);
+  const cwd = resolve(firstFlag(parsed, "--cwd") ?? project.root);
+  const pipelineRoot = resolve(firstFlag(parsed, "--pipeline-root") ?? project.pipelineRoot);
+  const pipeline = resolvePipeline(firstFlag(parsed, "--pipeline") ?? project.defaultPipeline, pipelineRoot);
   const pipelinePath = pipeline.path;
   const steps = discoverPipeline(pipelinePath);
   snapshotDefinition(steps[0], pipelinePath);
@@ -90,12 +97,14 @@ function addBlob(args: string[], store: ConveyorStore, json: boolean): void {
 }
 
 function runProject(args: string[], store: ConveyorStore, json: boolean): void {
-  const parsed = parseArgs(args, { "--cwd": "value", "--pipeline": "value" });
+  const parsed = parseArgs(args, {
+    "--root": "value", "--pipeline-root": "value", "--cwd": "value", "--pipeline": "value",
+  });
   const action = parsed.positionals[0] ?? "list";
   if (action === "list") return listProjects(parsed, store, json);
   if (action === "show") return showProject(parsed, store, json);
-  if (action === "add") return addProject(parsed, store, json);
-  throw usage("project accepts list, show, or add.");
+  if (action === "add" || action === "upsert") return addProject(parsed, store, json, action);
+  throw usage("project accepts list, show, add, or upsert.");
 }
 
 function listProjects(parsed: ParsedArgs, store: ConveyorStore, json: boolean): void {
@@ -107,19 +116,32 @@ function listProjects(parsed: ParsedArgs, store: ConveyorStore, json: boolean): 
 function showProject(parsed: ParsedArgs, store: ConveyorStore, json: boolean): void {
   requirePositionals(parsed, 2, "project show requires one project ID.");
   const project = requireProject(store, parsed.positionals[1]);
-  printOutput({ project, help: [`Run \`axi-factorio add <id> "<title>" --project ${project.id}\`.`] }, json);
+  printOutput({
+    project: projectSummary(project),
+    help: [`Run \`axi-factorio add <id> "<title>" --project ${project.id}\`.`],
+  }, json);
 }
 
-function addProject(parsed: ParsedArgs, store: ConveyorStore, json: boolean): void {
+function addProject(
+  parsed: ParsedArgs,
+  store: ConveyorStore,
+  json: boolean,
+  action: "add" | "upsert",
+): void {
   requirePositionals(parsed, 3, "project add requires an ID and name.");
   const id = validId(parsed.positionals[1], "project");
-  const result = store.createProject(id, {
+  const root = resolve(firstFlag(parsed, "--root") ?? firstFlag(parsed, "--cwd") ?? process.cwd());
+  const input = {
     name: parsed.positionals[2],
-    cwd: resolve(firstFlag(parsed, "--cwd") ?? process.cwd()),
+    root,
+    pipelineRoot: resolve(firstFlag(parsed, "--pipeline-root") ?? join(root, "pipelines")),
     defaultPipeline: firstFlag(parsed, "--pipeline") ?? "default",
-  });
+  };
+  const result = action === "upsert"
+    ? store.upsertProject(id, input)
+    : store.createProject(id, input);
   printOutput({
-    ok: `project add ${id}`, already: result.already, project: projectSummary(result.project),
+    ok: `project ${action} ${id}`, already: result.already, project: projectSummary(result.project),
     help: [`Run \`axi-factorio add <id> "<title>" --project ${id}\`.`],
   }, json);
 }
@@ -148,6 +170,7 @@ function showBlob(args: string[], store: ConveyorStore, json: boolean): void {
   printOutput({
     blob: { ...blobDetail(blob), body: body.text, inputArtifacts: blob.inputArtifacts },
     receipts: store.listReceipts(blob.id).map((receipt) => receiptSummary(receipt, full)),
+    humanInputs: store.listHumanInputs(blob.id),
     help: body.truncated
       ? [`Run \`axi-factorio show ${blob.id} --full\` for the complete body (${blob.body.length} chars).`]
       : [],
@@ -172,6 +195,31 @@ function retryBlob(args: string[], store: ConveyorStore, json: boolean): void {
   requirePositionals(parsed, 1, "retry requires one blob ID.");
   const result = store.retryBlob(parsed.positionals[0]);
   printOutput({ ok: `retry ${result.blob.id} -> ${result.blob.state}`, already: result.already }, json);
+}
+
+function armHumanReview(args: string[], store: ConveyorStore, json: boolean): void {
+  const parsed = parseArgs(args, { "--note": "value" });
+  requirePositionals(parsed, 1, "review requires one blob ID.");
+  const input = store.armHumanGate(parsed.positionals[0], firstFlag(parsed, "--note") ?? "");
+  printOutput({ ok: `review ${input.blobId} -> ${input.stepId}`, humanInput: input }, json);
+}
+
+function addHumanFeedback(args: string[], store: ConveyorStore, json: boolean): void {
+  const parsed = parseArgs(args, { "--evidence": "value" });
+  requirePositionals(parsed, 2, "feedback requires a blob ID and feedback text.");
+  const input = store.addHumanFeedback(
+    parsed.positionals[0], parsed.positionals[1], parsed.flags["--evidence"] ?? [],
+  );
+  printOutput({ ok: `feedback ${input.blobId} -> ${input.stepId}`, humanInput: input }, json);
+}
+
+function approveHumanReview(args: string[], store: ConveyorStore, json: boolean): void {
+  const parsed = parseArgs(args, { "--note": "value", "--evidence": "value" });
+  requirePositionals(parsed, 1, "approve requires one blob ID.");
+  const input = store.approveHumanGate(
+    parsed.positionals[0], firstFlag(parsed, "--note") ?? "", parsed.flags["--evidence"] ?? [],
+  );
+  printOutput({ ok: `approve ${input.blobId} -> ${input.stepId}`, humanInput: input }, json);
 }
 
 function rewindBlob(
@@ -360,12 +408,34 @@ function blobDetail(blob: Blob): Record<string, unknown> {
     cwd: blob.cwd,
     lastCompletedStep: blob.lastCompletedStepId,
     forcedStep: blob.forcedStepId,
+    humanGateStep: blob.humanGateStepId,
+    humanGateApproved: Boolean(blob.humanGateApprovalInputId),
     updatedAt: blob.updatedAt,
   };
 }
 
 function projectSummary(project: Project): Record<string, unknown> {
-  return { id: project.id, name: project.name, defaultPipeline: project.defaultPipeline, cwd: project.cwd };
+  return {
+    id: project.id,
+    name: project.name,
+    root: project.root,
+    pipelineRoot: project.pipelineRoot,
+    defaultPipeline: project.defaultPipeline,
+    ...resolvedProjectPipeline(project),
+  };
+}
+
+function resolvedProjectPipeline(project: Project): Record<string, unknown> {
+  try {
+    const pipeline = resolvePipeline(project.defaultPipeline, project.pipelineRoot);
+    return { resolvedPipeline: pipeline.id, resolvedPipelinePath: pipeline.path };
+  } catch (error) {
+    return {
+      resolvedPipeline: null,
+      resolvedPipelinePath: null,
+      pipelineError: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 function projectHelp(count: number): string[] {
@@ -392,6 +462,9 @@ function receiptSummary(receipt: Receipt, full: boolean): Record<string, unknown
     inputArtifacts: receipt.inputArtifacts,
     outputArtifacts: receipt.outputArtifacts,
     externalRunId: receipt.externalRunId,
+    continuationThreadId: receipt.continuationThreadId,
+    humanInputs: receipt.humanInputs,
+    approvalEvidence: receipt.approvalEvidence,
     reason: receipt.reason,
     error: receipt.error,
     invalidatedAt: receipt.invalidatedAt,
@@ -425,9 +498,8 @@ function defaultProjectId(cwd: string): string {
   return basename(cwd).toLowerCase().replace(/[^a-z0-9._-]+/gu, "-").replace(/^-+|-+$/gu, "") || "default";
 }
 
-function resolvePipeline(selector = "default", cwd = process.cwd()): PipelineSelection {
-  const root = join(cwd, "pipelines");
-  const direct = resolve(cwd, selector);
+function resolvePipeline(selector = "default", root = join(process.cwd(), "pipelines")): PipelineSelection {
+  const direct = resolve(selector);
   if (isDirectory(direct)) return { id: pipelineId(root, direct), path: direct };
   const selected = join(root, selector);
   if (isDirectory(selected) && /^v\d+$/.test(basename(selected))) {
@@ -467,7 +539,7 @@ function serviceAbortController(): AbortController {
 }
 
 function printVersion(): void {
-  process.stdout.write("axi-factorio 0.1.0-rc.4\n");
+  process.stdout.write("axi-factorio 0.1.0-rc.5\n");
 }
 
 function helpCommand(args: string[]): string | undefined {
@@ -507,6 +579,7 @@ const bodyLimit = 800;
 const addFlags: FlagSpec = {
   "--project": "value",
   "--pipeline": "value",
+  "--pipeline-root": "value",
   "--cwd": "value",
   "--body": "value",
   "--body-file": "value",
@@ -515,19 +588,20 @@ const addFlags: FlagSpec = {
 };
 
 const helpText: Record<string, string> = {
-  root: `axi-factorio 0.1.0-rc.4
+  root: `axi-factorio 0.1.0-rc.5
 
 Usage: axi-factorio <command> [flags]
-Commands: project, add, list, status, show, receipts, retry, rewind, kick, run, service, init
+Commands: project, add, list, status, show, receipts, retry, review, feedback, approve, rewind, kick, run, service, init
 Globals: --db PATH, --json, --help, --version
 
 Run without arguments for the live conveyor dashboard.
 `,
   project: `Usage: axi-factorio project [list]
-       axi-factorio project add PROJECT_ID "NAME" [--cwd DIR] [--pipeline NAME]
+       axi-factorio project add PROJECT_ID "NAME" --root DIR --pipeline-root DIR [--pipeline NAME]
+       axi-factorio project upsert PROJECT_ID "NAME" --root DIR --pipeline-root DIR [--pipeline NAME]
        axi-factorio project show PROJECT_ID
 `,
-  add: `Usage: axi-factorio add BLOB_ID "TITLE" [--project ID] [--pipeline NAME|NAME/vN|DIR] [--cwd DIR] [--body TEXT|--body-file PATH] [--input-ref REF...]
+  add: `Usage: axi-factorio add BLOB_ID "TITLE" [--project ID] [--pipeline NAME|NAME/vN|DIR] [--pipeline-root DIR] [--cwd DIR] [--body TEXT|--body-file PATH] [--input-ref REF...]
        axi-factorio add --mint "TITLE" [--pipeline NAME|NAME/vN|DIR]
 `,
   list: `Usage: axi-factorio list [--state STATE] [--limit 50]\n`,
@@ -535,6 +609,9 @@ Run without arguments for the live conveyor dashboard.
   show: `Usage: axi-factorio show BLOB_ID [--full]\n`,
   receipts: `Usage: axi-factorio receipts [BLOB_ID] [--limit 50] [--full]\n`,
   retry: `Usage: axi-factorio retry BLOB_ID\n`,
+  review: `Usage: axi-factorio review BLOB_ID [--note TEXT]\n`,
+  feedback: `Usage: axi-factorio feedback BLOB_ID "TEXT" [--evidence REF...]\n`,
+  approve: `Usage: axi-factorio approve BLOB_ID --evidence REF... [--note TEXT]\n`,
   rewind: `Usage: axi-factorio rewind BLOB_ID STEP_ID\n`,
   kick: `Usage: axi-factorio kick BLOB_ID STEP_ID\n`,
   run: `Usage: axi-factorio run\n`,

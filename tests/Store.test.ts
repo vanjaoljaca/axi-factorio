@@ -39,7 +39,10 @@ test("fresh storage includes projects, blobs, receipts, and the dispatcher lease
     "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
   ).all() as Array<{ name: string }>;
 
-  assert.deepEqual(rows.map((row) => row.name), ["blobs", "dispatcherLeases", "projects", "receipts"]);
+  assert.deepEqual(
+    rows.map((row) => row.name),
+    ["blobs", "dispatcherLeases", "humanInputs", "projects", "receipts"],
+  );
   fixture.database.close();
 });
 

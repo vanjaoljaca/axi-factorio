@@ -14,6 +14,10 @@ export class ConveyorStore {
     return this.database.transaction(() => this.ensureProject(id, input));
   }
 
+  upsertProject(id: string, input: ProjectInput): ProjectMutationResult {
+    return this.database.transaction(() => this.ensureProject(id, input, true));
+  }
+
   getProject(id: string): Project | null {
     const row = this.database.connection.prepare(projectSelect).get(id);
     return row ? mapProject(asRecord(row)) : null;
@@ -33,7 +37,8 @@ export class ConveyorStore {
       const projectId = input.projectId ?? "default";
       if (!this.getProject(projectId)) this.ensureProject(projectId, {
         name: projectId === "default" ? "Default" : projectId,
-        cwd: input.cwd,
+        root: input.cwd,
+        pipelineRoot: dirname(input.pipelinePath),
         defaultPipeline: "default",
       });
       this.database.connection.prepare(blobInsert).run(
@@ -81,8 +86,9 @@ export class ConveyorStore {
     return this.database.transaction(() => {
       this.requireActiveLease(ownerId);
       const receipt = this.requireReceipt(receiptId);
-      this.finishReceipt(receipt.id, result);
-      this.projectResult(receipt, result, nextStepId);
+      const effectiveResult = this.enforceHumanGate(receipt, result);
+      this.finishReceipt(receipt.id, effectiveResult);
+      this.projectResult(receipt, effectiveResult, nextStepId);
       return this.requireBlob(receipt.blobId);
     });
   }
@@ -125,6 +131,20 @@ export class ConveyorStore {
     });
   }
 
+  armHumanGate(blobId: string, text = ""): HumanInput {
+    return this.appendHumanInput(blobId, "review", text, []);
+  }
+
+  addHumanFeedback(blobId: string, text: string, evidence: string[] = []): HumanInput {
+    if (!text.trim()) throw new Error("Human feedback cannot be empty.");
+    return this.appendHumanInput(blobId, "feedback", text, evidence);
+  }
+
+  approveHumanGate(blobId: string, text: string, evidence: string[]): HumanInput {
+    if (!evidence.length) throw new Error("Human approval requires at least one evidence reference.");
+    return this.appendHumanInput(blobId, "approval", text, evidence);
+  }
+
   rewindBlob(blobId: string, target: StepDefinition, steps: StepDefinition[]): BlobMutationResult {
     return this.database.transaction(() => {
       const blob = this.requireBlob(blobId);
@@ -156,6 +176,13 @@ export class ConveyorStore {
       ? this.database.connection.prepare(receiptListByBlob).all(blobId)
       : this.database.connection.prepare(receiptList).all();
     return rows.map((row) => mapReceipt(asRecord(row)));
+  }
+
+  listHumanInputs(blobId?: string): HumanInput[] {
+    const rows = blobId
+      ? this.database.connection.prepare(humanInputListByBlob).all(blobId)
+      : this.database.connection.prepare(humanInputList).all();
+    return rows.map((row) => mapHumanInput(asRecord(row)));
   }
 
   inputArtifactsFor(blobId: string): string[] {
@@ -198,11 +225,18 @@ export class ConveyorStore {
     const id = randomUUID();
     const at = this.now();
     const attempt = this.nextAttempt(blob.id, input.step.id);
+    const continuation = this.continuationThreadFor(blob.id, input.step.id);
+    const humanInputs = this.pendingHumanInputs(blob.id, input.step.id)
+      .map((item) => ({ ...item, receiptId: id }));
+    const currentApproval = this.currentApproval(blob);
+    const approval = currentApproval ? { ...currentApproval, receiptId: id } : null;
     this.database.connection.prepare(receiptInsert).run(
       id, blob.id, input.step.id, input.step.order, attempt, input.adapter,
       input.definition.gitSha, input.definition.contentHash,
-      JSON.stringify(input.inputArtifacts), at,
+      JSON.stringify(input.inputArtifacts), continuation,
+      JSON.stringify(humanInputs), approval ? JSON.stringify(approval) : null, at,
     );
+    this.database.connection.prepare(humanInputReceiptUpdate).run(id, blob.id, input.step.id);
     return this.requireReceipt(id);
   }
 
@@ -211,6 +245,17 @@ export class ConveyorStore {
       result.status, JSON.stringify(result.outputArtifacts), result.externalRunId,
       result.reason, this.now(), receiptId,
     );
+  }
+
+  private enforceHumanGate(receipt: Receipt, result: AdapterResult): AdapterResult {
+    if (result.status !== "advance") return result;
+    const blob = this.requireBlob(receipt.blobId);
+    if (blob.humanGateStepId !== receipt.stepId || blob.humanGateApprovalInputId) return result;
+    return {
+      ...result,
+      status: "blocked",
+      reason: "Awaiting explicit human approval evidence.",
+    };
   }
 
   private projectResult(receipt: Receipt, result: AdapterResult, nextStepId: string | null): void {
@@ -226,6 +271,50 @@ export class ConveyorStore {
     this.database.connection.prepare(blobAdvanceUpdate).run(
       state, 0, receipt.stepId, receipt.stepOrder, this.now(), receipt.blobId,
     );
+  }
+
+  private appendHumanInput(
+    blobId: string,
+    kind: HumanInputKind,
+    text: string,
+    evidence: string[],
+  ): HumanInput {
+    return this.database.transaction(() => {
+      const blob = this.requireBlob(blobId);
+      if (blob.state === "complete") throw new Error(`Blob ${blob.id} is complete.`);
+      if (this.hasRunningReceipt(blob.id)) throw new Error("Human input cannot be added while a receipt is running.");
+      const id = randomUUID();
+      this.database.connection.prepare(humanInputInsert).run(
+        id, blob.id, blob.state, kind, text, JSON.stringify(evidence), this.now(),
+      );
+      const approvalId = kind === "approval" ? id : null;
+      this.database.connection.prepare(blobHumanGateUpdate).run(
+        blob.state, approvalId, kind === "review" ? Number(blob.paused) : 0, this.now(), blob.id,
+      );
+      return this.requireHumanInput(id);
+    });
+  }
+
+  private continuationThreadFor(blobId: string, stepId: string): string | null {
+    const row = this.database.connection.prepare(receiptContinuationSelect).get(blobId, stepId);
+    return row ? nullableString(asRecord(row).externalRunId) : null;
+  }
+
+  private pendingHumanInputs(blobId: string, stepId: string): HumanInput[] {
+    const rows = this.database.connection.prepare(humanInputPendingList).all(blobId, stepId);
+    return rows.map((row) => mapHumanInput(asRecord(row)));
+  }
+
+  private currentApproval(blob: Blob): HumanInput | null {
+    return blob.humanGateApprovalInputId
+      ? this.requireHumanInput(blob.humanGateApprovalInputId)
+      : null;
+  }
+
+  private requireHumanInput(id: string): HumanInput {
+    const row = this.database.connection.prepare(humanInputSelect).get(id);
+    if (!row) throw new Error(`Human input ${id} was not found.`);
+    return mapHumanInput(asRecord(row));
   }
 
   private recoverReceipt(receipt: Receipt): void {
@@ -304,15 +393,19 @@ export class ConveyorStore {
     throw new Error(`Blob ${blob.id} already exists with different input.`);
   }
 
-  private ensureProject(id: string, input: ProjectInput): ProjectMutationResult {
+  private ensureProject(id: string, input: ProjectInput, update = false): ProjectMutationResult {
     const existing = this.getProject(id);
     if (existing) {
       if (sameProjectInput(existing, input)) return { project: existing, already: true };
-      throw new Error(`Project ${id} already exists with different input.`);
+      if (!update) throw new Error(`Project ${id} already exists with different input.`);
+      this.database.connection.prepare(projectUpdate).run(
+        input.name, input.root, input.root, input.pipelineRoot, input.defaultPipeline, this.now(), id,
+      );
+      return { project: this.getProject(id)!, already: false };
     }
     const at = this.now();
     this.database.connection.prepare(projectInsert).run(
-      id, input.name, input.cwd, input.defaultPipeline, at, at,
+      id, input.name, input.root, input.root, input.pipelineRoot, input.defaultPipeline, at, at,
     );
     return { project: this.getProject(id)!, already: false };
   }
@@ -322,7 +415,8 @@ function mapProject(row: Record<string, unknown>): Project {
   return {
     id: String(row.id),
     name: String(row.name),
-    cwd: String(row.cwd),
+    root: String(row.root || row.cwd),
+    pipelineRoot: String(row.pipelineRoot),
     defaultPipeline: String(row.defaultPipeline),
     createdAt: String(row.createdAt),
     updatedAt: String(row.updatedAt),
@@ -344,6 +438,8 @@ function mapBlob(row: Record<string, unknown>): Blob {
     lastCompletedStepId: nullableString(row.lastCompletedStepId),
     lastCompletedOrder: nullableNumber(row.lastCompletedOrder),
     forcedStepId: nullableString(row.forcedStepId),
+    humanGateStepId: nullableString(row.humanGateStepId),
+    humanGateApprovalInputId: nullableString(row.humanGateApprovalInputId),
     createdAt: String(row.createdAt),
     updatedAt: String(row.updatedAt),
   };
@@ -363,6 +459,11 @@ function mapReceipt(row: Record<string, unknown>): Receipt {
     inputArtifacts: JSON.parse(String(row.inputArtifactsJson)) as string[],
     outputArtifacts: JSON.parse(String(row.outputArtifactsJson)) as string[],
     externalRunId: nullableString(row.externalRunId),
+    continuationThreadId: nullableString(row.continuationThreadId),
+    humanInputs: JSON.parse(String(row.humanInputJson || "[]")) as HumanInput[],
+    approvalEvidence: row.approvalEvidenceJson
+      ? JSON.parse(String(row.approvalEvidenceJson)) as HumanInput
+      : null,
     reason: nullableString(row.reason),
     error: nullableString(row.error),
     startedAt: String(row.startedAt),
@@ -383,8 +484,22 @@ function sameBlobInput(blob: Blob, input: BlobInput): boolean {
 
 function sameProjectInput(project: Project, input: ProjectInput): boolean {
   return project.name === input.name
-    && project.cwd === input.cwd
+    && project.root === input.root
+    && project.pipelineRoot === input.pipelineRoot
     && project.defaultPipeline === input.defaultPipeline;
+}
+
+function mapHumanInput(row: Record<string, unknown>): HumanInput {
+  return {
+    id: String(row.id),
+    blobId: String(row.blobId),
+    stepId: String(row.stepId),
+    kind: row.kind as HumanInputKind,
+    text: String(row.text),
+    evidence: JSON.parse(String(row.evidenceJson)) as string[],
+    createdAt: String(row.createdAt),
+    receiptId: nullableString(row.receiptId),
+  };
 }
 
 function nullableString(value: unknown): string | null {
@@ -421,15 +536,21 @@ const blobNext = `SELECT * FROM blobs WHERE state != 'complete' AND paused = 0
   ORDER BY updatedAt, createdAt LIMIT 1`;
 const blobPauseUpdate = "UPDATE blobs SET paused = ?, updatedAt = ? WHERE id = ?";
 const blobCompleteUpdate = `UPDATE blobs SET state = 'complete', paused = 0,
-  forcedStepId = NULL, updatedAt = ? WHERE id = ?`;
+  forcedStepId = NULL, humanGateStepId = NULL, humanGateApprovalInputId = NULL,
+  updatedAt = ? WHERE id = ?`;
 const blobAdvanceUpdate = `UPDATE blobs SET state = ?, paused = ?, lastCompletedStepId = ?,
-  lastCompletedOrder = ?, forcedStepId = NULL, updatedAt = ? WHERE id = ?`;
+  lastCompletedOrder = ?, forcedStepId = NULL, humanGateStepId = NULL,
+  humanGateApprovalInputId = NULL, updatedAt = ? WHERE id = ?`;
 const blobRewindUpdate = `UPDATE blobs SET state = ?, paused = 0, lastCompletedStepId = ?,
-  lastCompletedOrder = ?, forcedStepId = ?, updatedAt = ? WHERE id = ?`;
+  lastCompletedOrder = ?, forcedStepId = ?, humanGateStepId = NULL,
+  humanGateApprovalInputId = NULL, updatedAt = ? WHERE id = ?`;
+const blobHumanGateUpdate = `UPDATE blobs SET humanGateStepId = ?,
+  humanGateApprovalInputId = ?, paused = ?, updatedAt = ? WHERE id = ?`;
 const receiptInsert = `INSERT INTO receipts
   (id, blobId, stepId, stepOrder, attempt, status, adapter, definitionGitSha,
-   definitionHash, inputArtifactsJson, outputArtifactsJson, startedAt)
-  VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, '[]', ?)`;
+   definitionHash, inputArtifactsJson, outputArtifactsJson, continuationThreadId,
+   humanInputJson, approvalEvidenceJson, startedAt)
+  VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, '[]', ?, ?, ?, ?)`;
 const receiptSelect = "SELECT * FROM receipts WHERE id = ?";
 const receiptList = "SELECT * FROM receipts ORDER BY startedAt, stepOrder, attempt";
 const receiptListByBlob = "SELECT * FROM receipts WHERE blobId = ? ORDER BY startedAt, stepOrder, attempt";
@@ -446,6 +567,18 @@ const runningReceiptList = `SELECT receipts.* FROM receipts JOIN blobs ON blobs.
 const runningReceiptByBlob = `SELECT 1 FROM receipts WHERE blobId = ?
   AND status = 'running' AND invalidatedAt IS NULL LIMIT 1`;
 const attemptSelect = "SELECT COALESCE(MAX(attempt), 0) + 1 AS attempt FROM receipts WHERE blobId = ? AND stepId = ?";
+const receiptContinuationSelect = `SELECT externalRunId FROM receipts WHERE blobId = ?
+  AND stepId = ? AND invalidatedAt IS NULL AND externalRunId IS NOT NULL
+  ORDER BY attempt DESC LIMIT 1`;
+const humanInputInsert = `INSERT INTO humanInputs
+  (id, blobId, stepId, kind, text, evidenceJson, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)`;
+const humanInputSelect = "SELECT * FROM humanInputs WHERE id = ?";
+const humanInputList = "SELECT * FROM humanInputs ORDER BY createdAt, id";
+const humanInputListByBlob = "SELECT * FROM humanInputs WHERE blobId = ? ORDER BY createdAt, id";
+const humanInputPendingList = `SELECT * FROM humanInputs WHERE blobId = ? AND stepId = ?
+  AND receiptId IS NULL ORDER BY createdAt, id`;
+const humanInputReceiptUpdate = `UPDATE humanInputs SET receiptId = ?
+  WHERE blobId = ? AND stepId = ? AND receiptId IS NULL`;
 const leaseDeleteExpired = "DELETE FROM dispatcherLeases WHERE name = 'runner' AND leaseUntil <= ?";
 const leaseInsert = `INSERT OR IGNORE INTO dispatcherLeases
   (name, ownerId, leaseUntil, updatedAt) VALUES ('runner', ?, ?, ?)`;
@@ -455,7 +588,10 @@ const leaseRelease = "DELETE FROM dispatcherLeases WHERE name = 'runner' AND own
 const activeLeaseSelect = `SELECT 1 FROM dispatcherLeases
   WHERE name = 'runner' AND ownerId = ? AND leaseUntil > ?`;
 const projectInsert = `INSERT INTO projects
-  (id, name, cwd, defaultPipeline, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?)`;
+  (id, name, cwd, root, pipelineRoot, defaultPipeline, createdAt, updatedAt)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
+const projectUpdate = `UPDATE projects SET name = ?, cwd = ?, root = ?, pipelineRoot = ?,
+  defaultPipeline = ?, updatedAt = ? WHERE id = ?`;
 const projectSelect = "SELECT * FROM projects WHERE id = ?";
 const projectList = "SELECT * FROM projects ORDER BY name, id";
 
@@ -465,6 +601,8 @@ import type {
   DefinitionSnapshot,
   Receipt,
   ReceiptStatus,
+  HumanInput,
+  HumanInputKind,
   StepDefinition,
   Blob,
   BlobInput,
@@ -475,3 +613,4 @@ import type {
 import type { FactorioDatabase } from "./Database.ts";
 import { randomUUID } from "node:crypto";
 import { discoverPipeline } from "./Pipeline.ts";
+import { dirname } from "node:path";

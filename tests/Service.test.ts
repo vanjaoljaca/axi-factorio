@@ -65,8 +65,8 @@ test("service records a failure then continues to the next blob", async () => {
   await running;
 
   assert.deepEqual(
-    fixture.store.listBlobs().map((blob) => [blob.state, blob.paused]),
-    [["plan.define", true], ["complete", false]],
+    Object.fromEntries(fixture.store.listBlobs().map((blob) => [blob.id, [blob.state, blob.paused]])),
+    { "blob-1": ["plan.define", true], "blob-2": ["complete", false] },
   );
   fixture.database.close();
 });

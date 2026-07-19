@@ -12,6 +12,32 @@ test("runs entry and exit in one Codex thread through the adapter contract", asy
   assert.deepEqual(externalRuns, ["thread-fixture", "thread-fixture"]);
 });
 
+test("continues a human review cycle in the existing Codex thread", async () => {
+  const fixture = createAdapterFixture();
+  const input = adapterInput(fixture);
+  input.continuationThreadId = "thread-existing";
+  input.humanInputs = [{
+    id: "input-1",
+    blobId: "blob-1",
+    stepId: "plan.define",
+    kind: "feedback",
+    text: "Use the smaller spacing.",
+    evidence: ["voice-note:1"],
+    createdAt: "2026-07-19T00:00:01.000Z",
+    receiptId: null,
+  }];
+
+  const result = await fixture.adapter.execute(input, () => undefined);
+
+  const log = readFileSync(fixture.argsLog, "utf8");
+  const calls = log.split("\n").filter((line) => line.startsWith("exec "));
+  assert.equal(calls.length, 2);
+  assert.match(calls[0], /resume thread-existing/);
+  assert.match(log, /Use the smaller spacing/);
+  assert.match(calls[1], /resume thread-existing/);
+  assert.equal(result.externalRunId, "thread-existing");
+});
+
 test("rejects Windows before starting Codex", () => {
   assert.throws(
     () => new CodexAdapter("win32"),
@@ -80,12 +106,20 @@ function adapterInput(fixture: AdapterFixture): AdapterInput {
       lastCompletedStepId: null,
       lastCompletedOrder: null,
       forcedStepId: null,
+      projectId: "default",
+      pipelineId: "default/v1",
+      paused: false,
+      humanGateStepId: null,
+      humanGateApprovalInputId: null,
       createdAt: "2026-07-19T00:00:00.000Z",
       updatedAt: "2026-07-19T00:00:00.000Z",
     },
     step: { id: "plan.define", order: 0, entryPath: "", exitPath: "" },
     definition: { gitSha: "a".repeat(40), contentHash: "b".repeat(64), entry: "entry", exit: "exit" },
     inputArtifacts: ["ticket:1"],
+    continuationThreadId: null,
+    humanInputs: [],
+    approvalEvidence: null,
   };
 }
 
@@ -102,7 +136,11 @@ if [ "$FAKE_CODEX_MODE" = "descendant" ]; then
   printf '%s\\n' '{"type":"thread.started","thread_id":"thread-fixture"}'
   while :; do sleep 1; done
 fi
-printf '%s\\n' '{"type":"thread.started","thread_id":"thread-fixture"}'
+thread_id=thread-fixture
+case " $* " in
+  *" resume thread-existing "*) thread_id=thread-existing ;;
+esac
+printf '%s\\n' "{\\"type\\":\\"thread.started\\",\\"thread_id\\":\\"$thread_id\\"}"
 case " $* " in
   *" resume "*)
     printf '%s\\n' '{"type":"item.completed","item":{"type":"agent_message","text":"{\\"decision\\":\\"advance\\",\\"reason\\":\\"ready\\",\\"outputArtifacts\\":[\\"commit:abc\\"]}"}}'

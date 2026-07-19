@@ -32,18 +32,50 @@ export class FactorioDatabase {
   }
 
   private migrate(): void {
-    const columns = this.connection.prepare("PRAGMA table_info(blobs)").all() as Array<{ name: string }>;
-    if (!columns.some((column) => column.name === "paused")) {
-      this.connection.exec("ALTER TABLE blobs ADD COLUMN paused INTEGER NOT NULL DEFAULT 0");
-    }
-    if (!columns.some((column) => column.name === "pipelineId")) {
-      this.connection.exec("ALTER TABLE blobs ADD COLUMN pipelineId TEXT NOT NULL DEFAULT ''");
-    }
-    if (!columns.some((column) => column.name === "projectId")) {
+    this.addProjectColumns();
+    this.migrateBlobs();
+    this.migrateProjects();
+    this.migrateReceipts();
+  }
+
+  private addProjectColumns(): void {
+    const columns = tableColumns(this.connection, "projects");
+    addColumn(this.connection, columns, "root", "TEXT NOT NULL DEFAULT ''");
+    addColumn(this.connection, columns, "pipelineRoot", "TEXT NOT NULL DEFAULT ''");
+  }
+
+  private migrateProjects(): void {
+    const rows = this.connection.prepare("SELECT id, cwd, root, pipelineRoot FROM projects").all();
+    for (const value of rows) this.migrateProject(value as ProjectMigrationRow);
+  }
+
+  private migrateProject(row: ProjectMigrationRow): void {
+    const blob = this.connection.prepare("SELECT cwd FROM blobs WHERE projectId = ? LIMIT 1").get(row.id) as
+      | { cwd?: string }
+      | undefined;
+    const root = row.root || row.cwd || blob?.cwd || process.cwd();
+    const pipelineRoot = row.pipelineRoot || join(root, "pipelines");
+    this.connection.prepare(projectRootMigrationUpdate).run(root, pipelineRoot, root, row.id);
+  }
+
+  private migrateBlobs(): void {
+    const columns = tableColumns(this.connection, "blobs");
+    addColumn(this.connection, columns, "paused", "INTEGER NOT NULL DEFAULT 0");
+    addColumn(this.connection, columns, "pipelineId", "TEXT NOT NULL DEFAULT ''");
+    if (!columns.has("projectId")) {
       const at = new Date().toISOString();
       this.connection.prepare(projectMigrationInsert).run(at, at);
       this.connection.exec("ALTER TABLE blobs ADD COLUMN projectId TEXT NOT NULL DEFAULT 'default'");
     }
+    addColumn(this.connection, columns, "humanGateStepId", "TEXT");
+    addColumn(this.connection, columns, "humanGateApprovalInputId", "TEXT");
+  }
+
+  private migrateReceipts(): void {
+    const columns = tableColumns(this.connection, "receipts");
+    addColumn(this.connection, columns, "continuationThreadId", "TEXT");
+    addColumn(this.connection, columns, "humanInputJson", "TEXT NOT NULL DEFAULT '[]'");
+    addColumn(this.connection, columns, "approvalEvidenceJson", "TEXT");
   }
 }
 
@@ -52,6 +84,8 @@ const schema = `
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     cwd TEXT NOT NULL,
+    root TEXT NOT NULL,
+    pipelineRoot TEXT NOT NULL,
     defaultPipeline TEXT NOT NULL,
     createdAt TEXT NOT NULL,
     updatedAt TEXT NOT NULL
@@ -71,6 +105,8 @@ const schema = `
     lastCompletedStepId TEXT,
     lastCompletedOrder INTEGER,
     forcedStepId TEXT,
+    humanGateStepId TEXT,
+    humanGateApprovalInputId TEXT,
     createdAt TEXT NOT NULL,
     updatedAt TEXT NOT NULL
   );
@@ -90,6 +126,9 @@ const schema = `
     inputArtifactsJson TEXT NOT NULL,
     outputArtifactsJson TEXT NOT NULL,
     externalRunId TEXT,
+    continuationThreadId TEXT,
+    humanInputJson TEXT NOT NULL DEFAULT '[]',
+    approvalEvidenceJson TEXT,
     reason TEXT,
     error TEXT,
     startedAt TEXT NOT NULL,
@@ -100,6 +139,19 @@ const schema = `
 
   CREATE INDEX IF NOT EXISTS receiptsByBlob ON receipts(blobId, startedAt, stepOrder);
 
+  CREATE TABLE IF NOT EXISTS humanInputs (
+    id TEXT PRIMARY KEY,
+    blobId TEXT NOT NULL REFERENCES blobs(id),
+    stepId TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    text TEXT NOT NULL,
+    evidenceJson TEXT NOT NULL,
+    createdAt TEXT NOT NULL,
+    receiptId TEXT REFERENCES receipts(id)
+  );
+
+  CREATE INDEX IF NOT EXISTS humanInputsByBlob ON humanInputs(blobId, stepId, createdAt);
+
   CREATE TABLE IF NOT EXISTS dispatcherLeases (
     name TEXT PRIMARY KEY,
     ownerId TEXT NOT NULL,
@@ -109,9 +161,41 @@ const schema = `
 `;
 
 const projectMigrationInsert = `INSERT OR IGNORE INTO projects
-  (id, name, cwd, defaultPipeline, createdAt, updatedAt)
-  VALUES ('default', 'Default', '', 'default', ?, ?)`;
+  (id, name, cwd, root, pipelineRoot, defaultPipeline, createdAt, updatedAt)
+  VALUES ('default', 'Default', '', '', '', 'default', ?, ?)`;
+const projectRootMigrationUpdate = `UPDATE projects
+  SET root = ?, pipelineRoot = ?, cwd = ? WHERE id = ?`;
+
+function tableColumns(connection: DatabaseSync, table: string): Set<string> {
+  const rows = connection.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  return new Set(rows.map((row) => row.name));
+}
+
+function addColumn(
+  connection: DatabaseSync,
+  columns: Set<string>,
+  name: string,
+  definition: string,
+): void {
+  if (columns.has(name)) return;
+  connection.exec(`ALTER TABLE ${columnTables[name]} ADD COLUMN ${name} ${definition}`);
+  columns.add(name);
+}
+
+type ProjectMigrationRow = { id: string; cwd: string; root: string; pipelineRoot: string };
+
+const columnTables: Record<string, string> = {
+  root: "projects",
+  pipelineRoot: "projects",
+  paused: "blobs",
+  pipelineId: "blobs",
+  humanGateStepId: "blobs",
+  humanGateApprovalInputId: "blobs",
+  continuationThreadId: "receipts",
+  humanInputJson: "receipts",
+  approvalEvidenceJson: "receipts",
+};
 
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";

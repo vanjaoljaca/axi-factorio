@@ -45,12 +45,22 @@ export class ConveyorRunner {
   ): Promise<void> {
     try {
       const result = await this.adapter.execute(
-        { ...claim, inputArtifacts: claim.receipt.inputArtifacts, signal },
+        {
+          blob: claim.blob,
+          step: claim.step,
+          definition: claim.definition,
+          inputArtifacts: claim.receipt.inputArtifacts,
+          continuationThreadId: claim.receipt.continuationThreadId,
+          humanInputs: claim.receipt.humanInputs,
+          approvalEvidence: claim.receipt.approvalEvidence,
+          signal,
+        },
         (externalRunId) => this.store.recordExternalRun(claim.receipt.id, externalRunId, ownerId),
       );
       const nextStepId = followingStep(claim.step, steps)?.id ?? null;
       const blob = this.store.completeReceipt(claim.receipt.id, result, nextStepId, ownerId);
-      log("receipt_completed", { receiptId: claim.receipt.id, status: result.status, blobState: blob.state });
+      const status = this.store.listReceipts(blob.id).find((receipt) => receipt.id === claim.receipt.id)?.status;
+      log("receipt_completed", { receiptId: claim.receipt.id, status, blobState: blob.state });
     } catch (error) {
       if (signal?.aborted) return this.interrupt(claim, ownerId);
       this.store.failReceipt(claim.receipt.id, error, ownerId);
