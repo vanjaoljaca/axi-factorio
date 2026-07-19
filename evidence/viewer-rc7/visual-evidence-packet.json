@@ -1,0 +1,65 @@
+{
+  "packetType": "combined",
+  "gatePhase": "final",
+  "title": "axi-factorio rc.7 neutral viewer state language",
+  "sourceThread": "019f7866-71bb-7fd3-9714-44d9a9232f24",
+  "owner": "axi-factorio viewer implementation lane",
+  "branch": "main",
+  "worktree": "/Users/codex/Documents/axi-factorio",
+  "target": "http://127.0.0.1:4317/",
+  "targetSurface": "web",
+  "viewport": "1280x720 desktop, light mode",
+  "intent": {
+    "requestBullets": [
+      "Remove blue, purple, green, and other stage-position colors from pipeline bands and beads.",
+      "Use neutral shape, outline, label, and weight to distinguish completed, current, and pending positions.",
+      "Keep imported or attested completion distinguishable without adding another position color.",
+      "Render healthy awaiting-human-review with explicit orange attention status, not red.",
+      "Reserve red for failed, error, or broken states."
+    ]
+  },
+  "viewStates": [
+    { "id": "completed", "label": "Neutral solid checked bead.", "requests": [1, 2] },
+    { "id": "imported", "label": "Neutral dashed diamond with check.", "requests": [1, 3] },
+    { "id": "current", "label": "Neutral outlined current ring.", "requests": [1, 2] },
+    { "id": "awaiting-review", "label": "Orange double ring plus Awaiting review text.", "requests": [2, 4] },
+    { "id": "pending", "label": "Muted neutral dot.", "requests": [1, 2] },
+    { "id": "failed", "label": "Red outlined × reserved for exceptional state.", "requests": [5] }
+  ],
+  "storyboardMatrix": [],
+  "pairedStateMatrix": [],
+  "screenshots": [
+    {
+      "id": "shot-plan",
+      "path": "plan.png",
+      "title": "All rc.7 bead and status variants",
+      "sourceIdentity": "local rc.7 plan.html",
+      "sourceIdentityStatus": "verified",
+      "pixelDimensions": { "width": 1280, "height": 720 },
+      "sha256": "7dc2366788ef0670dd61de71f3f65699f59dc39b6434d85e8f29c52070c5df97"
+    },
+    {
+      "id": "shot-viewer",
+      "path": "viewer.png",
+      "title": "Live Codex trial blob rendered by rc.7 source Viewer",
+      "sourceIdentity": "multilingual-study-affordance at workbench.review in /Users/codex/Documents/Codex/pipelines/axi-factorio.db",
+      "sourceIdentityStatus": "verified",
+      "pixelDimensions": { "width": 1280, "height": 720 },
+      "sha256": "1aa093b20c217dc26560c7eda0de92473a4c31e64959bf0a8176c6a88411bf23"
+    }
+  ],
+  "requestScreenshotMap": [
+    { "request": 1, "screenshots": ["shot-plan", "shot-viewer"], "status": "covered" },
+    { "request": 2, "screenshots": ["shot-plan", "shot-viewer"], "status": "covered" },
+    { "request": 3, "screenshots": ["shot-plan", "shot-viewer"], "status": "covered" },
+    { "request": 4, "screenshots": ["shot-plan", "shot-viewer"], "status": "covered" },
+    { "request": 5, "screenshots": ["shot-plan"], "status": "covered" }
+  ],
+  "review": {
+    "verdict": "passed",
+    "reviewer": "Independent corrected_viewer_visual_qa lane",
+    "nextOwner": "builder for rc.7 release",
+    "findings": []
+  },
+  "knownLimits": "The live screenshot covers imported completion and awaiting review, not a live failed row; failed rendering is covered by the read-model regression test and independent code inspection. The workspace visual packet validator and renderer named by the installed skill are not present in this checkout, so JSON validity and screenshot coverage were checked locally."
+}

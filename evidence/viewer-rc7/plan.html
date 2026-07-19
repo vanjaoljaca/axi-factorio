@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width">
+  <title>axi-factorio rc.7 state-language plan</title>
+  <style>
+    :root { color-scheme: light; --ink:#18201b; --muted:#737d77; --quiet:#bfc6c2; --line:#dce2de; --attention:#c87918; --danger:#ce5353; }
+    * { box-sizing: border-box; }
+    body { margin:0; padding:32px; color:var(--ink); background:#fff; font:13px/1.45 Inter,ui-sans-serif,sans-serif; }
+    h1 { margin:0 0 5px; font-size:20px; } p { margin:0 0 28px; color:var(--muted); }
+    .states { display:grid; grid-template-columns:repeat(6,minmax(135px,1fr)); border:1px solid var(--line); }
+    .state { min-height:150px; display:grid; place-items:center; align-content:center; gap:16px; border-right:1px solid var(--line); }
+    .state:last-child { border:0; } .state strong { font-size:12px; } .state small { color:var(--muted); text-align:center; max-width:130px; }
+    .bead { position:relative; display:block; width:10px; height:10px; border-radius:50%; background:var(--quiet); }
+    .done { width:13px; height:13px; background:var(--ink); }
+    .done:after { content:"✓"; position:absolute; inset:-1px 0 0; color:#fff; text-align:center; font-size:9px; font-weight:800; }
+    .imported { width:13px; height:13px; border-radius:2px; background:#fff; border:1.5px dashed #69736d; transform:rotate(45deg); }
+    .imported:after { content:"✓"; position:absolute; inset:-2px 0 0; color:#56605a; text-align:center; font-size:9px; font-weight:800; transform:rotate(-45deg); }
+    .current { width:14px; height:14px; background:#fff; border:2px solid var(--ink); box-shadow:0 0 0 2px #e7ebe8; }
+    .waiting { width:14px; height:14px; background:#fff; border:2px double var(--attention); box-shadow:0 0 0 2px #faecd9; }
+    .blocked { width:14px; height:14px; background:#fff; border:2px solid var(--danger); box-shadow:0 0 0 2px #f8e7e7; }
+    .blocked:after { content:"×"; position:absolute; inset:-4px 0 0; color:var(--danger); text-align:center; font-size:12px; font-weight:800; }
+    .invariant { margin-top:24px; padding:16px; border:1px solid var(--line); background:#fafbfa; }
+  </style>
+</head>
+<body>
+  <h1>Viewer state language — rc.7 plan</h1>
+  <p>Pipeline position is neutral. Color is reserved for exceptional execution state.</p>
+  <section class="states">
+    <div class="state"><i class="bead done"></i><strong>Completed</strong><small>Neutral solid bead with check.</small></div>
+    <div class="state"><i class="bead imported"></i><strong>Imported</strong><small>Dashed diamond with check; attested, not automated.</small></div>
+    <div class="state"><i class="bead current"></i><strong>Current</strong><small>Neutral outlined ring; shape carries focus.</small></div>
+    <div class="state"><i class="bead waiting"></i><strong>Awaiting review</strong><small>Orange double ring plus explicit attention text.</small></div>
+    <div class="state"><i class="bead"></i><strong>Pending</strong><small>Muted neutral dot.</small></div>
+    <div class="state"><i class="bead blocked"></i><strong>Failed / broken</strong><small>Red outline and ×; exceptional only.</small></div>
+  </section>
+  <div class="invariant"><strong>Forbidden:</strong> DEV/BETA/PROD band colors, green completed stages, blue current stages, purple later groups, or any other position rainbow.</div>
+</body>
+</html>
