@@ -20,9 +20,13 @@ The source repo contains a scenario lab for developing axi-factorio itself:
 npm run workbench
 ```
 
-Then open `http://127.0.0.1:4317`. Use `-- --db path/to/factorio.db` to inspect
+Then open `http://127.0.0.1:4318`. Use `-- --db path/to/factorio.db` to inspect
 a specific runtime database. The scenario lab and database inspector render
 through the same conveyor, receipt-stream, and assertion views.
+
+Port `4317` belongs to the installed user viewer. The Workbench defaults to
+`4318` and refuses to start on the configured viewer port. When the viewer uses
+a non-default port, pass it with `-- --viewer-port <port>`.
 
 The default happy-path scenario calls `createTestHarness()`, loads the paired
 definitions in `test/harness/default/`, creates a fresh temporary SQLite

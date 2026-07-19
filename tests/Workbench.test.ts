@@ -2,7 +2,7 @@ test("workbench catalog lists every test with an explicit visual representation"
   const catalog = listVisualTests();
   const names = catalog.map((item) => item.name);
 
-  assert.equal(catalog.length, 42);
+  assert.equal(catalog.length, 43);
   assert.equal(new Set(catalog.map((item) => item.category)).size, 10);
   assert(names.includes("default harness pushes a blob through the actual conveyor"));
   assert(catalog.every((item) => item.visualLabel && item.visualDescription));
@@ -21,10 +21,21 @@ test("workbench runs the actual selected test and returns replayable proof frame
   assert.equal(result.frames.at(-1)?.status, "passed");
 });
 
+test("workbench defaults away from the user viewer and rejects its configured port", () => {
+  assert.equal(workbenchPort(["node", "workbench"]), 4318);
+  assert.equal(workbenchPort(["node", "workbench", "--port", "4319"]), 4319);
+  assert.throws(
+    () => workbenchPort(["node", "workbench", "--port", "4400", "--viewer-port", "4400"]),
+    /conflicts with the user viewer port/,
+  );
+  assert.throws(() => workbenchPort(["node", "workbench", "--port", "4317"]), /conflicts/);
+});
+
 import {
   getVisualTest,
   listVisualTests,
   runVisualTest,
 } from "../test/visual/TestCatalog.ts";
+import { workbenchPort } from "../src/WorkbenchPort.ts";
 import assert from "node:assert/strict";
 import test from "node:test";

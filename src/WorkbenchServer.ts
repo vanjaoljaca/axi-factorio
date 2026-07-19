@@ -19,7 +19,7 @@ type ViewSnapshot = {
 };
 type Scenario = { id: string; frames: ViewSnapshot[] };
 
-const port = Number(argument("--port") ?? "4317");
+const port = workbenchPort(process.argv);
 const databasePath = resolve(argument("--db") ?? "pipelines/axi-factorio.db");
 const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? "/", `http://127.0.0.1:${port}`);
@@ -228,3 +228,4 @@ import type { Blob, Receipt } from "./Types.ts";
 import { discoverPipeline } from "./Pipeline.ts";
 import type { TestHarness } from "../test/harness/CreateTestHarness.ts";
 import { getVisualTest, listVisualTests, runVisualTest } from "../test/visual/TestCatalog.ts";
+import { workbenchPort } from "./WorkbenchPort.ts";
