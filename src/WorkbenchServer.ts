@@ -71,16 +71,26 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 }
 
 function scenarioIndex(): object[] {
-  return [{
-    id: "happy", name: "Default happy path",
-    description: "Real runner · fresh SQLite · test/harness/default",
-  }];
+  return [
+    {
+      id: "happy", name: "Default happy path",
+      description: "Real runner · fresh SQLite · test/harness/default",
+    },
+    {
+      id: "codex-active-turn", name: "Active Codex reconciliation",
+      description: "notLoaded container · fresh active turn · production receipt path",
+    },
+  ];
 }
 
 async function scenario(url: URL): Promise<Scenario> {
   const id = url.pathname.split("/").at(-1);
-  if (id !== "happy") throw new Error(`Unknown scenario: ${id}`);
-  return runHappyPath();
+  if (id === "happy") return runHappyPath();
+  if (id === "codex-active-turn") {
+    const { runCodexActiveTurnScenario } = await import("../test/harness/CodexActiveTurnScenario.ts");
+    return runCodexActiveTurnScenario();
+  }
+  throw new Error(`Unknown scenario: ${id}`);
 }
 
 function databaseSnapshot(): ViewSnapshot {

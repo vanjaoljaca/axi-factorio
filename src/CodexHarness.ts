@@ -389,7 +389,9 @@ function codexThreadState(thread: CodexThread, externalRunId: string): HarnessEx
     return { status: "failed", reason: `Codex external task ${externalRunId} reported systemError.` };
   }
   const latest = thread.turns.at(-1);
-  if (!latest || ["completed", "inProgress"].includes(latest.status)) return { status: "running" };
+  if (!latest) return missingTurnState(thread, externalRunId);
+  if (["completed", "inProgress"].includes(latest.status)) return { status: "running" };
+  if (isFreshIncompleteTurn(thread, latest)) return { status: "running" };
   const unloaded = thread.status.type === "notLoaded" ? " while notLoaded" : "";
   if (latest.status === "interrupted") {
     return {
@@ -401,6 +403,30 @@ function codexThreadState(thread: CodexThread, externalRunId: string): HarnessEx
     status: "failed",
     reason: `Codex external task ${externalRunId} turn ${latest.id} failed: ${errorText(latest.error)}.`,
   };
+}
+
+function missingTurnState(thread: CodexThread, externalRunId: string): HarnessExternalState {
+  if (isFresh(thread.updatedAt)) return { status: "running" };
+  return {
+    status: "missing",
+    reason: `Codex external task ${externalRunId} had no active turn after the activity timeout.`,
+  };
+}
+
+function isFreshIncompleteTurn(thread: CodexThread, turn: CodexTurn): boolean {
+  return thread.status.type === "notLoaded"
+    && turn.status === "interrupted"
+    && turn.completedAt == null
+    && turn.error == null
+    && isFresh(thread.updatedAt);
+}
+
+function isFresh(updatedAt: number): boolean {
+  return Date.now() - epochMilliseconds(updatedAt) < activeTurnFreshnessMs;
+}
+
+function epochMilliseconds(value: number): number {
+  return value < 1_000_000_000_000 ? value * 1_000 : value;
 }
 
 function isMissingThread(error: unknown): boolean {
@@ -435,7 +461,15 @@ type AppServerResponse = {
 type CodexLifecycleReader = (externalRunId: string) => Promise<HarnessExternalState>;
 type CodexThread = {
   status: { type: "notLoaded" | "idle" | "systemError" | "active" };
-  turns: Array<{ id: string; status: "completed" | "interrupted" | "failed" | "inProgress"; error: unknown }>;
+  updatedAt: number;
+  turns: CodexTurn[];
+};
+type CodexTurn = {
+  id: string;
+  status: "completed" | "interrupted" | "failed" | "inProgress";
+  error?: unknown;
+  completedAt?: number | null;
+  items?: Array<{ type?: string }>;
 };
 type CodexInput = HarnessRunInput & {
   continuationThreadId: string | null;
@@ -448,6 +482,7 @@ const exitSchemaPath = fileURLToPath(new URL("./exit-result.schema.json", import
 const terminationGraceMs = 2_000;
 const processCheckMs = 10;
 const lifecycleProbeTimeoutMs = 10_000;
+const activeTurnFreshnessMs = 5 * 60_000;
 const initializeParams = {
   clientInfo: { name: "axi-factorio", title: "axi-factorio Codex harness", version: "0.1" },
   capabilities: null,

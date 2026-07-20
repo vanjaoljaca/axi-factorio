@@ -629,7 +629,7 @@ function serviceAbortController(): AbortController {
 }
 
 function printVersion(): void {
-  process.stdout.write("axi-factorio 0.1.0-rc.13\n");
+  process.stdout.write("axi-factorio 0.1.0-rc.14\n");
 }
 
 function helpCommand(args: string[]): string | undefined {
@@ -682,7 +682,7 @@ const harnessFlags: FlagSpec = {
 };
 
 const helpText: Record<string, string> = {
-  root: `axi-factorio 0.1.0-rc.13
+  root: `axi-factorio 0.1.0-rc.14
 
 Usage: axi-factorio <command> [flags]
 Commands: project, add, adopt, list, status, show, receipts, play, step, stop, retry, review, feedback, approve, rewind, kick, run, service, init

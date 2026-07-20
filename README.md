@@ -140,7 +140,10 @@ The Codex harness reconciles known external thread IDs through the Codex
 app-server lifecycle. Two matching terminal observations are required before a
 provider process is cancelled and its receipt fails. `notLoaded` alone means
 the thread is unloaded, not failed; an interrupted or failed latest turn is
-terminal. The failed attempt remains append-only and paused. An explicit
+terminal only when it has genuine terminal evidence. A fresh incomplete turn
+remains active even when an unloaded app-server snapshot temporarily labels it
+interrupted. An incomplete turn with no activity for five minutes may
+terminalize. The failed attempt remains append-only and paused. An explicit
 `retry` creates a new receipt that resumes the same external thread ID. Service
 restart recovery also terminalizes and pauses orphaned running receipts instead
 of silently auto-running them.
@@ -174,7 +177,7 @@ npm run build
 
 This recreates `release/` with:
 
-- `axi-factorio-0.1.0-rc.13.tgz`, the installable package;
+- `axi-factorio-0.1.0-rc.14.tgz`, the installable package;
 - `SHA256SUMS`, for artifact verification; and
 - `INSTALL.md`, with direct and vendored installation commands.
 
@@ -186,7 +189,7 @@ Do not use `npm link` for a consuming project. Install the exact tarball so
 Install the exact candidate in the consuming npm project:
 
 ```sh
-npm install --save-exact /path/to/axi-factorio-0.1.0-rc.13.tgz
+npm install --save-exact /path/to/axi-factorio-0.1.0-rc.14.tgz
 ```
 
 From the consuming project root, the defaults are:
@@ -308,7 +311,7 @@ external task. Approval requires at least one evidence reference. The prompt
 still decides whether the step passes; Factorio only supplies and records the
 human evidence.
 
-Opening an rc.4 through rc.12 database with rc.13 migrates projects, receipt
+Opening an rc.4 through rc.13 database with rc.14 migrates projects, receipt
 provenance, durable execution-control columns, blob revisions, and immutable
 attempt evidence automatically. Existing
 blobs migrate in the stopped continuous mode. The old
@@ -335,7 +338,7 @@ Rewind-and-rerun invalidates the selected step for progression while keeping
 all prior receipts available for side-by-side comparison.
 
 Future multi-pipeline integration is deliberately parked in [ROADMAP.md](ROADMAP.md)
-under **pipeline merger**. rc.13 does not implement it.
+under **pipeline merger**. rc.14 does not implement it.
 
 Explicitly move it back to a step:
 

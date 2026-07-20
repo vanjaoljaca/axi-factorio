@@ -1,6 +1,6 @@
 {
   "name": "axi-factorio",
-  "version": "0.1.0-rc.13",
+  "version": "0.1.0-rc.14",
   "description": "A deliberately dumb SQLite conveyor for tool-driven work.",
   "license": "MIT",
   "type": "module",
