@@ -111,6 +111,7 @@ and approval evidence. The contract defines:
 
 - start and same-step resume;
 - graceful cancellation;
+- optional external-run reconciliation;
 - structured status, external-run, and artifact events; and
 - a terminal `advance`, `retry`, or `blocked` decision with reason and artifacts.
 
@@ -128,12 +129,21 @@ records the Codex thread ID, and resumes that same thread with the exit prompt.
 When fresh human input is appended at the current step, the next receipt resumes
 that same Codex thread before evaluating the exit prompt again.
 
-In rc.10, continuation is intentionally step-scoped: retries, blocked reviews,
+Continuation is intentionally step-scoped: retries, blocked reviews,
 feedback, and approval cycles reuse the current step's Codex thread, while the
 next pipeline step starts a fresh thread. This preserves phase isolation but
 repays Codex's startup context cost at every step. Reusing one blob-owned thread
 across ordinary steps is a separate harness-lifecycle decision, not an implicit
-rc.10 behavior.
+behavior.
+
+The Codex harness reconciles known external thread IDs through the Codex
+app-server lifecycle. Two matching terminal observations are required before a
+provider process is cancelled and its receipt fails. `notLoaded` alone means
+the thread is unloaded, not failed; an interrupted or failed latest turn is
+terminal. The failed attempt remains append-only and paused. An explicit
+`retry` creates a new receipt that resumes the same external thread ID. Service
+restart recovery also terminalizes and pauses orphaned running receipts instead
+of silently auto-running them.
 
 Optional instrumentation uses the same module selector form with
 `--instrumentation`. It receives OpenTelemetry-compatible boundary event names
@@ -160,7 +170,7 @@ npm run build
 
 This recreates `release/` with:
 
-- `axi-factorio-0.1.0-rc.11.tgz`, the installable package;
+- `axi-factorio-0.1.0-rc.12.tgz`, the installable package;
 - `SHA256SUMS`, for artifact verification; and
 - `INSTALL.md`, with direct and vendored installation commands.
 
@@ -172,7 +182,7 @@ Do not use `npm link` for a consuming project. Install the exact tarball so
 Install the exact candidate in the consuming npm project:
 
 ```sh
-npm install --save-exact /path/to/axi-factorio-0.1.0-rc.11.tgz
+npm install --save-exact /path/to/axi-factorio-0.1.0-rc.12.tgz
 ```
 
 From the consuming project root, the defaults are:
@@ -294,7 +304,7 @@ external task. Approval requires at least one evidence reference. The prompt
 still decides whether the step passes; Factorio only supplies and records the
 human evidence.
 
-Opening an rc.4 through rc.10 database with rc.11 migrates projects, receipt
+Opening an rc.4 through rc.11 database with rc.12 migrates projects, receipt
 provenance, durable execution-control columns, blob revisions, and immutable
 attempt evidence automatically. Existing
 blobs migrate in the stopped continuous mode. The old
@@ -321,7 +331,7 @@ Rewind-and-rerun invalidates the selected step for progression while keeping
 all prior receipts available for side-by-side comparison.
 
 Future multi-pipeline integration is deliberately parked in [ROADMAP.md](ROADMAP.md)
-under **pipeline merger**. rc.11 does not implement it.
+under **pipeline merger**. rc.12 does not implement it.
 
 Explicitly move it back to a step:
 

@@ -11,6 +11,7 @@ export type HarnessBoundaryEvent = {
 export type HarnessBoundaryPhase =
   | "start"
   | "resume"
+  | "reconcile"
   | "event"
   | "terminal"
   | "cancel_requested"

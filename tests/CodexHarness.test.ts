@@ -47,6 +47,23 @@ test("rejects Windows before starting Codex", () => {
   );
 });
 
+test("reports exact interrupted external lifecycle through the generic contract", async () => {
+  const harness = new CodexHarness(process.platform, async (externalRunId) => ({
+    status: "interrupted",
+    reason: `Codex external task ${externalRunId} was interrupted while notLoaded.`,
+  }));
+
+  const state = await harness.reconcile!({
+    runId: "receipt-1",
+    externalRunId: "thread-interrupted",
+    blob: adapterInput(createAdapterFixture()).blob,
+    step: adapterInput(createAdapterFixture()).step,
+  });
+
+  assert.equal(state.status, "interrupted");
+  assert.match("reason" in state ? state.reason : "", /thread-interrupted.*notLoaded/);
+});
+
 test("rejects malformed Codex JSONL", async () => {
   const fixture = createAdapterFixture();
   process.env.FAKE_CODEX_MODE = "malformed";

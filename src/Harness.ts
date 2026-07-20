@@ -4,6 +4,7 @@ export interface AgentHarness {
   start(input: HarnessStartInput, observer: HarnessObserver): Promise<HarnessResult>;
   resume(input: HarnessResumeInput, observer: HarnessObserver): Promise<HarnessResult>;
   cancel(input: HarnessCancelInput): Promise<void>;
+  reconcile?(input: HarnessReconcileInput): Promise<HarnessExternalState>;
 }
 
 export type HarnessStartInput = HarnessRunInput;
@@ -24,6 +25,17 @@ export type HarnessCancelInput = {
   externalRunId: string | null;
   reason: string;
 };
+
+export type HarnessReconcileInput = {
+  runId: string;
+  externalRunId: string;
+  blob: Blob;
+  step: StepDefinition;
+};
+
+export type HarnessExternalState =
+  | { status: "running" }
+  | { status: "interrupted" | "failed" | "missing"; reason: string };
 
 export type HarnessResult = {
   decision: HarnessDecision;
@@ -49,6 +61,9 @@ export function assertAgentHarness(value: unknown): AgentHarness {
   }
   for (const method of ["start", "resume", "cancel"] as const) {
     if (typeof harness[method] !== "function") throw new Error(`Harness must implement ${method}().`);
+  }
+  if (harness.reconcile !== undefined && typeof harness.reconcile !== "function") {
+    throw new Error("Harness reconcile must be a function when provided.");
   }
   return harness as AgentHarness;
 }

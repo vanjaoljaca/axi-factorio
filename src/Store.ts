@@ -121,12 +121,12 @@ export class ConveyorStore {
     });
   }
 
-  interruptReceipt(receiptId: string, ownerId?: string): void {
+  interruptReceipt(receiptId: string, ownerId?: string, reason = "Dispatcher stopped before completion."): void {
     this.database.transaction(() => {
       this.requireActiveLease(ownerId);
       const receipt = this.requireReceipt(receiptId);
-      this.database.connection.prepare(receiptInterruptUpdate).run(this.now(), receipt.id);
-      this.database.connection.prepare(blobPauseUpdate).run(0, this.now(), receipt.blobId);
+      this.database.connection.prepare(receiptInterruptUpdate).run(reason, this.now(), receipt.id);
+      this.database.connection.prepare(blobPauseAndRunUpdate).run(1, 0, this.now(), receipt.blobId);
     });
   }
 
@@ -471,8 +471,10 @@ export class ConveyorStore {
   }
 
   private recoverReceipt(receipt: Receipt): void {
-    this.database.connection.prepare(receiptInterruptUpdate).run(this.now(), receipt.id);
-    this.database.connection.prepare(blobPauseUpdate).run(0, this.now(), receipt.blobId);
+    const external = receipt.externalRunId ?? "not recorded";
+    const reason = `Service restarted before external run ${external} produced a terminal result.`;
+    this.database.connection.prepare(receiptInterruptUpdate).run(reason, this.now(), receipt.id);
+    this.database.connection.prepare(blobPauseAndRunUpdate).run(1, 0, this.now(), receipt.blobId);
   }
 
   private requestExecution(blobId: string, mode: ExecutionMode): BlobMutationResult {
@@ -776,7 +778,6 @@ const blobNext = `SELECT * FROM blobs WHERE state != 'complete' AND paused = 0 A
   AND NOT EXISTS (SELECT 1 FROM receipts WHERE receipts.blobId = blobs.id
     AND receipts.status = 'running' AND receipts.invalidatedAt IS NULL)
   ORDER BY updatedAt, createdAt LIMIT 1`;
-const blobPauseUpdate = "UPDATE blobs SET paused = ?, updatedAt = ? WHERE id = ?";
 const blobPauseAndRunUpdate = "UPDATE blobs SET paused = ?, runRequested = ?, updatedAt = ? WHERE id = ?";
 const blobRunUpdate = "UPDATE blobs SET executionMode = ?, runRequested = 1, updatedAt = ? WHERE id = ?";
 const blobStopUpdate = "UPDATE blobs SET runRequested = 0, updatedAt = ? WHERE id = ?";
@@ -826,7 +827,8 @@ const receiptExternalRunUpdate = "UPDATE receipts SET externalRunId = ? WHERE id
 const receiptCompleteUpdate = `UPDATE receipts SET status = ?, outputArtifactsJson = ?,
   externalRunId = ?, reason = ?, finishedAt = ? WHERE id = ?`;
 const receiptFailureUpdate = "UPDATE receipts SET status = 'failed', error = ?, finishedAt = ? WHERE id = ?";
-const receiptInterruptUpdate = "UPDATE receipts SET status = 'interrupted', finishedAt = ? WHERE id = ?";
+const receiptInterruptUpdate = `UPDATE receipts SET status = 'interrupted',
+  error = ?, finishedAt = ? WHERE id = ?`;
 const receiptInvalidate = "UPDATE receipts SET invalidatedAt = ? WHERE id = ?";
 const validAdvancedReceiptList = `SELECT * FROM receipts WHERE blobId = ?
   AND status = 'advance' AND invalidatedAt IS NULL ORDER BY stepOrder, finishedAt`;

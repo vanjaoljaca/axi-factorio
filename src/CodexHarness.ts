@@ -2,11 +2,16 @@ export class CodexHarness implements AgentHarness {
   readonly name = "codex";
   readonly model = "codex-cli-default";
   private readonly active = new Map<string, ActiveRun>();
+  private readonly lifecycle: CodexLifecycleReader;
 
-  constructor(platform: NodeJS.Platform = process.platform) {
+  constructor(
+    platform: NodeJS.Platform = process.platform,
+    lifecycle: CodexLifecycleReader = readCodexLifecycle,
+  ) {
     if (platform === "win32") {
       throw new Error("Codex execution is unsupported on Windows because process-tree termination cannot be guaranteed.");
     }
+    this.lifecycle = lifecycle;
   }
 
   async start(input: HarnessStartInput, observer: HarnessObserver): Promise<HarnessResult> {
@@ -22,6 +27,10 @@ export class CodexHarness implements AgentHarness {
     if (!active) return;
     active.controller.abort(Object.assign(new Error(input.reason), { name: "AbortError" }));
     await active.done;
+  }
+
+  async reconcile(input: HarnessReconcileInput): Promise<HarnessExternalState> {
+    return this.lifecycle(input.externalRunId);
   }
 
   private async invoke(input: CodexInput, observer: HarnessObserver): Promise<HarnessResult> {
@@ -281,6 +290,132 @@ function parseExitResult(message: string): Pick<HarnessResult, "decision" | "rea
   };
 }
 
+async function readCodexLifecycle(externalRunId: string): Promise<HarnessExternalState> {
+  try {
+    const thread = await readCodexThread(externalRunId);
+    return codexThreadState(thread, externalRunId);
+  } catch (error) {
+    if (isMissingThread(error)) {
+      return { status: "missing", reason: `Codex external task ${externalRunId} was not found.` };
+    }
+    throw error;
+  }
+}
+
+async function readCodexThread(externalRunId: string): Promise<CodexThread> {
+  const child = spawn("codex", ["app-server", "--stdio"], { stdio: ["pipe", "pipe", "pipe"] });
+  const state = createAppServerState(child);
+  sendAppServerRequest(child, 1, "initialize", initializeParams);
+  return waitForThreadRead(child, state, externalRunId);
+}
+
+function waitForThreadRead(
+  child: ChildProcess,
+  state: AppServerState,
+  externalRunId: string,
+): Promise<CodexThread> {
+  return new Promise((resolve, reject) => {
+    const lines = createInterface({ input: child.stdout! });
+    const timeout = setTimeout(
+      () => finishAppServer(child, lines, reject, new Error("Codex lifecycle probe timed out.")),
+      lifecycleProbeTimeoutMs,
+    );
+    child.stderr?.on("data", (chunk) => captureAppServerStderr(state, chunk));
+    child.once("error", (error) => finishAppServer(child, lines, reject, error, timeout));
+    lines.on("line", (line) => handleAppServerLine(
+      child, lines, state, line, externalRunId, resolve, reject, timeout,
+    ));
+  });
+}
+
+function handleAppServerLine(
+  child: ChildProcess,
+  lines: ReturnType<typeof createInterface>,
+  state: AppServerState,
+  line: string,
+  externalRunId: string,
+  resolve: (thread: CodexThread) => void,
+  reject: (error: Error) => void,
+  timeout: NodeJS.Timeout,
+): void {
+  const response = JSON.parse(line) as AppServerResponse;
+  if (response.id === 1) {
+    sendAppServerRequest(child, 2, "thread/read", { threadId: externalRunId, includeTurns: true });
+    return;
+  }
+  if (response.id !== 2) return;
+  if (response.error) {
+    finishAppServer(child, lines, reject, new Error(JSON.stringify(response.error)), timeout);
+    return;
+  }
+  clearTimeout(timeout);
+  lines.close();
+  child.kill("SIGTERM");
+  resolve(response.result!.thread);
+}
+
+function finishAppServer(
+  child: ChildProcess,
+  lines: ReturnType<typeof createInterface>,
+  reject: (error: Error) => void,
+  error: Error,
+  timeout?: NodeJS.Timeout,
+): void {
+  if (timeout) clearTimeout(timeout);
+  lines.close();
+  child.kill("SIGTERM");
+  reject(error);
+}
+
+function sendAppServerRequest(
+  child: ChildProcess,
+  id: number,
+  method: string,
+  params: Record<string, unknown>,
+): void {
+  child.stdin?.write(`${JSON.stringify({ id, method, params })}\n`);
+}
+
+function createAppServerState(_child: ChildProcess): AppServerState {
+  return { stderr: "" };
+}
+
+function captureAppServerStderr(state: AppServerState, chunk: unknown): void {
+  state.stderr = `${state.stderr}${String(chunk)}`.slice(-8_000);
+}
+
+function codexThreadState(thread: CodexThread, externalRunId: string): HarnessExternalState {
+  if (thread.status.type === "systemError") {
+    return { status: "failed", reason: `Codex external task ${externalRunId} reported systemError.` };
+  }
+  const latest = thread.turns.at(-1);
+  if (!latest || ["completed", "inProgress"].includes(latest.status)) return { status: "running" };
+  const unloaded = thread.status.type === "notLoaded" ? " while notLoaded" : "";
+  if (latest.status === "interrupted") {
+    return {
+      status: "interrupted",
+      reason: `Codex external task ${externalRunId} turn ${latest.id} was interrupted${unloaded}.`,
+    };
+  }
+  return {
+    status: "failed",
+    reason: `Codex external task ${externalRunId} turn ${latest.id} failed: ${errorText(latest.error)}.`,
+  };
+}
+
+function isMissingThread(error: unknown): boolean {
+  return /not found|unknown thread|thread.*missing/iu.test(errorMessage(error));
+}
+
+function errorText(error: unknown): string {
+  if (!error) return "no provider error was reported";
+  return typeof error === "string" ? error : JSON.stringify(error);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 type CodexStreamEvent = {
   type?: string;
   thread_id?: string;
@@ -291,6 +426,17 @@ type ProcessState = { externalRunId: string | null; finalMessage: string; stderr
 type ProcessResult = { externalRunId: string; finalMessage: string };
 type AbortWait = { promise: Promise<never>; dispose: () => void };
 type ActiveRun = { controller: AbortController; done: Promise<void> };
+type AppServerState = { stderr: string };
+type AppServerResponse = {
+  id?: number;
+  result?: { thread: CodexThread };
+  error?: unknown;
+};
+type CodexLifecycleReader = (externalRunId: string) => Promise<HarnessExternalState>;
+type CodexThread = {
+  status: { type: "notLoaded" | "idle" | "systemError" | "active" };
+  turns: Array<{ id: string; status: "completed" | "interrupted" | "failed" | "inProgress"; error: unknown }>;
+};
 type CodexInput = HarnessRunInput & {
   continuationThreadId: string | null;
   signal?: AbortSignal;
@@ -301,12 +447,19 @@ const runtimeMarker = "---\naxi-factorio runtime context";
 const exitSchemaPath = fileURLToPath(new URL("./exit-result.schema.json", import.meta.url));
 const terminationGraceMs = 2_000;
 const processCheckMs = 10;
+const lifecycleProbeTimeoutMs = 10_000;
+const initializeParams = {
+  clientInfo: { name: "axi-factorio", title: "axi-factorio Codex harness", version: "0.1" },
+  capabilities: null,
+};
 
 import type { HarnessDecision } from "./Types.ts";
 import type {
   AgentHarness,
   HarnessCancelInput,
+  HarnessExternalState,
   HarnessObserver,
+  HarnessReconcileInput,
   HarnessResult,
   HarnessResumeInput,
   HarnessRunInput,

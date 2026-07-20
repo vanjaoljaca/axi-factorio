@@ -54,6 +54,9 @@ test("service shutdown interrupts the receipt without changing its position", as
 
   assert.equal(fixture.store.getBlob("blob-1")?.state, "plan.define");
   assert.equal(fixture.store.listReceipts("blob-1")[0].status, "interrupted");
+  assert.equal(fixture.store.getBlob("blob-1")?.paused, true);
+  assert.equal(fixture.store.getBlob("blob-1")?.runRequested, false);
+  assert.match(fixture.store.listReceipts("blob-1")[0].error ?? "", /aborted|Dispatcher stopped/i);
   assert.equal(harness.cancelled, true);
   fixture.database.close();
 });

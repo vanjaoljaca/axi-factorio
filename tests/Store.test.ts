@@ -168,6 +168,30 @@ test("stale lease owners cannot write receipts", () => {
   fixture.database.close();
 });
 
+test("restart recovery terminalizes and pauses an orphaned external run", () => {
+  const fixture = createStoreFixture();
+  const blob = fixture.store.createBlob("blob-1", blobInput(fixture)).blob;
+  fixture.store.requestStep(blob.id);
+  const step = discoverPipeline(fixture.pipelinePath)[0];
+  const claim = fixture.store.beginReceipt({
+    blobId: blob.id,
+    step,
+    definition: snapshotDefinition(step, fixture.pipelinePath),
+    adapter: "fake",
+    inputArtifacts: [],
+  });
+  fixture.store.recordExternalRun(claim.receipt.id, "external:orphaned");
+
+  assert.equal(fixture.store.recoverInterruptedReceipts(), 1);
+
+  const receipt = fixture.store.listReceipts(blob.id)[0];
+  assert.equal(receipt.status, "interrupted");
+  assert.match(receipt.error ?? "", /external:orphaned.*terminal result/);
+  assert.equal(fixture.store.getBlob(blob.id)?.paused, true);
+  assert.equal(fixture.store.getBlob(blob.id)?.runRequested, false);
+  fixture.database.close();
+});
+
 function completeStep(
   store: ConveyorStore,
   blobId: string,

@@ -65,6 +65,32 @@ test("failure halts continuous execution until an explicit retry", async () => {
   fixture.database.close();
 });
 
+test("terminal external state fails safely and retry resumes the same run", async () => {
+  const harness = new ReconcilingHarness();
+  const fixture = createExecutionFixture(["g1.first"], [], harness, {
+    reconcileEveryMs: 2, confirmTerminalAfterMs: 2,
+  });
+  fixture.store.createBlob("blob-1", blobInput(fixture));
+  fixture.store.requestStep("blob-1");
+
+  await assert.rejects(fixture.runner.runOnce(), /external task was interrupted/);
+
+  const failed = fixture.store.listReceipts("blob-1")[0];
+  assert.equal(failed.status, "failed");
+  assert.match(failed.error ?? "", /external task was interrupted/);
+  assert.deepEqual(executionState(fixture), ["g1.first", true, false]);
+  fixture.store.retryBlob("blob-1");
+  await fixture.runner.runOnce();
+
+  const receipts = fixture.store.listReceipts("blob-1");
+  assert.equal(receipts[1].continuationThreadId, "external:interrupted");
+  assert.equal(receipts[1].externalRunId, "external:interrupted");
+  assert.equal(fixture.store.getBlob("blob-1")?.state, "complete");
+  assert.ok(fixture.store.listExecutionEvents("blob-1")
+    .some((event) => event.name === "axi_factorio.harness.reconcile"));
+  fixture.database.close();
+});
+
 test("duplicate starts are idempotent and Stop prevents the next claim", async () => {
   const adapter = new ControlledAdapter();
   const fixture = createExecutionFixture(["g1.first", "g2.second"], [], adapter);
@@ -111,11 +137,15 @@ function createExecutionFixture(
   steps: string[],
   outcomes: Outcome[] = [],
   adapter: AgentHarness = new OutcomeHarness(outcomes),
+  options: RunnerOptions = {},
 ): ExecutionFixture {
   const pipeline = createPipeline(steps);
   const database = new FactorioDatabase(join(pipeline.root, "factorio.sqlite"));
   const store = new ConveyorStore(database);
-  return { ...pipeline, database, store, runner: new ConveyorRunner(store, adapter) };
+  return {
+    ...pipeline, database, store,
+    runner: new ConveyorRunner(store, adapter, undefined, options),
+  };
 }
 
 function executionState(fixture: ExecutionFixture): [string, boolean, boolean] {
@@ -184,6 +214,37 @@ class ControlledAdapter extends OutcomeHarness {
   }
 }
 
+class ReconcilingHarness extends OutcomeHarness {
+  private reject: ((error: Error) => void) | null = null;
+
+  override async start(
+    _input: HarnessStartInput,
+    observer: HarnessObserver,
+  ): Promise<HarnessResult> {
+    observer.event({ type: "external-run", externalRunId: "external:interrupted" });
+    return new Promise((_resolve, reject) => this.reject = reject);
+  }
+
+  override async resume(
+    input: HarnessResumeInput,
+    observer: HarnessObserver,
+  ): Promise<HarnessResult> {
+    observer.event({ type: "external-run", externalRunId: input.externalRunId });
+    return {
+      decision: "advance", reason: "resumed safely",
+      outputArtifacts: [], externalRunId: input.externalRunId,
+    };
+  }
+
+  async reconcile(): Promise<HarnessExternalState> {
+    return { status: "interrupted", reason: "external task was interrupted" };
+  }
+
+  override async cancel(): Promise<void> {
+    this.reject?.(new Error("cancelled after reconciliation"));
+  }
+}
+
 async function waitUntil(predicate: () => boolean): Promise<void> {
   const deadline = Date.now() + 1_000;
   while (!predicate()) {
@@ -193,6 +254,7 @@ async function waitUntil(predicate: () => boolean): Promise<void> {
 }
 
 type Outcome = "advance" | "blocked" | "retry" | "throw";
+type RunnerOptions = { reconcileEveryMs?: number; confirmTerminalAfterMs?: number };
 type ExecutionFixture = PipelineFixture & {
   database: FactorioDatabase;
   store: ConveyorStore;
@@ -202,6 +264,7 @@ type ExecutionFixture = PipelineFixture & {
 import type { BlobInput } from "../src/Types.ts";
 import type {
   AgentHarness,
+  HarnessExternalState,
   HarnessObserver,
   HarnessResult,
   HarnessResumeInput,
