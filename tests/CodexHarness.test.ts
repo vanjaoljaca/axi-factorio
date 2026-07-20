@@ -94,6 +94,23 @@ test("isolates every Codex invocation from unrelated user MCP configuration", as
   assert(calls.every((call) => call.includes("--ignore-user-config")));
 });
 
+test("keeps entry, same-step continuation, and exit evaluation workspace-writable", async () => {
+  const fixture = createAdapterFixture();
+
+  await fixture.adapter.start(adapterInput(fixture), observer());
+  await fixture.adapter.resume(
+    { ...adapterInput(fixture), externalRunId: "thread-existing" },
+    observer(),
+  );
+
+  const calls = readArgvCalls(fixture);
+  assert.equal(calls.length, 4);
+  for (const call of calls) {
+    const sandbox = call.indexOf("--sandbox");
+    assert.equal(call[sandbox + 1], "workspace-write");
+  }
+});
+
 test("rejects Windows before starting Codex", () => {
   assert.throws(
     () => new CodexHarness("win32"),

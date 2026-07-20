@@ -9,6 +9,7 @@ type ViewSnapshot = {
   blobs: ViewBlob[];
   receipts: ViewReceipt[];
   assertions: { label: string; passed: boolean }[];
+  evidenceCards?: { label: string; value: string }[];
 };
 type Scenario = { id: string; frames: ViewSnapshot[] };
 
@@ -84,6 +85,10 @@ function scenarioIndex(): object[] {
       id: "codex-mcp-isolation", name: "Pinned Codex MCP isolation",
       description: "0.144.6 argv contract · unrelated MCP failure · production receipt path",
     },
+    {
+      id: "codex-writable-continuation", name: "Writable Codex continuation",
+      description: "entry retry · same-task continuation · exit advance · durable artifact",
+    },
   ];
 }
 
@@ -97,6 +102,11 @@ async function scenario(url: URL): Promise<Scenario> {
   if (id === "codex-mcp-isolation") {
     const { runCodexMcpIsolationScenario } = await import("../test/harness/CodexMcpIsolationScenario.ts");
     return runCodexMcpIsolationScenario();
+  }
+  if (id === "codex-writable-continuation") {
+    const { runCodexWritableContinuationScenario } =
+      await import("../test/harness/CodexWritableContinuationScenario.ts");
+    return runCodexWritableContinuationScenario();
   }
   throw new Error(`Unknown scenario: ${id}`);
 }
@@ -238,7 +248,8 @@ async function init(){[scenarios,tests]=await Promise.all([fetch("/api/scenarios
 function renderPickers(){byId("scenario-picker").innerHTML=scenarios.map(item=>'<option value="'+safe(item.id)+'">'+safe(item.name)+'</option>').join("");byId("test-picker").innerHTML=tests.map(item=>'<option value="'+safe(item.id)+'">'+safe(item.category)+' · '+safe(item.name)+'</option>').join("")}
 async function load(){clearInterval(timer);const version=++loadVersion;if(source==="tests"){testRun=null;frames=[];renderTest();return}if(source==="lab"){lab=await fetch("/api/mock-lab").then(r=>r.json());if(version===loadVersion)renderLab();return}const data=source==="database"?await fetch("/api/database").then(r=>r.json()):await fetch("/api/scenarios/"+selected).then(r=>r.json());if(version!==loadVersion)return;frames=data.frames||[data];frame=frames.length-1;renderScenario()}
 function groups(steps){const result=[];for(const step of steps){const id=step.id.split(".")[0]||"pipeline",last=result.at(-1);if(last?.id===id)last.count++;else result.push({id,label:id,count:1})}return result}
-function renderScenario(){const snapshot=frames[frame];if(!snapshot)return;byId("title").textContent=snapshot.name;byId("description").textContent=snapshot.description;byId("frame").textContent=source==="scenario"?"Frame "+(frame+1)+" / "+frames.length:"Live database";byId("run").hidden=source!=="scenario";byId("run").textContent="Run scenario";showFrameControls(source==="scenario");byId("workspace").innerHTML=matrix(snapshot);renderEvidence(snapshot);byId("total").textContent=snapshot.blobs.length+" blob"+(snapshot.blobs.length===1?"":"s")+" · "+snapshot.receipts.length+" receipts"}
+function renderScenario(){const snapshot=frames[frame];if(!snapshot)return;byId("title").textContent=snapshot.name;byId("description").textContent=snapshot.description;byId("frame").textContent=source==="scenario"?"Frame "+(frame+1)+" / "+frames.length:"Live database";byId("run").hidden=source!=="scenario";byId("run").textContent="Run scenario";showFrameControls(source==="scenario");byId("workspace").innerHTML=matrix(snapshot)+scenarioEvidence(snapshot);renderEvidence(snapshot);byId("total").textContent=snapshot.blobs.length+" blob"+(snapshot.blobs.length===1?"":"s")+" · "+snapshot.receipts.length+" receipts"}
+function scenarioEvidence(snapshot){if(!snapshot.evidenceCards?.length)return "";return '<div class="evidence-grid" style="padding:10px;border-top:1px solid var(--line)">'+snapshot.evidenceCards.map(card=>evidenceCard(card.label,"",card.value,card.label.includes("argv"))).join("")+"</div>"}
 function matrix(snapshot){const steps=snapshot.steps,bands=groups(steps),rows=snapshot.blobs.length?snapshot.blobs.map(blob=>taskRow(blob,steps)).join(""):'<div class="empty">No blobs in this database.</div>';return '<div class="matrix" style="--steps:'+Math.max(steps.length,1)+'"><div class="matrix-head" style="--steps:'+Math.max(steps.length,1)+'"><div class="corner"></div>'+bands.map(group=>'<div class="band" style="grid-column:span '+group.count+'">'+safe(group.label)+'</div>').join("")+steps.map(step=>'<div class="step">'+safe(step.label)+'</div>').join("")+'</div><section class="project"><div class="project-head"><span>'+safe(source==="database"?"Database state":"Scenario state")+'</span><span class="count">'+snapshot.blobs.length+'</span></div><div class="taskrows">'+rows+'</div></section></div>'}
 function taskRow(blob,steps){const current=steps.findIndex(step=>step.id===blob.stepId),complete=blob.stepId==="complete"||blob.state==="complete",cells=steps.map((step,index)=>{const done=complete||index<current,isCurrent=!complete&&index===current,classes=["bead",done?"done":"",isCurrent?"current":"",isCurrent?blob.state:""].filter(Boolean).join(" ");return '<div class="track-cell '+(index===0?"first ":"")+(index===steps.length-1?"last":"")+'"><i class="'+classes+'"></i></div>'}).join("");const label=statusLabel(blob.state);return '<div class="taskrow" style="--steps:'+Math.max(steps.length,1)+'"><div class="task-title" title="'+safe(blob.id)+'"><span class="task-name">'+safe(blob.title)+'</span>'+(label?'<small class="task-status '+safe(blob.state)+'">'+safe(label)+'</small>':"")+'</div>'+cells+'</div>'}
 function statusLabel(status){return {running:"Running",waiting:"Awaiting review",blocked:"Needs attention",failed:"Failed",held:"Inventory"}[status]||""}
