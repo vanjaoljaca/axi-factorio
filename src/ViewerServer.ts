@@ -1,12 +1,21 @@
 type ViewStep = { id: string; label: string; group: string; groupLabel: string };
 type ViewGroup = { id: string; label: string; count: number };
+type ViewExecutionControl = {
+  mode: ExecutionMode;
+  requested: boolean;
+  running: boolean;
+  play: { enabled: boolean; explanation: string };
+  step: { enabled: boolean; explanation: string };
+  stop: { enabled: boolean; explanation: string };
+};
 type ViewBlob = {
   id: string;
   title: string;
   stepId: string;
   paused: boolean;
   running: boolean;
-  status: "ready" | "held" | "running" | "waiting" | "blocked" | "failed" | "complete";
+  status: "ready" | "queued" | "held" | "running" | "waiting" | "blocked" | "failed" | "complete";
+  execution: ViewExecutionControl;
   completedStepIds: string[];
   importedStepIds: string[];
   steps: ViewStep[];
@@ -42,23 +51,50 @@ export function createViewSnapshot(databasePath: string): object {
   }
 }
 
+export function createViewerServer(databasePath: string): ReturnType<typeof createServer> {
+  return createServer((request, response) => {
+    const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    try {
+      if (request.method === "GET" && url.pathname === "/api/view") {
+        return json(response, createViewSnapshot(databasePath));
+      }
+      if (request.method === "POST") return controlRequest(response, databasePath, url.pathname);
+      if (request.method === "GET" && url.pathname === "/") return html(response, viewerHtml);
+      response.writeHead(404).end("Not found");
+    } catch (error) {
+      const status = error instanceof BlobExecutionError ? 409 : 500;
+      json(response, { error: error instanceof Error ? error.message : String(error) }, status);
+    }
+  });
+}
+
 function startViewer(): void {
   const port = Number(argument("--port") ?? "4317");
   const databasePath = resolve(argument("--db") ?? "pipelines/axi-factorio.db");
   process.title = "axi-factorio-viewer";
-  const server = createServer((request, response) => {
-    const url = new URL(request.url ?? "/", `http://127.0.0.1:${port}`);
-    try {
-      if (url.pathname === "/api/view") return json(response, createViewSnapshot(databasePath));
-      if (url.pathname === "/") return html(response, viewerHtml);
-      response.writeHead(404).end("Not found");
-    } catch (error) {
-      json(response, { error: error instanceof Error ? error.message : String(error) }, 500);
-    }
-  });
+  const server = createViewerServer(databasePath);
   server.listen(port, "127.0.0.1", () => {
     log("viewer.ready", { url: `http://127.0.0.1:${port}`, databasePath });
   });
+}
+
+function controlRequest(response: ServerResponse, databasePath: string, pathname: string): void {
+  const match = pathname.match(/^\/api\/blobs\/([^/]+)\/(play|step|stop)$/u);
+  if (!match) return void response.writeHead(404).end("Not found");
+  const database = new FactorioDatabase(databasePath);
+  try {
+    const store = new ConveyorStore(database);
+    const id = decodeURIComponent(match[1]);
+    const action = match[2];
+    const result = action === "play"
+      ? store.requestContinuous(id)
+      : action === "step"
+        ? store.requestStep(id)
+        : store.requestStop(id);
+    json(response, { ok: true, already: result.already, blob: result.blob });
+  } finally {
+    database.close();
+  }
 }
 
 function groupProjects(records: Project[], blobs: Blob[], receipts: Receipt[]): ViewProject[] {
@@ -128,6 +164,7 @@ function viewBlob(blob: Blob, receipts: Receipt[]): ViewBlob {
     paused: blob.paused,
     running: latest?.status === "running",
     status: viewStatus(blob, latest),
+    execution: viewExecution(blob, latest),
     completedStepIds: relevant.filter((receipt) => receipt.status === "advance").map((receipt) => receipt.stepId),
     importedStepIds: relevant.filter((receipt) =>
       receipt.status === "advance" && receipt.executionKind === "imported").map((receipt) => receipt.stepId),
@@ -144,7 +181,44 @@ function viewStatus(blob: Blob, latest?: Receipt): ViewBlob["status"] {
   }
   if (latest?.status === "blocked" || blob.paused) return "blocked";
   if (latest?.status === "running") return "running";
+  if (blob.runRequested) return "queued";
   return "ready";
+}
+
+function viewExecution(blob: Blob, latest?: Receipt): ViewExecutionControl {
+  const running = latest?.status === "running";
+  const blocker = executionBlocker(blob, latest, running);
+  const alreadyQueued = blob.runRequested ? "This blob is already queued." : null;
+  const current = blob.state === "complete" ? "the completed blob" : blob.state;
+  return {
+    mode: blob.executionMode,
+    requested: blob.runRequested,
+    running,
+    play: {
+      enabled: !blocker && !alreadyQueued,
+      explanation: blocker ?? alreadyQueued ?? `Run continuously from ${current}.`,
+    },
+    step: {
+      enabled: !blocker && !alreadyQueued,
+      explanation: blocker ?? alreadyQueued ?? `Run exactly one transition at ${current}.`,
+    },
+    stop: {
+      enabled: blob.runRequested,
+      explanation: blob.runRequested
+        ? running ? "Stop after the active transition." : "Cancel the queued run."
+        : "This blob is already stopped.",
+    },
+  };
+}
+
+function executionBlocker(blob: Blob, latest: Receipt | undefined, running: boolean): string | null {
+  if (blob.state === "complete") return "This blob is complete.";
+  if (running) return "A transition is already running.";
+  if (!blob.paused) return null;
+  if (!latest) return "Inventory is held. Retry it before running.";
+  if (latest.status === "failed") return "Retry the failed receipt before running.";
+  if (blob.humanGateStepId === blob.state) return "Human feedback or approval is required before running.";
+  return "Resolve the blocked step before running.";
 }
 
 function viewStep(step: StepDefinition): ViewStep {
@@ -240,10 +314,10 @@ const viewerHtml = String.raw`<!doctype html>
 *{box-sizing:border-box}html,body{min-height:100%}body{margin:0;background:var(--canvas);color:var(--ink);font:12px/1.4 Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
 button,input{font:inherit;color:inherit}.app{min-height:100vh;display:grid;grid-template-columns:132px minmax(0,1fr)}.rail{position:fixed;inset:0 auto 0 0;width:132px;height:100vh;border-right:1px solid var(--line);background:var(--rail);padding:20px 10px;display:flex;flex-direction:column}.brand{margin:0 9px 24px;font-size:14px;font-weight:780;letter-spacing:-.03em}.nav{display:grid;gap:5px}.nav-item{height:35px;display:flex;align-items:center;padding:0 10px;border-radius:6px;color:#626c66;font-size:10px}.nav-item.active{background:#eaf3fe;color:#2781c8;font-weight:650}.agent{margin-top:auto;border:1px solid var(--line);border-radius:6px;padding:8px 9px;font-size:9px}.agent strong{display:block}.agent span{color:var(--green)}
 .main{grid-column:2;min-width:0}.topbar{height:58px;border-bottom:1px solid var(--line);display:flex;align-items:center;padding:0 22px;gap:8px}.identity{display:flex;align-items:center;gap:8px;min-width:220px}.identity strong{font-size:13px;letter-spacing:-.02em}.online{font-size:9px;color:var(--muted)}.online:before{content:"";display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--green);margin-right:5px;vertical-align:1px}.search{margin-left:auto;width:min(320px,38vw)}.search input{width:100%;height:30px;border:1px solid var(--line);border-radius:5px;background:#fff;padding:0 10px;outline:none}.search input:focus{border-color:#9eb9aa;box-shadow:0 0 0 3px #0caf6914}.refresh{height:30px;border:1px solid var(--line);border-radius:5px;background:#fff;padding:0 10px;cursor:pointer;color:var(--muted)}.refresh:hover{background:#f7f9f8;color:var(--ink)}
-.content{padding:14px 20px 26px;min-width:0}.toolbar{height:34px;display:flex;align-items:center}.toolbar strong{font-size:11px}.workspace{border:1px solid var(--line);background:#fff;overflow:auto;max-width:100%}.matrix{width:100%}.matrix-head{display:grid;grid-template-columns:170px repeat(var(--steps),minmax(72px,1fr));position:sticky;top:0;z-index:3;background:#fff}.corner{grid-row:span 2;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}.band{height:30px;display:flex;align-items:center;justify-content:center;border-right:1px solid var(--line);border-bottom:1px solid var(--line);font-size:9px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;background:#f7f8f7;color:#5f6963}.step{height:56px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:center;padding:7px;text-align:center;color:#505b55;font-size:9px;line-height:1.25}.project+.project{border-top:1px solid var(--line)}.project-head{position:sticky;left:0;z-index:2;width:100%;height:37px;display:flex;align-items:center;border:0;background:#fff;padding:0 10px;text-align:left;font-weight:700;font-size:10px;cursor:pointer}.project-head:hover{background:#fafbfa}.project-head .count{margin-left:6px;color:var(--muted);font-weight:400}.project-head .toggle{margin-left:auto;color:var(--muted);font-size:9px}.project.collapsed .taskrows{display:none}
-.taskrow{display:grid;grid-template-columns:170px repeat(var(--steps),minmax(72px,1fr));height:34px;align-items:center}.taskrow:hover{background:#fcfdfc}.task-title{position:sticky;left:0;z-index:2;height:34px;display:flex;align-items:center;gap:6px;background:inherit;padding:0 10px 0 24px;color:#3f4944;font-size:10px}.task-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.task-status{margin-left:auto;flex:none;color:var(--muted);font-size:8px}.task-status.waiting,.task-status.blocked{color:var(--attention);font-weight:700}.task-status.failed{color:var(--danger);font-weight:700}.taskrow:hover .task-title{background:#fcfdfc}.track-cell{height:34px;position:relative}.track-cell:before{content:"";position:absolute;left:0;right:0;top:17px;height:1px;background:var(--line-strong)}.track-cell.first:before{left:50%}.track-cell.last:before{right:50%}.bead{position:absolute;z-index:1;left:50%;top:50%;width:8px;height:8px;margin:-4px;border-radius:50%;background:var(--quiet)}.bead.done{width:12px;height:12px;margin:-6px;background:var(--ink)}.bead.done:after{content:"✓";position:absolute;inset:-1px 0 0;color:#fff;text-align:center;font-size:8px;font-style:normal;font-weight:800}.bead.done.imported{border-radius:2px;background:#fff;border:1.5px dashed #69736d;transform:rotate(45deg)}.bead.done.imported:after{color:#56605a;transform:rotate(-45deg)}.bead.current{width:12px;height:12px;margin:-6px;background:#fff;border:2px solid var(--ink);box-shadow:0 0 0 2px var(--neutral-soft)}.bead.current.running{background:var(--ink);box-shadow:0 0 0 2px var(--neutral-soft)}.bead.current.waiting,.bead.current.blocked{border-style:double;border-color:var(--attention);box-shadow:0 0 0 2px var(--attention-soft)}.bead.current.failed{border-color:var(--danger);box-shadow:0 0 0 2px var(--danger-soft)}.bead.current.failed:after{content:"×";position:absolute;inset:-4px 0 0;color:var(--danger);text-align:center;font-size:11px;font-style:normal;font-weight:800}.bead.unavailable{background:#fff;border:1px solid #c7ceca}.empty-project{padding:11px 24px;color:var(--muted);font-size:10px}.footer{display:flex;align-items:center;gap:18px;padding:12px 4px 0;color:var(--muted);font-size:9px}.legend{display:flex;align-items:center;gap:15px;flex-wrap:wrap}.legend span{display:flex;align-items:center;gap:6px}.key{position:relative;width:8px;height:8px;border-radius:50%;background:var(--quiet)}.key.complete{width:11px;height:11px;background:var(--ink)}.key.complete:after{content:"✓";position:absolute;inset:-2px 0 0;color:#fff;text-align:center;font-size:8px}.key.imported{width:10px;height:10px;border-radius:2px;background:#fff;border:1px dashed #69736d;transform:rotate(45deg)}.key.inventory{width:10px;height:10px;border-radius:2px;background:#fff;border:1px solid var(--quiet)}.key.current{width:11px;height:11px;background:#fff;border:2px solid var(--ink);box-shadow:0 0 0 2px var(--neutral-soft)}.key.waiting{width:11px;height:11px;background:#fff;border:3px double var(--attention);box-shadow:0 0 0 2px var(--attention-soft)}.key.failed{width:11px;height:11px;background:#fff;border:1px solid var(--danger)}.total{margin-left:auto}.empty{padding:72px 24px;text-align:center;color:var(--muted)}.empty b{display:block;color:var(--ink);font-size:12px;margin-bottom:4px}.no-results{padding:42px 24px;text-align:center;color:var(--muted)}.error{margin-top:12px;padding:10px;border:1px solid #efcece;border-radius:6px;background:#fff7f7;color:#9d3f3f}
+.content{padding:14px 20px 26px;min-width:0}.toolbar{height:34px;display:flex;align-items:center}.toolbar strong{font-size:11px}.workspace{border:1px solid var(--line);background:#fff;overflow:auto;max-width:100%}.matrix{width:100%}.matrix-head{display:grid;grid-template-columns:280px repeat(var(--steps),minmax(72px,1fr));position:sticky;top:0;z-index:3;background:#fff}.corner{grid-row:span 2;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}.band{height:30px;display:flex;align-items:center;justify-content:center;border-right:1px solid var(--line);border-bottom:1px solid var(--line);font-size:9px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;background:#f7f8f7;color:#5f6963}.step{height:56px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:center;padding:7px;text-align:center;color:#505b55;font-size:9px;line-height:1.25}.project+.project{border-top:1px solid var(--line)}.project-head{position:sticky;left:0;z-index:2;width:100%;height:37px;display:flex;align-items:center;border:0;background:#fff;padding:0 10px;text-align:left;font-weight:700;font-size:10px;cursor:pointer}.project-head:hover{background:#fafbfa}.project-head .count{margin-left:6px;color:var(--muted);font-weight:400}.project-head .toggle{margin-left:auto;color:var(--muted);font-size:9px}.project.collapsed .taskrows{display:none}
+.taskrow{display:grid;grid-template-columns:280px repeat(var(--steps),minmax(72px,1fr));height:38px;align-items:center}.taskrow:hover{background:#fcfdfc}.task-title{position:sticky;left:0;z-index:2;height:38px;display:flex;align-items:center;gap:6px;background:inherit;padding:0 8px 0 24px;color:#3f4944;font-size:10px}.task-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.task-status{margin-left:auto;flex:none;color:var(--muted);font-size:8px}.task-status.waiting,.task-status.blocked{color:var(--attention);font-weight:700}.task-status.failed{color:var(--danger);font-weight:700}.taskrow:hover .task-title{background:#fcfdfc}.run-controls{display:flex;gap:3px;flex:none;margin-left:3px}.control-tip{position:relative;display:inline-flex}.control-tip:focus-visible{outline:2px solid #85938a;outline-offset:1px;border-radius:5px}.control-tip:hover:after,.control-tip:focus-visible:after,.control-tip:focus-within:after{content:attr(data-tip);position:absolute;right:0;bottom:calc(100% + 6px);z-index:20;width:max-content;max-width:240px;padding:6px 8px;border:1px solid var(--line-strong);border-radius:5px;background:#fff;color:var(--ink);box-shadow:0 4px 14px #18201b18;font-size:9px;font-weight:500;line-height:1.35;white-space:normal;pointer-events:none}.run-control{width:24px;height:24px;display:grid;place-items:center;border:1px solid var(--line-strong);border-radius:5px;background:#fff;color:#46504a;padding:0;cursor:pointer}.run-control:hover:not(:disabled){background:var(--neutral-soft);border-color:#aeb7b1}.run-control:focus-visible{outline:2px solid #85938a;outline-offset:1px}.run-control:disabled{cursor:not-allowed;color:#c0c6c2;background:#fafbfa}.run-control.mode.active{color:var(--ink);border-color:#8e9992;box-shadow:inset 0 0 0 1px #8e9992}.run-control.stop.active{color:var(--ink);border-color:#9fa9a3;background:var(--neutral-soft)}.run-control svg{width:11px;height:11px;fill:currentColor}.track-cell{height:38px;position:relative}.track-cell:before{content:"";position:absolute;left:0;right:0;top:19px;height:1px;background:var(--line-strong)}.track-cell.first:before{left:50%}.track-cell.last:before{right:50%}.bead{position:absolute;z-index:1;left:50%;top:50%;width:8px;height:8px;margin:-4px;border-radius:50%;background:var(--quiet)}.bead.done{width:12px;height:12px;margin:-6px;background:var(--ink)}.bead.done:after{content:"✓";position:absolute;inset:-1px 0 0;color:#fff;text-align:center;font-size:8px;font-style:normal;font-weight:800}.bead.done.imported{border-radius:2px;background:#fff;border:1.5px dashed #69736d;transform:rotate(45deg)}.bead.done.imported:after{color:#56605a;transform:rotate(-45deg)}.bead.current{width:12px;height:12px;margin:-6px;background:#fff;border:2px solid var(--ink);box-shadow:0 0 0 2px var(--neutral-soft)}.bead.current.running{background:var(--ink);box-shadow:0 0 0 2px var(--neutral-soft)}.bead.current.waiting,.bead.current.blocked{border-style:double;border-color:var(--attention);box-shadow:0 0 0 2px var(--attention-soft)}.bead.current.failed{border-color:var(--danger);box-shadow:0 0 0 2px var(--danger-soft)}.bead.current.failed:after{content:"×";position:absolute;inset:-4px 0 0;color:var(--danger);text-align:center;font-size:11px;font-style:normal;font-weight:800}.bead.unavailable{background:#fff;border:1px solid #c7ceca}.empty-project{padding:11px 24px;color:var(--muted);font-size:10px}.footer{display:flex;align-items:center;gap:18px;padding:12px 4px 0;color:var(--muted);font-size:9px}.legend{display:flex;align-items:center;gap:15px;flex-wrap:wrap}.legend span{display:flex;align-items:center;gap:6px}.key{position:relative;width:8px;height:8px;border-radius:50%;background:var(--quiet)}.key.complete{width:11px;height:11px;background:var(--ink)}.key.complete:after{content:"✓";position:absolute;inset:-2px 0 0;color:#fff;text-align:center;font-size:8px}.key.imported{width:10px;height:10px;border-radius:2px;background:#fff;border:1px dashed #69736d;transform:rotate(45deg)}.key.inventory{width:10px;height:10px;border-radius:2px;background:#fff;border:1px solid var(--quiet)}.key.current{width:11px;height:11px;background:#fff;border:2px solid var(--ink);box-shadow:0 0 0 2px var(--neutral-soft)}.key.waiting{width:11px;height:11px;background:#fff;border:3px double var(--attention);box-shadow:0 0 0 2px var(--attention-soft)}.key.failed{width:11px;height:11px;background:#fff;border:1px solid var(--danger)}.total{margin-left:auto}.empty{padding:72px 24px;text-align:center;color:var(--muted)}.empty b{display:block;color:var(--ink);font-size:12px;margin-bottom:4px}.no-results{padding:42px 24px;text-align:center;color:var(--muted)}.error{margin-top:12px;padding:10px;border:1px solid #efcece;border-radius:6px;background:#fff7f7;color:#9d3f3f}
 @media(max-width:760px){.app{grid-template-columns:76px minmax(0,1fr)}.rail{width:76px;padding-inline:7px}.brand{margin-inline:4px}.nav-item{justify-content:center;padding:0;font-size:9px}.agent{display:none}.identity{min-width:auto}.identity strong{font-size:11px}.content{padding-inline:12px}.topbar{padding-inline:12px}.search{width:min(240px,45vw)}}
-@media(max-width:520px){.app{display:block}.rail{position:static;width:100%;height:48px;border-right:0;border-bottom:1px solid var(--line);display:flex;flex-direction:row;align-items:center;padding:6px 10px}.brand{margin:0 14px 0 0}.nav{display:flex}.nav-item{height:30px;padding:0 8px}.nav-item:not(.active){display:none}.main{display:block}.topbar{height:auto;min-height:92px;flex-wrap:wrap;padding-block:12px}.identity{width:calc(100% - 72px)}.search{order:3;width:100%;margin:0}.content{padding-top:10px}.matrix-head{grid-template-columns:145px repeat(var(--steps),minmax(66px,1fr))}.taskrow{grid-template-columns:145px repeat(var(--steps),minmax(66px,1fr))}.task-title{padding-left:14px}}
+@media(max-width:520px){.app{display:block}.rail{position:static;width:100%;height:48px;border-right:0;border-bottom:1px solid var(--line);display:flex;flex-direction:row;align-items:center;padding:6px 10px}.brand{margin:0 14px 0 0}.nav{display:flex}.nav-item{height:30px;padding:0 8px}.nav-item:not(.active){display:none}.main{display:block}.topbar{height:auto;min-height:92px;flex-wrap:wrap;padding-block:12px}.identity{width:calc(100% - 72px)}.search{order:3;width:100%;margin:0}.content{padding-top:10px}.matrix-head{grid-template-columns:220px repeat(var(--steps),minmax(66px,1fr))}.taskrow{grid-template-columns:220px repeat(var(--steps),minmax(66px,1fr))}.task-title{padding-left:14px}.task-status{display:none}}
 </style></head><body><div class="app">
 <aside class="rail" aria-label="Primary navigation"><div class="brand">axi-factorio</div><nav class="nav">
 <span class="nav-item active">Overview</span><span class="nav-item">Projects</span><span class="nav-item">Runs</span><span class="nav-item">Alerts</span><span class="nav-item">Settings</span>
@@ -262,19 +336,23 @@ function render(){const query=byId('search').value.trim().toLowerCase();const pr
 function matches(blob,project,query){return !query||project.name.toLowerCase().includes(query)||blob.title.toLowerCase().includes(query)||blob.id.toLowerCase().includes(query)}
 function matrix(projects){const steps=snapshot.steps;return '<div class="matrix" style="--steps:'+Math.max(steps.length,1)+'"><div class="matrix-head" style="--steps:'+Math.max(steps.length,1)+'"><div class="corner"></div>'+snapshot.groups.map(group=>'<div class="band" style="grid-column:span '+group.count+'">'+escapeHtml(group.label)+'</div>').join('')+steps.map(step=>'<div class="step">'+escapeHtml(step.label)+'</div>').join('')+'</div>'+projects.map(projectCard).join('')+'</div>'}
 function projectCard(project){const rows=project.blobs.length?project.blobs.map(taskRow).join(''):'<div class="empty-project">No tasks in this project.</div>';return '<section class="project" data-project="'+escapeHtml(project.id)+'"><button class="project-head" aria-expanded="true"><span>'+escapeHtml(project.name)+'</span><span class="count">'+project.blobs.length+'</span><span class="toggle">Hide</span></button><div class="taskrows">'+rows+'</div></section>'}
-function taskRow(blob){const cells=snapshot.steps.map((step,index)=>beadCell(blob,step,index)).join('');const label=statusLabel(blob.status);return '<div class="taskrow" style="--steps:'+Math.max(snapshot.steps.length,1)+'"><div class="task-title" title="'+escapeHtml(blob.title)+'"><span class="task-name">'+escapeHtml(blob.title)+'</span>'+(label?'<small class="task-status '+blob.status+'">'+label+'</small>':'')+'</div>'+cells+'</div>'}
+function taskRow(blob){const cells=snapshot.steps.map((step,index)=>beadCell(blob,step,index)).join('');const label=statusLabel(blob.status);return '<div class="taskrow" style="--steps:'+Math.max(snapshot.steps.length,1)+'"><div class="task-title" title="'+escapeHtml(blob.title)+'"><span class="task-name">'+escapeHtml(blob.title)+'</span>'+(label?'<small class="task-status '+blob.status+'">'+label+'</small>':'')+runControls(blob)+'</div>'+cells+'</div>'}
+function runControls(blob){return '<span class="run-controls" aria-label="Execution controls">'+controlButton(blob,'play',playIcon())+controlButton(blob,'step',stepIcon())+controlButton(blob,'stop',stopIcon())+'</span>'}
+function controlButton(blob,action,icon){const control=blob.execution[action];const mode=action==='play'||action==='step';const selected=mode&&blob.execution.mode===(action==='play'?'continuous':'step');const active=selected||(action==='stop'&&blob.execution.requested);const label=action==='play'?'Play continuously':action==='step'?'Run one transition':'Stop';const explanation=escapeHtml(control.explanation);return '<span class="control-tip" data-tip="'+explanation+'" '+(control.enabled?'':'tabindex="0" aria-label="'+explanation+'"')+'><button class="run-control '+action+(mode?' mode':'')+(active?' active':'')+'" data-action="'+action+'" data-blob="'+escapeHtml(blob.id)+'" aria-label="'+label+'" aria-pressed="'+active+'" title="'+explanation+'" '+(control.enabled?'':'disabled')+'>'+icon+'</button></span>'}
+function playIcon(){return '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1.3v9.4L10 6z"/></svg>'}function stepIcon(){return '<svg viewBox="0 0 14 12" aria-hidden="true"><path d="M1 1.3v9.4L9 6zM11 1h2v10h-2z"/></svg>'}function stopIcon(){return '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 2h8v8H2z"/></svg>'}
 function beadCell(blob,step,index){const known=blob.steps.some(candidate=>candidate.id===step.id);const done=blob.stepId==='complete'||blob.completedStepIds.includes(step.id);const current=blob.stepId===step.id;const imported=done&&blob.importedStepIds.includes(step.id);const classes=['bead',done?'done':'',imported?'imported':'',current?'current':'',current?blob.status:'',!known?'unavailable':''].filter(Boolean).join(' ');return '<div class="track-cell '+(index===0?'first ':'')+(index===snapshot.steps.length-1?'last':'')+'"><i class="'+classes+'"></i></div>'}
-function statusLabel(status){return {held:'Inventory',running:'Running',waiting:'Awaiting review',blocked:'Needs attention',failed:'Failed'}[status]||''}
+function statusLabel(status){return {queued:'Queued',held:'Inventory',running:'Running',waiting:'Awaiting review',blocked:'Needs attention',failed:'Failed'}[status]||''}
 function plural(count,word){return count===1?word:word+'s'}function escapeHtml(value){const node=document.createElement('span');node.textContent=String(value);return node.innerHTML}
+async function control(action,blobId){try{const response=await fetch('/api/blobs/'+encodeURIComponent(blobId)+'/'+action,{method:'POST'});const result=await response.json();if(!response.ok)throw new Error(result.error||'The execution request failed.');await load()}catch(error){byId('error').innerHTML='<div class="error">'+escapeHtml(error.message)+'</div>';await load()}}
 byId('refresh').onclick=load;byId('search').oninput=render;document.addEventListener('keydown',event=>{if(event.key==='/'&&document.activeElement!==byId('search')){event.preventDefault();byId('search').focus()}});
-byId('workspace').onclick=event=>{const head=event.target.closest('.project-head');if(!head)return;const project=head.closest('.project');project.classList.toggle('collapsed');const expanded=!project.classList.contains('collapsed');head.setAttribute('aria-expanded',String(expanded));head.querySelector('.toggle').textContent=expanded?'Hide':'Show'};
+byId('workspace').onclick=event=>{const action=event.target.closest('[data-action]');if(action){action.disabled=true;return void control(action.dataset.action,action.dataset.blob)}const head=event.target.closest('.project-head');if(!head)return;const project=head.closest('.project');project.classList.toggle('collapsed');const expanded=!project.classList.contains('collapsed');head.setAttribute('aria-expanded',String(expanded));head.querySelector('.toggle').textContent=expanded?'Hide':'Show'};
 load();setInterval(load,5000);
 </script></body></html>`;
 
 if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) startViewer();
 
 import type { ServerResponse } from "node:http";
-import type { Blob, Project, Receipt, StepDefinition } from "./Types.ts";
+import type { Blob, ExecutionMode, Project, Receipt, StepDefinition } from "./Types.ts";
 import { createServer } from "node:http";
 import { readdirSync, statSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
@@ -282,4 +360,4 @@ import { fileURLToPath } from "node:url";
 import { FactorioDatabase } from "./Database.ts";
 import { log } from "./Logger.ts";
 import { discoverPipeline } from "./Pipeline.ts";
-import { ConveyorStore } from "./Store.ts";
+import { BlobExecutionError, ConveyorStore } from "./Store.ts";

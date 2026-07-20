@@ -2,12 +2,13 @@ test("workbench catalog lists every test with an explicit visual representation"
   const catalog = listVisualTests();
   const names = catalog.map((item) => item.name);
 
-  assert.equal(catalog.length, 48);
-  assert.equal(new Set(catalog.map((item) => item.category)).size, 10);
+  assert.equal(catalog.length, 55);
+  assert.equal(new Set(catalog.map((item) => item.category)).size, 11);
   assert(names.includes("default harness pushes a blob through the actual conveyor"));
   assert(catalog.every((item) => item.visualLabel && item.visualDescription));
   assert.equal(catalog.find((item) => item.category === "Cli")?.visualKind, "terminal-proof");
   assert.equal(catalog.find((item) => item.category === "Runner")?.visualKind, "conveyor-replay");
+  assert.equal(catalog.find((item) => item.category === "Execution Controls")?.visualKind, "conveyor-replay");
   assert.equal(catalog.find((item) => item.category === "Service")?.visualKind, "service-timeline");
 });
 

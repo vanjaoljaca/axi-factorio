@@ -1,6 +1,7 @@
 test("runs a generic adapter and records artifact flow", async () => {
   const fixture = createRunnerFixture(["plan.define"]);
   fixture.store.createBlob("blob-1", blobInput(fixture));
+  fixture.store.requestContinuous("blob-1");
 
   assert.equal(await fixture.runner.runOnce(), true);
 
@@ -16,6 +17,7 @@ test("runs a generic adapter and records artifact flow", async () => {
 test("an edited unexecuted step uses its current definition", async () => {
   const fixture = createRunnerFixture(["plan.define", "qa.check"]);
   fixture.store.createBlob("blob-1", blobInput(fixture));
+  fixture.store.requestContinuous("blob-1");
   await fixture.runner.runOnce();
   const qa = discoverPipeline(fixture.pipelinePath)[1];
   writeFileSync(qa.entryPath, "current QA definition");
@@ -36,6 +38,7 @@ test("adding an earlier step does not pull passed work backward", async () => {
   renumberStep(fixture.pipelinePath, 1, 20, "qa.check");
   commitAll(fixture.root, "renumber");
   fixture.store.createBlob("blob-1", blobInput(fixture));
+  fixture.store.requestContinuous("blob-1");
   await fixture.runner.runOnce();
   writeStep(fixture.pipelinePath, 5, "research.context");
   commitAll(fixture.root, "insert earlier step");
@@ -53,6 +56,7 @@ test("adding an earlier step does not pull passed work backward", async () => {
 test("complete work stays complete when a later step is added", async () => {
   const fixture = createRunnerFixture(["plan.define"]);
   fixture.store.createBlob("blob-1", blobInput(fixture));
+  fixture.store.requestContinuous("blob-1");
   await fixture.runner.runOnce();
   writeStep(fixture.pipelinePath, 1, "qa.check");
   commitAll(fixture.root, "add later");
@@ -66,10 +70,12 @@ test("complete work stays complete when a later step is added", async () => {
 test("rewind makes the selected step runnable again with a new receipt", async () => {
   const fixture = createRunnerFixture(["plan.define", "qa.check"]);
   fixture.store.createBlob("blob-1", blobInput(fixture));
+  fixture.store.requestContinuous("blob-1");
   await fixture.runner.runOnce();
   await fixture.runner.runOnce();
   const qa = discoverPipeline(fixture.pipelinePath)[1];
   fixture.store.rewindBlob("blob-1", qa, discoverPipeline(fixture.pipelinePath));
+  fixture.store.requestContinuous("blob-1");
 
   await fixture.runner.runOnce();
 
@@ -84,6 +90,7 @@ test("rewind makes the selected step runnable again with a new receipt", async (
 test("retry repeats a step and increments its attempt", async () => {
   const fixture = createRunnerFixture(["plan.define"], ["retry", "advance"]);
   fixture.store.createBlob("blob-1", blobInput(fixture));
+  fixture.store.requestContinuous("blob-1");
 
   await fixture.runner.runOnce();
   await fixture.runner.runOnce();
@@ -99,6 +106,7 @@ test("human review cycles reuse one external thread and retain approval provenan
   const fixture = createRunnerFixture(["workbench.review"]);
   fixture.store.createBlob("blob-1", blobInput(fixture));
   fixture.store.armHumanGate("blob-1", "Show this in Workbench.");
+  fixture.store.requestContinuous("blob-1");
 
   await fixture.runner.runOnce();
   fixture.store.addHumanFeedback("blob-1", "Tighten the empty state.", ["voice-note:1"]);

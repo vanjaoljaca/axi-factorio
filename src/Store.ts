@@ -54,11 +54,28 @@ export class ConveyorStore {
     return row ? mapBlob(asRecord(row)) : null;
   }
 
+  requestContinuous(blobId: string): BlobMutationResult {
+    return this.requestExecution(blobId, "continuous");
+  }
+
+  requestStep(blobId: string): BlobMutationResult {
+    return this.requestExecution(blobId, "step");
+  }
+
+  requestStop(blobId: string): BlobMutationResult {
+    return this.database.transaction(() => {
+      const blob = this.requireBlob(blobId);
+      if (!blob.runRequested) return { blob, already: true };
+      this.database.connection.prepare(blobStopUpdate).run(this.now(), blob.id);
+      return { blob: this.requireBlob(blob.id), already: false };
+    });
+  }
+
   beginReceipt(input: BeginReceiptInput, ownerId?: string): ClaimedExecution {
     return this.database.transaction(() => {
       this.requireActiveLease(ownerId);
       const blob = this.requireBlob(input.blobId);
-      if (blob.state !== input.step.id || blob.paused) {
+      if (blob.state !== input.step.id || blob.paused || !blob.runRequested) {
         throw new Error(`Blob ${blob.id} is not ready for ${input.step.id}.`);
       }
       const receipt = this.insertReceipt(blob, input);
@@ -99,7 +116,7 @@ export class ConveyorStore {
       const receipt = this.requireReceipt(receiptId);
       const message = error instanceof Error ? error.message : String(error);
       this.database.connection.prepare(receiptFailureUpdate).run(message, this.now(), receipt.id);
-      this.database.connection.prepare(blobPauseUpdate).run(1, this.now(), receipt.blobId);
+      this.database.connection.prepare(blobPauseAndRunUpdate).run(1, 0, this.now(), receipt.blobId);
     });
   }
 
@@ -126,7 +143,7 @@ export class ConveyorStore {
     return this.database.transaction(() => {
       const blob = this.requireBlob(blobId);
       if (!blob.paused) return { blob, already: true };
-      this.database.connection.prepare(blobPauseUpdate).run(0, this.now(), blob.id);
+      this.database.connection.prepare(blobPauseAndRunUpdate).run(0, 1, this.now(), blob.id);
       return { blob: this.requireBlob(blob.id), already: false };
     });
   }
@@ -312,17 +329,20 @@ export class ConveyorStore {
   }
 
   private projectResult(receipt: Receipt, result: AdapterResult, nextStepId: string | null): void {
+    const blob = this.requireBlob(receipt.blobId);
+    const continueRun = Number(blob.runRequested && blob.executionMode === "continuous");
     if (result.status === "retry") {
-      this.database.connection.prepare(blobPauseUpdate).run(0, this.now(), receipt.blobId);
+      this.database.connection.prepare(blobPauseAndRunUpdate).run(0, continueRun, this.now(), receipt.blobId);
       return;
     }
     if (result.status === "blocked") {
-      this.database.connection.prepare(blobPauseUpdate).run(1, this.now(), receipt.blobId);
+      this.database.connection.prepare(blobPauseAndRunUpdate).run(1, 0, this.now(), receipt.blobId);
       return;
     }
     const state = nextStepId ?? "complete";
     this.database.connection.prepare(blobAdvanceUpdate).run(
-      state, 0, receipt.stepId, receipt.stepOrder, this.now(), receipt.blobId,
+      state, 0, nextStepId ? continueRun : 0,
+      receipt.stepId, receipt.stepOrder, this.now(), receipt.blobId,
     );
   }
 
@@ -341,8 +361,10 @@ export class ConveyorStore {
         id, blob.id, blob.state, kind, text, JSON.stringify(evidence), this.now(),
       );
       const approvalId = kind === "approval" ? id : null;
+      const runRequested = kind === "review" ? Number(blob.runRequested) : 1;
       this.database.connection.prepare(blobHumanGateUpdate).run(
-        blob.state, approvalId, kind === "review" ? Number(blob.paused) : 0, this.now(), blob.id,
+        blob.state, approvalId, kind === "review" ? Number(blob.paused) : 0,
+        runRequested, this.now(), blob.id,
       );
       return this.requireHumanInput(id);
     });
@@ -373,6 +395,28 @@ export class ConveyorStore {
   private recoverReceipt(receipt: Receipt): void {
     this.database.connection.prepare(receiptInterruptUpdate).run(this.now(), receipt.id);
     this.database.connection.prepare(blobPauseUpdate).run(0, this.now(), receipt.blobId);
+  }
+
+  private requestExecution(blobId: string, mode: ExecutionMode): BlobMutationResult {
+    return this.database.transaction(() => {
+      const blob = this.requireBlob(blobId);
+      if (blob.runRequested && blob.executionMode === mode) return { blob, already: true };
+      const blocker = this.executionBlocker(blob);
+      if (blocker) throw new BlobExecutionError(blocker);
+      this.database.connection.prepare(blobRunUpdate).run(mode, this.now(), blob.id);
+      return { blob: this.requireBlob(blob.id), already: false };
+    });
+  }
+
+  private executionBlocker(blob: Blob): string | null {
+    if (blob.state === "complete") return "This blob is complete.";
+    if (this.hasRunningReceipt(blob.id)) return "A transition is already running.";
+    if (!blob.paused) return null;
+    const latest = this.listReceipts(blob.id).filter((receipt) => !receipt.invalidatedAt).at(-1);
+    if (!latest) return "Inventory is held. Retry it before running.";
+    if (latest.status === "failed") return "Retry the failed receipt before running.";
+    if (blob.humanGateStepId === blob.state) return "Human feedback or approval is required before running.";
+    return "Resolve the blocked step before running.";
   }
 
   private hasRunningReceipt(blobId: string): boolean {
@@ -488,6 +532,8 @@ function mapBlob(row: Record<string, unknown>): Blob {
     inputArtifacts: JSON.parse(String(row.inputArtifactsJson)) as string[],
     state: row.state as BlobState,
     paused: Boolean(row.paused),
+    executionMode: String(row.executionMode || "continuous") as ExecutionMode,
+    runRequested: Boolean(row.runRequested),
     lastCompletedStepId: nullableString(row.lastCompletedStepId),
     lastCompletedOrder: nullableNumber(row.lastCompletedOrder),
     forcedStepId: nullableString(row.forcedStepId),
@@ -573,6 +619,8 @@ function asRecord(value: unknown): Record<string, unknown> {
 export type BlobMutationResult = { blob: Blob; already: boolean };
 export type ProjectMutationResult = { project: Project; already: boolean };
 
+export class BlobExecutionError extends Error {}
+
 type BeginReceiptInput = {
   blobId: string;
   step: StepDefinition;
@@ -586,25 +634,29 @@ const blobInsert = `INSERT INTO blobs
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 const blobSelect = "SELECT * FROM blobs WHERE id = ?";
 const blobList = "SELECT * FROM blobs ORDER BY createdAt DESC, id ASC";
-const blobNext = `SELECT * FROM blobs WHERE state != 'complete' AND paused = 0
+const blobNext = `SELECT * FROM blobs WHERE state != 'complete' AND paused = 0 AND runRequested = 1
   AND NOT EXISTS (SELECT 1 FROM receipts WHERE receipts.blobId = blobs.id
     AND receipts.status = 'running' AND receipts.invalidatedAt IS NULL)
   ORDER BY updatedAt, createdAt LIMIT 1`;
 const blobPauseUpdate = "UPDATE blobs SET paused = ?, updatedAt = ? WHERE id = ?";
+const blobPauseAndRunUpdate = "UPDATE blobs SET paused = ?, runRequested = ?, updatedAt = ? WHERE id = ?";
+const blobRunUpdate = "UPDATE blobs SET executionMode = ?, runRequested = 1, updatedAt = ? WHERE id = ?";
+const blobStopUpdate = "UPDATE blobs SET runRequested = 0, updatedAt = ? WHERE id = ?";
 const blobCompleteUpdate = `UPDATE blobs SET state = 'complete', paused = 0,
+  runRequested = 0,
   forcedStepId = NULL, humanGateStepId = NULL, humanGateApprovalInputId = NULL,
   updatedAt = ? WHERE id = ?`;
-const blobAdvanceUpdate = `UPDATE blobs SET state = ?, paused = ?, lastCompletedStepId = ?,
+const blobAdvanceUpdate = `UPDATE blobs SET state = ?, paused = ?, runRequested = ?, lastCompletedStepId = ?,
   lastCompletedOrder = ?, forcedStepId = NULL, humanGateStepId = NULL,
   humanGateApprovalInputId = NULL, updatedAt = ? WHERE id = ?`;
 const blobRewindUpdate = `UPDATE blobs SET state = ?, paused = 0, lastCompletedStepId = ?,
   lastCompletedOrder = ?, forcedStepId = ?, humanGateStepId = NULL,
-  humanGateApprovalInputId = NULL, updatedAt = ? WHERE id = ?`;
+  humanGateApprovalInputId = NULL, runRequested = 0, updatedAt = ? WHERE id = ?`;
 const blobHumanGateUpdate = `UPDATE blobs SET humanGateStepId = ?,
-  humanGateApprovalInputId = ?, paused = ?, updatedAt = ? WHERE id = ?`;
+  humanGateApprovalInputId = ?, paused = ?, runRequested = ?, updatedAt = ? WHERE id = ?`;
 const blobAdoptUpdate = `UPDATE blobs SET state = ?, paused = 0, lastCompletedStepId = ?,
   lastCompletedOrder = ?, forcedStepId = NULL, humanGateStepId = NULL,
-  humanGateApprovalInputId = NULL, updatedAt = ? WHERE id = ?`;
+  humanGateApprovalInputId = NULL, runRequested = 0, updatedAt = ? WHERE id = ?`;
 const receiptInsert = `INSERT INTO receipts
   (id, blobId, stepId, stepOrder, attempt, status, adapter, definitionGitSha,
    definitionHash, inputArtifactsJson, outputArtifactsJson, continuationThreadId,
@@ -672,6 +724,7 @@ import type {
   Blob,
   BlobInput,
   BlobState,
+  ExecutionMode,
   Project,
   ProjectInput,
   ImportAttestation,

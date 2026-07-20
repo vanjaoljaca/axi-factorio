@@ -43,6 +43,7 @@ test("viewer distinguishes imported work awaiting review from failed work", () =
   }]);
   database.connection.prepare("UPDATE blobs SET paused = 1 WHERE id = ?").run(imported.id);
   const failed = store.createBlob("failed", blobInput(fixture, "Failed work")).blob;
+  store.requestContinuous(failed.id);
   const failure = store.beginReceipt({
     blobId: failed.id, step: steps[0],
     definition: snapshotDefinition(steps[0], fixture.pipelinePath),
@@ -77,7 +78,43 @@ test("viewer keeps paused zero-receipt inventory neutral", () => {
   assert.deepEqual(selectState(blobs, "inventory"), {
     id: "inventory", status: "held", importedStepIds: [],
   });
+  const control = blobs.find((blob) => blob.id === "inventory")?.execution.play;
+  assert.deepEqual(control, {
+    enabled: false,
+    explanation: "Inventory is held. Retry it before running.",
+  });
 });
+
+test("viewer execution API persists Play, Step, and Stop without duplicate requests", async () => {
+  const fixture = createPipeline(["g1.first", "g2.second"]);
+  const databasePath = join(fixture.root, "factorio.sqlite");
+  const database = new FactorioDatabase(databasePath);
+  const store = new ConveyorStore(database);
+  store.createBlob("controlled", blobInput(fixture, "Controlled item"));
+  database.close();
+  const server = createViewerServer(databasePath);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("Viewer did not bind a TCP port.");
+  const endpoint = `http://127.0.0.1:${address.port}`;
+
+  const played = await fetch(`${endpoint}/api/blobs/controlled/play`, { method: "POST" }).then(readJson);
+  const replayed = await fetch(`${endpoint}/api/blobs/controlled/play`, { method: "POST" }).then(readJson);
+  const stopped = await fetch(`${endpoint}/api/blobs/controlled/stop`, { method: "POST" }).then(readJson);
+  const stepped = await fetch(`${endpoint}/api/blobs/controlled/step`, { method: "POST" }).then(readJson);
+  server.close();
+
+  assert.equal(played.already, false);
+  assert.equal(replayed.already, true);
+  assert.equal(stopped.blob.runRequested, false);
+  assert.equal(stepped.blob.executionMode, "step");
+  assert.equal(stepped.blob.runRequested, true);
+});
+
+async function readJson(response: Response): Promise<any> {
+  assert.equal(response.status, 200);
+  return response.json();
+}
 
 function selectState(
   blobs: Array<{ id: string; status: string; importedStepIds: string[] }>,
@@ -100,7 +137,12 @@ type ViewSnapshot = {
     pipelineRoot: string;
     resolvedPipeline: string | null;
     steps: Array<{ id: string }>;
-    blobs: Array<{ id: string; status: string; importedStepIds: string[] }>;
+    blobs: Array<{
+      id: string;
+      status: string;
+      importedStepIds: string[];
+      execution: { play: { enabled: boolean; explanation: string } };
+    }>;
   }>;
 };
 
@@ -109,7 +151,7 @@ import type { PipelineFixture } from "./Fixtures.ts";
 import { createPipeline } from "./Fixtures.ts";
 import { FactorioDatabase } from "../src/Database.ts";
 import { ConveyorStore } from "../src/Store.ts";
-import { createViewSnapshot } from "../src/ViewerServer.ts";
+import { createViewerServer, createViewSnapshot } from "../src/ViewerServer.ts";
 import { discoverPipeline, snapshotDefinition } from "../src/Pipeline.ts";
 import assert from "node:assert/strict";
 import { mkdirSync, renameSync } from "node:fs";

@@ -84,7 +84,9 @@ function visualTest(file: string, category: string, name: string, index: number)
 
 function classify(category: string): TestVisualKind {
   if (category === "Service") return "service-timeline";
-  if (category === "Runner" || category === "TestHarness") return "conveyor-replay";
+  if (category === "ExecutionControls" || category === "Runner" || category === "TestHarness") {
+    return "conveyor-replay";
+  }
   return "terminal-proof";
 }
 

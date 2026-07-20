@@ -30,6 +30,9 @@ async function runCommand(
     case "status": return listBlobs(args.slice(1), store, json);
     case "show": return showBlob(args.slice(1), store, json);
     case "receipts": return showReceipts(args.slice(1), store, json);
+    case "play":
+    case "step":
+    case "stop": return controlBlob(args.slice(1), store, json, args[0]);
     case "retry": return retryBlob(args.slice(1), store, json);
     case "review": return armHumanReview(args.slice(1), store, json);
     case "feedback": return addHumanFeedback(args.slice(1), store, json);
@@ -93,7 +96,7 @@ function addBlob(args: string[], store: ConveyorStore, json: boolean): void {
     ok: `add ${result.blob.id} -> ${result.blob.state}`,
     already: result.already,
     blob: blobSummary(result.blob),
-    help: ["Run `axi-factorio run` or start `axi-factorio service`."],
+    help: [`Run \`axi-factorio play ${result.blob.id}\` to start it.`],
   }, json);
 }
 
@@ -198,6 +201,27 @@ function retryBlob(args: string[], store: ConveyorStore, json: boolean): void {
   printOutput({ ok: `retry ${result.blob.id} -> ${result.blob.state}`, already: result.already }, json);
 }
 
+function controlBlob(
+  args: string[],
+  store: ConveyorStore,
+  json: boolean,
+  action: "play" | "step" | "stop",
+): void {
+  const parsed = parseArgs(args, {});
+  requirePositionals(parsed, 1, `${action} requires one blob ID.`);
+  const id = parsed.positionals[0];
+  const result = action === "play"
+    ? store.requestContinuous(id)
+    : action === "step"
+      ? store.requestStep(id)
+      : store.requestStop(id);
+  printOutput({
+    ok: `${action} ${id} -> ${result.blob.runRequested ? result.blob.executionMode : "stopped"}`,
+    already: result.already,
+    blob: blobSummary(result.blob),
+  }, json);
+}
+
 function armHumanReview(args: string[], store: ConveyorStore, json: boolean): void {
   const parsed = parseArgs(args, { "--note": "value" });
   requirePositionals(parsed, 1, "review requires one blob ID.");
@@ -266,7 +290,7 @@ function rewindBlob(
     ok: `${action} ${blob.id} -> ${step.id}`,
     already: result.already,
     blob: blobSummary(result.blob),
-    help: ["Run `axi-factorio run` to move the blob forward again."],
+    help: [`Run \`axi-factorio play ${blob.id}\` to move the blob forward again.`],
   }, json);
 }
 
@@ -420,7 +444,14 @@ function contentPreview(content: string, full: boolean): ContentPreview {
 }
 
 function blobSummary(blob: Blob): Record<string, unknown> {
-  return { id: blob.id, title: blob.title, project: blob.projectId, state: blob.state };
+  return {
+    id: blob.id,
+    title: blob.title,
+    project: blob.projectId,
+    state: blob.state,
+    executionMode: blob.executionMode,
+    runRequested: blob.runRequested,
+  };
 }
 
 function blobDetail(blob: Blob): Record<string, unknown> {
@@ -430,6 +461,8 @@ function blobDetail(blob: Blob): Record<string, unknown> {
     state: blob.state,
     step: blob.state === "complete" ? null : blob.state,
     paused: blob.paused,
+    executionMode: blob.executionMode,
+    runRequested: blob.runRequested,
     project: blob.projectId,
     pipeline: blob.pipelineId,
     pipelinePath: blob.pipelinePath,
@@ -570,7 +603,7 @@ function serviceAbortController(): AbortController {
 }
 
 function printVersion(): void {
-  process.stdout.write("axi-factorio 0.1.0-rc.8\n");
+  process.stdout.write("axi-factorio 0.1.0-rc.9\n");
 }
 
 function helpCommand(args: string[]): string | undefined {
@@ -619,10 +652,10 @@ const addFlags: FlagSpec = {
 };
 
 const helpText: Record<string, string> = {
-  root: `axi-factorio 0.1.0-rc.8
+  root: `axi-factorio 0.1.0-rc.9
 
 Usage: axi-factorio <command> [flags]
-Commands: project, add, adopt, list, status, show, receipts, retry, review, feedback, approve, rewind, kick, run, service, init
+Commands: project, add, adopt, list, status, show, receipts, play, step, stop, retry, review, feedback, approve, rewind, kick, run, service, init
 Globals: --db PATH, --json, --help, --version
 
 Run without arguments for the live conveyor dashboard.
@@ -639,6 +672,9 @@ Run without arguments for the live conveyor dashboard.
   status: `Usage: axi-factorio status [--state STATE] [--limit 50]\n`,
   show: `Usage: axi-factorio show BLOB_ID [--full]\n`,
   receipts: `Usage: axi-factorio receipts [BLOB_ID] [--limit 50] [--full]\n`,
+  play: `Usage: axi-factorio play BLOB_ID\n`,
+  step: `Usage: axi-factorio step BLOB_ID\n`,
+  stop: `Usage: axi-factorio stop BLOB_ID\n`,
   retry: `Usage: axi-factorio retry BLOB_ID\n`,
   review: `Usage: axi-factorio review BLOB_ID [--note TEXT]\n`,
   feedback: `Usage: axi-factorio feedback BLOB_ID "TEXT" [--evidence REF...]\n`,

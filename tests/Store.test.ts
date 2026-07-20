@@ -1,6 +1,7 @@
 test("stores blobs and complete execution receipts", () => {
   const fixture = createStoreFixture();
   const blob = fixture.store.createBlob("blob-1", blobInput(fixture)).blob;
+  fixture.store.requestContinuous(blob.id);
   const step = discoverPipeline(fixture.pipelinePath)[0];
   const definition = snapshotDefinition(step, fixture.pipelinePath);
   const claim = fixture.store.beginReceipt({
@@ -104,6 +105,7 @@ test("adopt rejects missing evidence, non-exact sources, and order gaps", () => 
 test("rewind invalidates the target and later receipts", () => {
   const fixture = createStoreFixture(["plan.define", "dev.workbench", "qa.check"]);
   const blob = fixture.store.createBlob("blob-1", blobInput(fixture)).blob;
+  fixture.store.requestContinuous(blob.id);
   const steps = discoverPipeline(fixture.pipelinePath);
   for (const [index, step] of steps.entries()) completeStep(fixture.store, blob.id, step, index < 2);
 
@@ -143,6 +145,7 @@ test("stale lease owners cannot write receipts", () => {
   let now = "2026-07-19T00:00:00.000Z";
   const fixture = createStoreFixture(["plan.define"], () => now);
   const blob = fixture.store.createBlob("blob-1", blobInput(fixture)).blob;
+  fixture.store.requestContinuous(blob.id);
   const step = discoverPipeline(fixture.pipelinePath)[0];
   assert.equal(fixture.store.acquireLease("first", 1_000), true);
   const claim = fixture.store.beginReceipt({
@@ -169,6 +172,7 @@ function completeStep(
   hasNext: boolean,
 ): void {
   const blob = store.getBlob(blobId)!;
+  if (!blob.runRequested) store.requestContinuous(blobId);
   const definition = snapshotDefinition(step, blob.pipelinePath);
   const claim = store.beginReceipt({ blobId, step, definition, adapter: "fake", inputArtifacts: [] });
   store.completeReceipt(claim.receipt.id, {

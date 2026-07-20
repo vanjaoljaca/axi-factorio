@@ -69,6 +69,8 @@ export class FactorioDatabase {
     }
     addColumn(this.connection, columns, "humanGateStepId", "TEXT");
     addColumn(this.connection, columns, "humanGateApprovalInputId", "TEXT");
+    addColumn(this.connection, columns, "executionMode", "TEXT NOT NULL DEFAULT 'continuous'");
+    addColumn(this.connection, columns, "runRequested", "INTEGER NOT NULL DEFAULT 0");
   }
 
   private migrateReceipts(): void {
@@ -110,6 +112,8 @@ const schema = `
     forcedStepId TEXT,
     humanGateStepId TEXT,
     humanGateApprovalInputId TEXT,
+    executionMode TEXT NOT NULL DEFAULT 'continuous',
+    runRequested INTEGER NOT NULL DEFAULT 0,
     createdAt TEXT NOT NULL,
     updatedAt TEXT NOT NULL
   );
@@ -197,6 +201,8 @@ const columnTables: Record<string, string> = {
   pipelineId: "blobs",
   humanGateStepId: "blobs",
   humanGateApprovalInputId: "blobs",
+  executionMode: "blobs",
+  runRequested: "blobs",
   continuationThreadId: "receipts",
   humanInputJson: "receipts",
   approvalEvidenceJson: "receipts",

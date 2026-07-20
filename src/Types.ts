@@ -1,4 +1,5 @@
 export type BlobState = string;
+export type ExecutionMode = "continuous" | "step";
 export type ReceiptStatus = "running" | "advance" | "retry" | "blocked" | "failed" | "interrupted";
 export type AdapterOutcome = "advance" | "retry" | "blocked";
 
@@ -45,6 +46,8 @@ export type Blob = Omit<BlobInput, "pipelineId" | "projectId"> & {
   pipelineId: string;
   state: BlobState;
   paused: boolean;
+  executionMode: ExecutionMode;
+  runRequested: boolean;
   lastCompletedStepId: string | null;
   lastCompletedOrder: number | null;
   forcedStepId: string | null;

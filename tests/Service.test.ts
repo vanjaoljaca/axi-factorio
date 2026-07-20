@@ -4,6 +4,7 @@ test("service polls positioned blobs directly and processes new work", async () 
   const running = fixture.service.run(controller.signal);
   await delay(30);
   fixture.store.createBlob("blob-1", blobInput(fixture));
+  fixture.store.requestContinuous("blob-1");
 
   await waitUntil(() => fixture.store.getBlob("blob-1")?.state === "complete");
   controller.abort();
@@ -16,6 +17,7 @@ test("service polls positioned blobs directly and processes new work", async () 
 test("service heartbeats while an adapter runs", async () => {
   const fixture = createServiceFixture(new SlowAdapter(), 300);
   fixture.store.createBlob("blob-1", blobInput(fixture));
+  fixture.store.requestContinuous("blob-1");
   const controller = new AbortController();
   const running = fixture.service.run(controller.signal);
 
@@ -41,6 +43,7 @@ test("one-shot run refuses a competing dispatcher", async () => {
 test("service shutdown interrupts the receipt without changing its position", async () => {
   const fixture = createServiceFixture(new AbortableAdapter());
   fixture.store.createBlob("blob-1", blobInput(fixture));
+  fixture.store.requestContinuous("blob-1");
   const controller = new AbortController();
   const running = fixture.service.run(controller.signal);
 
@@ -57,6 +60,8 @@ test("service records a failure then continues to the next blob", async () => {
   const fixture = createServiceFixture(new FailOnceAdapter());
   fixture.store.createBlob("blob-1", blobInput(fixture));
   fixture.store.createBlob("blob-2", blobInput(fixture));
+  fixture.store.requestContinuous("blob-1");
+  fixture.store.requestContinuous("blob-2");
   const controller = new AbortController();
   const running = fixture.service.run(controller.signal);
 

@@ -33,8 +33,8 @@ definitions in `test/harness/default/`, creates a fresh temporary SQLite
 database, and moves a blob through the real `ConveyorRunner`.
 
 The workbench is not included in the release artifact or exposed as an
-installed CLI command. The installed service has a separate read-only user
-view: project-grouped task rows, pipeline beads, status, and updated time. Raw
+installed CLI command. The installed service has a separate user
+view: project-grouped task rows, pipeline beads, status, and execution controls. Raw
 receipts, assertions, scenario playback, and database paths stay in the source
 workbench.
 
@@ -109,12 +109,12 @@ records the Codex thread ID, and resumes that same thread with the exit prompt.
 When fresh human input is appended at the current step, the next receipt resumes
 that same Codex thread before evaluating the exit prompt again.
 
-In rc.8, continuation is intentionally step-scoped: retries, blocked reviews,
+In rc.9, continuation is intentionally step-scoped: retries, blocked reviews,
 feedback, and approval cycles reuse the current step's Codex thread, while the
 next pipeline step starts a fresh thread. This preserves phase isolation but
 repays Codex's startup context cost at every step. Reusing one blob-owned thread
 across ordinary steps is a separate adapter-lifecycle decision, not an implicit
-rc.8 behavior.
+rc.9 behavior.
 The exit result supplies output artifact references, and the adapter also adds
 the Codex thread as a receipt artifact. The runner itself has no Codex-specific
 state.
@@ -137,7 +137,7 @@ npm run build
 
 This recreates `release/` with:
 
-- `axi-factorio-0.1.0-rc.8.tgz`, the installable package;
+- `axi-factorio-0.1.0-rc.9.tgz`, the installable package;
 - `SHA256SUMS`, for artifact verification; and
 - `INSTALL.md`, with direct and vendored installation commands.
 
@@ -149,7 +149,7 @@ Do not use `npm link` for a consuming project. Install the exact tarball so
 Install the exact candidate in the consuming npm project:
 
 ```sh
-npm install --save-exact /path/to/axi-factorio-0.1.0-rc.8.tgz
+npm install --save-exact /path/to/axi-factorio-0.1.0-rc.9.tgz
 ```
 
 From the consuming project root, the defaults are:
@@ -190,14 +190,31 @@ npx axi-factorio add account-export-1 "Add account export" \
 `--input-ref` may be repeated. `--mint` generates an ID. Repeating an identical
 add is an idempotent no-op.
 
-Run one item or keep the conveyor moving:
+Request continuous execution, exactly one transition, or a graceful stop:
+
+```sh
+npx axi-factorio play account-export-1
+npx axi-factorio step account-export-1
+npx axi-factorio stop account-export-1
+```
+
+`play` persists a continuous run request. The service keeps claiming automatic
+steps until the blob reaches a human gate, fails, is stopped, or completes.
+`step` persists debug mode and permits exactly one adapter receipt before
+stopping again. `stop` cancels queued work immediately; if an adapter call is
+already running, that receipt is allowed to finish and no following transition
+is claimed. Mode and run-request state survive service and machine restarts.
+Repeated identical requests are idempotent, and the dispatcher lease prevents
+duplicate concurrent claims.
+
+Process one requested transition or keep the conveyor service moving:
 
 ```sh
 npx axi-factorio run
 npx axi-factorio service
 ```
 
-The foreground service owns both the automated runner and the read-only web
+The foreground service owns both the automated runner and the web
 view at `http://127.0.0.1:4317`. Install it as a macOS user service from the
 consuming project root:
 
@@ -254,8 +271,9 @@ external task. Approval requires at least one evidence reference. The prompt
 still decides whether the step passes; Factorio only supplies and records the
 human evidence.
 
-Opening an rc.4, rc.5, rc.6, or rc.7 database with rc.8 migrates projects and receipt
-provenance columns automatically. The old
+Opening an rc.4 through rc.8 database with rc.9 migrates projects, receipt
+provenance, and durable execution-control columns automatically. Existing
+blobs migrate in the stopped continuous mode. The old
 project `cwd` becomes the app root, and its initial pipeline root becomes
 `<old-cwd>/pipelines`. Run `project upsert` afterward to point projects at a
 shared workspace pipeline root.
@@ -270,7 +288,7 @@ blocked work. Orange means human attention is needed; red is reserved for
 failure or broken execution.
 
 Future multi-pipeline integration is deliberately parked in [ROADMAP.md](ROADMAP.md)
-under **pipeline merger**. rc.8 does not implement it.
+under **pipeline merger**. rc.9 does not implement it.
 
 Explicitly move it back to a step:
 

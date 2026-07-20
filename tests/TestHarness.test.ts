@@ -6,6 +6,7 @@ test("default harness pushes a blob through the actual conveyor", async () => {
       title: "Happy path", body: "", cwd: process.cwd(),
       pipelinePath: harness.pipelinePath, inputArtifacts: [],
     });
+    harness.store.requestContinuous("blob-happy");
 
     while (harness.store.getBlob("blob-happy")?.state !== "complete") {
       assert.equal(await harness.runner.runOnce(), true);

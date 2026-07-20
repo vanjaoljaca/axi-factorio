@@ -74,6 +74,7 @@ async function runHappyPath(): Promise<Scenario> {
       title: "Default harness blob", body: "", cwd: process.cwd(),
       pipelinePath: harness.pipelinePath, inputArtifacts: [],
     });
+    harness.store.requestContinuous("blob-happy");
     const capture = () => frames.push(harnessSnapshot(harness));
     harness.adapter.onExecute = capture;
     capture();
