@@ -99,8 +99,12 @@ function servicePaths(): ServicePaths {
   };
 }
 
-function servicePath(): string {
-  return [dirname(process.execPath), dirname(toolPath("codex")), "/usr/bin", "/bin"].join(":");
+export function servicePath(cwd = process.cwd(), executable = process.execPath): string {
+  const localBin = join(cwd, "node_modules", ".bin");
+  const codexBin = existsSync(join(localBin, "codex"))
+    ? localBin
+    : dirname(toolPath("codex"));
+  return [dirname(executable), codexBin, "/usr/bin", "/bin"].join(":");
 }
 
 function toolPath(name: string): string {

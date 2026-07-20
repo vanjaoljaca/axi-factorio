@@ -81,8 +81,8 @@ function scenarioIndex(): object[] {
       description: "notLoaded container · fresh active turn · production receipt path",
     },
     {
-      id: "codex-mcp-isolation", name: "Codex MCP isolation",
-      description: "unrelated MCP startup failure · production Codex harness · receipt path",
+      id: "codex-mcp-isolation", name: "Pinned Codex MCP isolation",
+      description: "0.144.6 argv contract · unrelated MCP failure · production receipt path",
     },
   ];
 }

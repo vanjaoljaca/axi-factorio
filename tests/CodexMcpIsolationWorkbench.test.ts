@@ -3,6 +3,7 @@ test("Workbench proves unrelated MCP startup cannot block a Codex stage", async 
 
   assert.equal(scenario.observedReceipt.status, "advance");
   assert(scenario.argv.split("\n").includes("--ignore-user-config"));
+  assert.match(scenario.frames[0]?.name ?? "", /Pinned Codex 0\.144\.6/);
   assert(scenario.frames.at(-1)?.assertions.every((assertion) => assertion.passed));
 });
 

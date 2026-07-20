@@ -154,6 +154,10 @@ app-specific integrations are excluded from Factorio stages. Pipeline prompts
 and the project working directory remain authoritative; Factorio does not
 silently add provider tools.
 
+The installed service resolves `codex` from the consuming workspace's pinned
+`node_modules/.bin` before any system installation. This keeps launchd on the
+same CLI contract verified by the package and disposable proofs.
+
 All fresh and resumed Codex prompts are passed after the CLI `--` option
 terminator. Editable prompts may therefore begin with Markdown rules or
 option-like text without being parsed as command-line flags.
@@ -183,7 +187,7 @@ npm run build
 
 This recreates `release/` with:
 
-- `axi-factorio-0.1.0-rc.15.tgz`, the installable package;
+- `axi-factorio-0.1.0-rc.16.tgz`, the installable package;
 - `SHA256SUMS`, for artifact verification; and
 - `INSTALL.md`, with direct and vendored installation commands.
 
@@ -195,7 +199,7 @@ Do not use `npm link` for a consuming project. Install the exact tarball so
 Install the exact candidate in the consuming npm project:
 
 ```sh
-npm install --save-exact /path/to/axi-factorio-0.1.0-rc.15.tgz
+npm install --save-exact /path/to/axi-factorio-0.1.0-rc.16.tgz
 ```
 
 From the consuming project root, the defaults are:
@@ -317,7 +321,7 @@ external task. Approval requires at least one evidence reference. The prompt
 still decides whether the step passes; Factorio only supplies and records the
 human evidence.
 
-Opening an rc.4 through rc.14 database with rc.15 migrates projects, receipt
+Opening an rc.4 through rc.15 database with rc.16 migrates projects, receipt
 provenance, durable execution-control columns, blob revisions, and immutable
 attempt evidence automatically. Existing
 blobs migrate in the stopped continuous mode. The old
@@ -344,7 +348,7 @@ Rewind-and-rerun invalidates the selected step for progression while keeping
 all prior receipts available for side-by-side comparison.
 
 Future multi-pipeline integration is deliberately parked in [ROADMAP.md](ROADMAP.md)
-under **pipeline merger**. rc.15 does not implement it.
+under **pipeline merger**. rc.16 does not implement it.
 
 Explicitly move it back to a step:
 

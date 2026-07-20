@@ -72,10 +72,12 @@ class ScenarioFixture {
   }
 
   private frame(receipt: Receipt, argv: string): WorkbenchFrame {
-    const isolated = argv.split("\n").includes("--ignore-user-config");
+    const isolated = argv.match(/^--ignore-user-config$/gmu)?.length === 2;
+    const entrySafe = /\n--\n---\naxi-factorio runtime context\n/u.test(argv);
+    const resumeSafe = /\nresume\nthread-mcp-isolated\n--\n---\naxi-factorio runtime context\n/u.test(argv);
     return {
-      name: "Codex MCP isolation",
-      description: `Expected advance; observed ${receipt.status}. Production Codex harness + SQLite receipt path.`,
+      name: "Pinned Codex 0.144.6 MCP isolation",
+      description: `Expected advance; observed ${receipt.status}. Exact pinned-CLI argv + production receipt path.`,
       source: "scenario",
       steps: [{ id: "g1.first", label: "First" }],
       blobs: [{
@@ -87,6 +89,8 @@ class ScenarioFixture {
       receipts: [viewReceipt(receipt)],
       assertions: [
         { label: "Codex invocation ignores unrelated user MCP configuration", passed: isolated },
+        { label: "Fresh prompt follows the 0.144.6 option terminator", passed: entrySafe },
+        { label: "Resumed prompt follows the 0.144.6 resume contract", passed: resumeSafe },
         { label: "Irrelevant AbletonMCP failure cannot block the stage", passed: receipt.status === "advance" },
         { label: "Production receipt advances normally", passed: receipt.status === "advance" },
       ],
