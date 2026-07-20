@@ -41,7 +41,8 @@ test("one-shot run refuses a competing dispatcher", async () => {
 });
 
 test("service shutdown interrupts the receipt without changing its position", async () => {
-  const fixture = createServiceFixture(new AbortableAdapter());
+  const harness = new AbortableAdapter();
+  const fixture = createServiceFixture(harness);
   fixture.store.createBlob("blob-1", blobInput(fixture));
   fixture.store.requestContinuous("blob-1");
   const controller = new AbortController();
@@ -53,6 +54,7 @@ test("service shutdown interrupts the receipt without changing its position", as
 
   assert.equal(fixture.store.getBlob("blob-1")?.state, "plan.define");
   assert.equal(fixture.store.listReceipts("blob-1")[0].status, "interrupted");
+  assert.equal(harness.cancelled, true);
   fixture.database.close();
 });
 
@@ -76,49 +78,75 @@ test("service records a failure then continues to the next blob", async () => {
   fixture.database.close();
 });
 
-class ServiceAdapter implements ToolAdapter {
+class ServiceAdapter implements AgentHarness {
   readonly name = "fake";
 
-  async execute(input: AdapterInput, onExternalRun: ExternalRunHandler): Promise<AdapterResult> {
-    onExternalRun(`run:${input.blob.id}`);
+  async start(input: HarnessStartInput, observer: HarnessObserver): Promise<HarnessResult> {
+    return this.execute(input, `run:${input.blob.id}`, observer);
+  }
+
+  async resume(input: HarnessResumeInput, observer: HarnessObserver): Promise<HarnessResult> {
+    return this.execute(input, input.externalRunId, observer);
+  }
+
+  async cancel(): Promise<void> {}
+
+  protected async execute(
+    input: HarnessRunInput,
+    externalRunId: string,
+    observer: HarnessObserver,
+  ): Promise<HarnessResult> {
+    observer.event({ type: "external-run", externalRunId });
     return {
-      status: "advance",
+      decision: "advance",
       reason: "done",
       outputArtifacts: [`artifact:${input.step.id}`],
-      externalRunId: `run:${input.blob.id}`,
+      externalRunId,
     };
   }
 }
 
 class SlowAdapter extends ServiceAdapter {
-  override async execute(input: AdapterInput, onExternalRun: ExternalRunHandler): Promise<AdapterResult> {
+  protected override async execute(
+    input: HarnessRunInput,
+    externalRunId: string,
+    observer: HarnessObserver,
+  ): Promise<HarnessResult> {
     await delay(800);
-    return super.execute(input, onExternalRun);
+    return super.execute(input, externalRunId, observer);
   }
 }
 
 class AbortableAdapter extends ServiceAdapter {
-  override async execute(input: AdapterInput): Promise<AdapterResult> {
-    return new Promise((_resolve, reject) => {
-      const abort = () => reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
-      if (input.signal?.aborted) abort();
-      else input.signal?.addEventListener("abort", abort, { once: true });
-    });
+  cancelled = false;
+  private reject: ((error: Error) => void) | null = null;
+
+  protected override async execute(): Promise<HarnessResult> {
+    return new Promise((_resolve, reject) => this.reject = reject);
+  }
+
+  override async cancel(): Promise<void> {
+    this.cancelled = true;
+    this.reject?.(Object.assign(new Error("aborted"), { name: "AbortError" }));
   }
 }
 
 class FailOnceAdapter extends ServiceAdapter {
   private shouldFail = true;
 
-  override async execute(input: AdapterInput, onExternalRun: ExternalRunHandler): Promise<AdapterResult> {
-    if (!this.shouldFail) return super.execute(input, onExternalRun);
+  protected override async execute(
+    input: HarnessRunInput,
+    externalRunId: string,
+    observer: HarnessObserver,
+  ): Promise<HarnessResult> {
+    if (!this.shouldFail) return super.execute(input, externalRunId, observer);
     this.shouldFail = false;
     throw new Error("adapter failed");
   }
 }
 
 function createServiceFixture(
-  adapter: ToolAdapter = new ServiceAdapter(),
+  adapter: AgentHarness = new ServiceAdapter(),
   leaseMs = 500,
 ): ServiceFixture {
   const pipeline = createPipeline();
@@ -161,8 +189,15 @@ type ServiceFixture = PipelineFixture & {
   service: ConveyorService;
 };
 
-import type { AdapterInput, AdapterResult, BlobInput } from "../src/Types.ts";
-import type { ExternalRunHandler, ToolAdapter } from "../src/Adapter.ts";
+import type { BlobInput } from "../src/Types.ts";
+import type {
+  AgentHarness,
+  HarnessObserver,
+  HarnessResult,
+  HarnessResumeInput,
+  HarnessRunInput,
+  HarnessStartInput,
+} from "../src/Harness.ts";
 import type { PipelineFixture } from "./Fixtures.ts";
 import { createPipeline } from "./Fixtures.ts";
 import { FactorioDatabase } from "../src/Database.ts";

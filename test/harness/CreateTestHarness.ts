@@ -3,7 +3,7 @@ export type TestHarness = {
   steps: StepDefinition[];
   database: FactorioDatabase;
   store: ConveyorStore;
-  adapter: TestHarnessAdapter;
+  adapter: TestHarnessAgent;
   runner: ConveyorRunner;
   dispose(): void;
 };
@@ -15,7 +15,7 @@ export function createTestHarness(): TestHarness {
   initializeGit(root);
   const database = new FactorioDatabase(join(root, "factorio.sqlite"));
   const store = new ConveyorStore(database);
-  const adapter = new TestHarnessAdapter();
+  const adapter = new TestHarnessAgent();
   return {
     pipelinePath, steps: discoverPipeline(pipelinePath), database, store, adapter,
     runner: new ConveyorRunner(store, adapter),
@@ -31,16 +31,29 @@ function initializeGit(root: string): void {
   execFileSync("git", ["commit", "-q", "-m", "default harness"], { cwd: root });
 }
 
-export class TestHarnessAdapter implements ToolAdapter {
+export class TestHarnessAgent implements AgentHarness {
   readonly name = "test-harness";
   onExecute: (() => void) | null = null;
 
-  async execute(input: AdapterInput, onExternalRun: ExternalRunHandler): Promise<AdapterResult> {
+  async start(input: HarnessStartInput, observer: HarnessObserver): Promise<HarnessResult> {
+    return this.execute(input, observer, `test-harness:${input.blob.id}:${input.step.id}`);
+  }
+
+  async resume(input: HarnessResumeInput, observer: HarnessObserver): Promise<HarnessResult> {
+    return this.execute(input, observer, input.externalRunId);
+  }
+
+  async cancel(): Promise<void> {}
+
+  private async execute(
+    input: HarnessStartInput,
+    observer: HarnessObserver,
+    externalRunId: string,
+  ): Promise<HarnessResult> {
     this.onExecute?.();
-    const externalRunId = `test-harness:${input.blob.id}:${input.step.id}`;
-    onExternalRun(externalRunId);
+    observer.event({ type: "external-run", externalRunId });
     return {
-      status: "advance", reason: "default harness advance",
+      decision: "advance", reason: "default harness advance",
       outputArtifacts: [], externalRunId,
     };
   }
@@ -53,8 +66,14 @@ function dispose(database: FactorioDatabase, root: string): void {
 
 const templatePath = join(dirname(fileURLToPath(import.meta.url)), "default");
 
-import type { ExternalRunHandler, ToolAdapter } from "../../src/Adapter.ts";
-import type { AdapterInput, AdapterResult, StepDefinition } from "../../src/Types.ts";
+import type {
+  AgentHarness,
+  HarnessObserver,
+  HarnessResult,
+  HarnessResumeInput,
+  HarnessStartInput,
+} from "../../src/Harness.ts";
+import type { StepDefinition } from "../../src/Types.ts";
 import { FactorioDatabase } from "../../src/Database.ts";
 import { ConveyorRunner } from "../../src/Runner.ts";
 import { ConveyorStore } from "../../src/Store.ts";

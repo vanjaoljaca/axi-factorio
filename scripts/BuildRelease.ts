@@ -93,12 +93,19 @@ npx axi-factorio project upsert APP_ID "APP NAME" \\
 npx axi-factorio project show APP_ID --json
 \`\`\`
 
-New blobs use the project root as their Codex working directory and resolve the
-highest \`vN\` under the shared pipeline root. Existing rc.4 through rc.8 databases
+New blobs use the project root as their harness working directory and resolve the
+highest \`vN\` under the shared pipeline root. Existing rc.4 through rc.9 databases
 migrate on first open, including imported-receipt provenance and durable
-execution-control columns. Use
+execution-control columns and the append-only harness event table. Use
 \`project upsert\` to replace the migrated
 \`<old-cwd>/pipelines\` root with the shared workspace pipeline root.
+
+Select the execution harness when installing the service:
+
+\`\`\`sh
+npx axi-factorio service install --harness codex
+# or: --harness module:@example/my-harness#createHarness
+\`\`\`
 `;
 }
 

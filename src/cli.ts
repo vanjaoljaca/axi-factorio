@@ -295,8 +295,9 @@ function rewindBlob(
 }
 
 async function runOne(args: string[], store: ConveyorStore, json: boolean): Promise<void> {
-  requirePositionals(parseArgs(args, {}), 0, "run accepts no positional arguments.");
-  const runner = new ConveyorRunner(store, new CodexAdapter());
+  const parsed = parseArgs(args, harnessFlags);
+  requirePositionals(parsed, 0, "run accepts no positional arguments.");
+  const runner = await configuredRunner(store, parsed);
   const processed = await new ConveyorService(store, runner).runOnce(serviceAbortController().signal);
   printOutput({
     run: processed ? "processed" : "idle",
@@ -310,9 +311,18 @@ async function runService(
   json: boolean,
   databasePath: string,
 ): Promise<void> {
-  const parsed = parseArgs(args, { "--poll-ms": "value", "--port": "value" });
+  const parsed = parseArgs(args, {
+    "--poll-ms": "value", "--port": "value", ...harnessFlags,
+  });
   const action = parsed.positionals[0] ?? "run";
-  if (action === "install") return printService("installed", installService(databasePath, servicePort(parsed)), json);
+  if (action === "install") {
+    return printService("installed", installService(
+      databasePath,
+      servicePort(parsed),
+      harnessSelector(parsed),
+      instrumentationSelector(parsed),
+    ), json);
+  }
   if (action === "status") return printService("status", showServiceStatus(), json);
   if (action === "uninstall") return printService("uninstalled", uninstallService(), json);
   if (action !== "run") throw usage("service accepts run, install, status, or uninstall.");
@@ -326,9 +336,25 @@ async function runService(
   if (pollMs < 50) throw usage("--poll-ms must be at least 50.");
   const controller = serviceAbortController();
   const viewer = startServiceViewer(databasePath, servicePort(parsed), controller);
-  const runner = new ConveyorRunner(store, new CodexAdapter());
+  const runner = await configuredRunner(store, parsed);
   await Promise.all([new ConveyorService(store, runner, pollMs).run(controller.signal), viewer]);
   printOutput({ ok: "service -> stopped" }, json);
+}
+
+async function configuredRunner(store: ConveyorStore, parsed: ParsedArgs): Promise<ConveyorRunner> {
+  const harness = await loadHarness(harnessSelector(parsed));
+  const instrumentation = await loadHarnessInstrumentation(instrumentationSelector(parsed));
+  return new ConveyorRunner(store, harness, instrumentation);
+}
+
+function harnessSelector(parsed: ParsedArgs): string {
+  return firstFlag(parsed, "--harness") ?? defaultHarnessSelector();
+}
+
+function instrumentationSelector(parsed: ParsedArgs): string {
+  return firstFlag(parsed, "--instrumentation")
+    ?? process.env.AXI_FACTORIO_INSTRUMENTATION
+    ?? "none";
 }
 
 function printService(action: string, service: ServiceStatus, json: boolean): void {
@@ -603,7 +629,7 @@ function serviceAbortController(): AbortController {
 }
 
 function printVersion(): void {
-  process.stdout.write("axi-factorio 0.1.0-rc.9\n");
+  process.stdout.write("axi-factorio 0.1.0-rc.10\n");
 }
 
 function helpCommand(args: string[]): string | undefined {
@@ -650,9 +676,13 @@ const addFlags: FlagSpec = {
   "--input-ref": "value",
   "--mint": "boolean",
 };
+const harnessFlags: FlagSpec = {
+  "--harness": "value",
+  "--instrumentation": "value",
+};
 
 const helpText: Record<string, string> = {
-  root: `axi-factorio 0.1.0-rc.9
+  root: `axi-factorio 0.1.0-rc.10
 
 Usage: axi-factorio <command> [flags]
 Commands: project, add, adopt, list, status, show, receipts, play, step, stop, retry, review, feedback, approve, rewind, kick, run, service, init
@@ -682,9 +712,9 @@ Run without arguments for the live conveyor dashboard.
   adopt: `Usage: axi-factorio adopt BLOB_ID CURRENT_STEP --source KIND:EXACT_ID --evidence STEP_ID=REF...\n`,
   rewind: `Usage: axi-factorio rewind BLOB_ID STEP_ID\n`,
   kick: `Usage: axi-factorio kick BLOB_ID STEP_ID\n`,
-  run: `Usage: axi-factorio run\n`,
-  evaluate: `Usage: axi-factorio evaluate\n`,
-  service: `Usage: axi-factorio service [run|install|status|uninstall] [--poll-ms 1000] [--port 4317]\n`,
+  run: `Usage: axi-factorio run [--harness codex|module:SPECIFIER[#EXPORT]] [--instrumentation module:SPECIFIER[#EXPORT]]\n`,
+  evaluate: `Usage: axi-factorio evaluate [--harness codex|module:SPECIFIER[#EXPORT]] [--instrumentation module:SPECIFIER[#EXPORT]]\n`,
+  service: `Usage: axi-factorio service [run|install|status|uninstall] [--poll-ms 1000] [--port 4317] [--harness codex|module:SPECIFIER[#EXPORT]] [--instrumentation module:SPECIFIER[#EXPORT]]\n`,
   init: `Usage: axi-factorio init\n`,
 };
 
@@ -697,8 +727,12 @@ main().catch((error) => {
 });
 
 import type { Receipt, Blob, Project, StepDefinition } from "./Types.ts";
-import { CodexAdapter } from "./CodexAdapter.ts";
 import { FactorioDatabase } from "./Database.ts";
+import {
+  defaultHarnessSelector,
+  loadHarness,
+  loadHarnessInstrumentation,
+} from "./HarnessLoader.ts";
 import { ConveyorStore } from "./Store.ts";
 import { log } from "./Logger.ts";
 import { printOutput } from "./Output.ts";

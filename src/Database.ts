@@ -162,6 +162,18 @@ const schema = `
 
   CREATE INDEX IF NOT EXISTS humanInputsByBlob ON humanInputs(blobId, stepId, createdAt);
 
+  CREATE TABLE IF NOT EXISTS executionEvents (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    receiptId TEXT NOT NULL REFERENCES receipts(id),
+    blobId TEXT NOT NULL REFERENCES blobs(id),
+    stepId TEXT NOT NULL,
+    name TEXT NOT NULL,
+    attributesJson TEXT NOT NULL,
+    createdAt TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS executionEventsByBlob ON executionEvents(blobId, id);
+
   CREATE TABLE IF NOT EXISTS dispatcherLeases (
     name TEXT PRIMARY KEY,
     ownerId TEXT NOT NULL,

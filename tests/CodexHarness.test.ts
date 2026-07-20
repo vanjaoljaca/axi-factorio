@@ -1,11 +1,11 @@
-test("runs entry and exit in one Codex thread through the adapter contract", async () => {
+test("runs entry and exit in one Codex thread through the harness contract", async () => {
   const fixture = createAdapterFixture();
   const externalRuns: string[] = [];
 
-  const result = await fixture.adapter.execute(adapterInput(fixture), (externalRunId) => externalRuns.push(externalRunId));
+  const result = await fixture.adapter.start(adapterInput(fixture), observer(externalRuns));
 
   assert.equal(result.externalRunId, "thread-fixture");
-  assert.equal(result.status, "advance");
+  assert.equal(result.decision, "advance");
   assert.deepEqual(result.outputArtifacts, ["commit:abc", "codex-thread:thread-fixture"]);
   assert.match(readFileSync(fixture.argsLog, "utf8"), /resume thread-fixture/);
   assert.equal(readFileSync(fixture.argsLog, "utf8").match(new RegExp(`-C ${fixture.root}`, "g"))?.length, 2);
@@ -15,7 +15,6 @@ test("runs entry and exit in one Codex thread through the adapter contract", asy
 test("continues a human review cycle in the existing Codex thread", async () => {
   const fixture = createAdapterFixture();
   const input = adapterInput(fixture);
-  input.continuationThreadId = "thread-existing";
   input.humanInputs = [{
     id: "input-1",
     blobId: "blob-1",
@@ -27,7 +26,10 @@ test("continues a human review cycle in the existing Codex thread", async () => 
     receiptId: null,
   }];
 
-  const result = await fixture.adapter.execute(input, () => undefined);
+  const result = await fixture.adapter.resume(
+    { ...input, externalRunId: "thread-existing" },
+    observer(),
+  );
 
   const log = readFileSync(fixture.argsLog, "utf8");
   const calls = log.split("\n").filter((line) => line.startsWith("exec "));
@@ -40,7 +42,7 @@ test("continues a human review cycle in the existing Codex thread", async () => 
 
 test("rejects Windows before starting Codex", () => {
   assert.throws(
-    () => new CodexAdapter("win32"),
+    () => new CodexHarness("win32"),
     /unsupported on Windows because process-tree termination cannot be guaranteed/,
   );
 });
@@ -49,7 +51,7 @@ test("rejects malformed Codex JSONL", async () => {
   const fixture = createAdapterFixture();
   process.env.FAKE_CODEX_MODE = "malformed";
   try {
-    await assert.rejects(fixture.adapter.execute(adapterInput(fixture), () => undefined), SyntaxError);
+    await assert.rejects(fixture.adapter.start(adapterInput(fixture), observer()), SyntaxError);
   } finally {
     delete process.env.FAKE_CODEX_MODE;
   }
@@ -58,8 +60,10 @@ test("rejects malformed Codex JSONL", async () => {
 test("propagates external-run persistence failures", async () => {
   const fixture = createAdapterFixture();
   await assert.rejects(
-    fixture.adapter.execute(adapterInput(fixture), () => {
-      throw new Error("event persistence failed");
+    fixture.adapter.start(adapterInput(fixture), {
+      event: (event) => {
+        if (event.type === "external-run") throw new Error("event persistence failed");
+      },
     }),
     /event persistence failed/,
   );
@@ -71,8 +75,10 @@ test("waits for the Codex process tree after an event failure", async () => {
   process.env.FAKE_CODEX_MODE = "descendant";
   process.env.FAKE_CODEX_STOPPED = stopped;
   try {
-    await assert.rejects(fixture.adapter.execute(adapterInput(fixture), () => {
-      throw new Error("stop tree");
+    await assert.rejects(fixture.adapter.start(adapterInput(fixture), {
+      event: (event) => {
+        if (event.type === "external-run") throw new Error("stop tree");
+      },
     }), /stop tree/);
     assert.equal(readFileSync(stopped, "utf8"), "stopped");
   } finally {
@@ -90,10 +96,10 @@ function createAdapterFixture(): AdapterFixture {
   chmodSync(join(bin, "codex"), 0o755);
   process.env.PATH = `${bin}${delimiter}${process.env.PATH}`;
   process.env.FAKE_CODEX_ARGS = argsLog;
-  return { root, argsLog, adapter: new CodexAdapter() };
+  return { root, argsLog, adapter: new CodexHarness() };
 }
 
-function adapterInput(fixture: AdapterFixture): AdapterInput {
+function adapterInput(fixture: AdapterFixture): HarnessStartInput {
   return {
     blob: {
       id: "blob-1",
@@ -109,6 +115,8 @@ function adapterInput(fixture: AdapterFixture): AdapterInput {
       projectId: "default",
       pipelineId: "default/v1",
       paused: false,
+      executionMode: "continuous",
+      runRequested: true,
       humanGateStepId: null,
       humanGateApprovalInputId: null,
       createdAt: "2026-07-19T00:00:00.000Z",
@@ -117,9 +125,17 @@ function adapterInput(fixture: AdapterFixture): AdapterInput {
     step: { id: "plan.define", order: 0, entryPath: "", exitPath: "" },
     definition: { gitSha: "a".repeat(40), contentHash: "b".repeat(64), entry: "entry", exit: "exit" },
     inputArtifacts: ["ticket:1"],
-    continuationThreadId: null,
+    runId: "receipt-1",
     humanInputs: [],
     approvalEvidence: null,
+  };
+}
+
+function observer(externalRuns: string[] = []): HarnessObserver {
+  return {
+    event: (event) => {
+      if (event.type === "external-run") externalRuns.push(event.externalRunId);
+    },
   };
 }
 
@@ -152,10 +168,10 @@ esac
 printf '%s\\n' '{"type":"turn.completed"}'
 `;
 
-type AdapterFixture = { root: string; argsLog: string; adapter: CodexAdapter };
+type AdapterFixture = { root: string; argsLog: string; adapter: CodexHarness };
 
-import type { AdapterInput } from "../src/Types.ts";
-import { CodexAdapter } from "../src/CodexAdapter.ts";
+import type { HarnessObserver, HarnessStartInput } from "../src/Harness.ts";
+import { CodexHarness } from "../src/CodexHarness.ts";
 import assert from "node:assert/strict";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import test from "node:test";

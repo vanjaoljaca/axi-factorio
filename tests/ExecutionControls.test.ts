@@ -100,7 +100,7 @@ test("execution mode and requested work survive a database restart", async () =>
   const blob = store.getBlob("blob-1");
   assert.equal(blob?.executionMode, "continuous");
   assert.equal(blob?.runRequested, true);
-  const runner = new ConveyorRunner(store, new OutcomeAdapter());
+  const runner = new ConveyorRunner(store, new OutcomeHarness());
   await runner.runOnce();
   assert.equal(store.getBlob("blob-1")?.state, "g2.second");
   assert.equal(store.getBlob("blob-1")?.runRequested, true);
@@ -110,7 +110,7 @@ test("execution mode and requested work survive a database restart", async () =>
 function createExecutionFixture(
   steps: string[],
   outcomes: Outcome[] = [],
-  adapter: ToolAdapter = new OutcomeAdapter(outcomes),
+  adapter: AgentHarness = new OutcomeHarness(outcomes),
 ): ExecutionFixture {
   const pipeline = createPipeline(steps);
   const database = new FactorioDatabase(join(pipeline.root, "factorio.sqlite"));
@@ -133,7 +133,7 @@ function blobInput(fixture: PipelineFixture): BlobInput {
   };
 }
 
-class OutcomeAdapter implements ToolAdapter {
+class OutcomeHarness implements AgentHarness {
   readonly name = "fake";
   private readonly outcomes: Outcome[];
   private calls = 0;
@@ -142,24 +142,41 @@ class OutcomeAdapter implements ToolAdapter {
     this.outcomes = [...outcomes];
   }
 
-  async execute(input: AdapterInput, onExternalRun: ExternalRunHandler): Promise<AdapterResult> {
-    const externalRunId = input.continuationThreadId ?? `thread-${++this.calls}`;
-    onExternalRun(externalRunId);
+  async start(input: HarnessStartInput, observer: HarnessObserver): Promise<HarnessResult> {
+    return this.execute(input, observer, `thread-${++this.calls}`);
+  }
+
+  async resume(input: HarnessResumeInput, observer: HarnessObserver): Promise<HarnessResult> {
+    return this.execute(input, observer, input.externalRunId);
+  }
+
+  async cancel(): Promise<void> {}
+
+  protected async execute(
+    _input: HarnessStartInput,
+    observer: HarnessObserver,
+    externalRunId: string,
+  ): Promise<HarnessResult> {
+    observer.event({ type: "external-run", externalRunId });
     const outcome = this.outcomes.shift() ?? "advance";
     if (outcome === "throw") throw new Error("adapter failed");
-    return { status: outcome, reason: outcome, outputArtifacts: [], externalRunId };
+    return { decision: outcome, reason: outcome, outputArtifacts: [], externalRunId };
   }
 }
 
-class ControlledAdapter extends OutcomeAdapter {
+class ControlledAdapter extends OutcomeHarness {
   private resolve!: () => void;
   private readonly released = new Promise<void>((resolve) => {
     this.resolve = resolve;
   });
 
-  override async execute(input: AdapterInput, onExternalRun: ExternalRunHandler): Promise<AdapterResult> {
+  protected override async execute(
+    input: HarnessStartInput,
+    observer: HarnessObserver,
+    externalRunId: string,
+  ): Promise<HarnessResult> {
     await this.released;
-    return super.execute(input, onExternalRun);
+    return super.execute(input, observer, externalRunId);
   }
 
   release(): void {
@@ -182,8 +199,14 @@ type ExecutionFixture = PipelineFixture & {
   runner: ConveyorRunner;
 };
 
-import type { AdapterInput, AdapterResult, BlobInput } from "../src/Types.ts";
-import type { ExternalRunHandler, ToolAdapter } from "../src/Adapter.ts";
+import type { BlobInput } from "../src/Types.ts";
+import type {
+  AgentHarness,
+  HarnessObserver,
+  HarnessResult,
+  HarnessResumeInput,
+  HarnessStartInput,
+} from "../src/Harness.ts";
 import type { PipelineFixture } from "./Fixtures.ts";
 import { createPipeline } from "./Fixtures.ts";
 import { FactorioDatabase } from "../src/Database.ts";

@@ -1,5 +1,6 @@
-export class CodexAdapter implements ToolAdapter {
+export class CodexHarness implements AgentHarness {
   readonly name = "codex";
+  private readonly active = new Map<string, ActiveRun>();
 
   constructor(platform: NodeJS.Platform = process.platform) {
     if (platform === "win32") {
@@ -7,25 +8,64 @@ export class CodexAdapter implements ToolAdapter {
     }
   }
 
-  async execute(input: AdapterInput, onExternalRun: ExternalRunHandler): Promise<AdapterResult> {
-    const entry = await runEntry(input, onExternalRun);
-    const exitPrompt = buildExitPrompt(input);
-    const exit = await runCodex(
-      exitArgs(input.blob.cwd, entry.externalRunId, exitPrompt),
-      input.signal,
-      onExternalRun,
-    );
-    const result = parseExitResult(exit.finalMessage);
-    return {
-      status: result.status,
-      reason: result.reason,
-      outputArtifacts: [...new Set([...result.outputArtifacts, `codex-thread:${entry.externalRunId}`])],
-      externalRunId: entry.externalRunId,
-    };
+  async start(input: HarnessStartInput, observer: HarnessObserver): Promise<HarnessResult> {
+    return this.invoke({ ...input, continuationThreadId: null }, observer);
+  }
+
+  async resume(input: HarnessResumeInput, observer: HarnessObserver): Promise<HarnessResult> {
+    return this.invoke({ ...input, continuationThreadId: input.externalRunId }, observer);
+  }
+
+  async cancel(input: HarnessCancelInput): Promise<void> {
+    const active = this.active.get(input.runId);
+    if (!active) return;
+    active.controller.abort(Object.assign(new Error(input.reason), { name: "AbortError" }));
+    await active.done;
+  }
+
+  private async invoke(input: CodexInput, observer: HarnessObserver): Promise<HarnessResult> {
+    const controller = new AbortController();
+    let finish = () => undefined;
+    const done = new Promise<void>((resolve) => finish = resolve);
+    this.active.set(input.runId, { controller, done });
+    try {
+      return await executeCodex(input, controller.signal, observer);
+    } finally {
+      this.active.delete(input.runId);
+      finish();
+    }
   }
 }
 
-async function runEntry(input: AdapterInput, onExternalRun: ExternalRunHandler): Promise<ProcessResult> {
+async function executeCodex(
+  input: CodexInput,
+  signal: AbortSignal,
+  observer: HarnessObserver,
+): Promise<HarnessResult> {
+    observer.event({ type: "status", status: "running", message: "entry" });
+    const onExternalRun = (externalRunId: string) =>
+      observer.event({ type: "external-run", externalRunId });
+    const executionInput = { ...input, signal };
+    const entry = await runEntry(executionInput, onExternalRun);
+    observer.event({ type: "status", status: "running", message: "exit" });
+    const exitPrompt = buildExitPrompt(input);
+    const exit = await runCodex(
+      exitArgs(input.blob.cwd, entry.externalRunId, exitPrompt),
+      executionInput.signal,
+      onExternalRun,
+    );
+    const result = parseExitResult(exit.finalMessage);
+    const outputArtifacts = [...new Set([...result.outputArtifacts, `codex-thread:${entry.externalRunId}`])];
+    for (const artifactRef of outputArtifacts) observer.event({ type: "artifact", artifactRef });
+    return {
+      decision: result.decision,
+      reason: result.reason,
+      outputArtifacts,
+      externalRunId: entry.externalRunId,
+    };
+}
+
+async function runEntry(input: CodexInput, onExternalRun: ExternalRunObserver): Promise<ProcessResult> {
   const prompt = input.continuationThreadId ? buildContinuationPrompt(input) : buildEntryPrompt(input);
   const args = input.continuationThreadId
     ? continuationArgs(input.blob.cwd, input.continuationThreadId, prompt)
@@ -51,7 +91,7 @@ function continuationArgs(cwd: string, threadId: string, prompt: string): string
 async function runCodex(
   args: string[],
   signal: AbortSignal | undefined,
-  onExternalRun: ExternalRunHandler,
+  onExternalRun: ExternalRunObserver,
 ): Promise<ProcessResult> {
   signal?.throwIfAborted();
   const child = spawn("codex", args, { stdio: ["ignore", "pipe", "pipe"], detached: true });
@@ -65,7 +105,7 @@ async function monitorProcess(
   child: ChildProcess,
   state: ProcessState,
   signal: AbortSignal | undefined,
-  onExternalRun: ExternalRunHandler,
+  onExternalRun: ExternalRunObserver,
 ): Promise<void> {
   const exited = waitForExit(child, state);
   const abort = createAbortWait(signal);
@@ -148,13 +188,13 @@ function settlesWithin(promise: Promise<void>, milliseconds: number): Promise<bo
 async function readJsonLines(
   stdout: NodeJS.ReadableStream,
   state: ProcessState,
-  onExternalRun: ExternalRunHandler,
+  onExternalRun: ExternalRunObserver,
 ): Promise<void> {
   const lines = createInterface({ input: stdout });
   for await (const line of lines) captureLine(state, line, onExternalRun);
 }
 
-function captureLine(state: ProcessState, line: string, onExternalRun: ExternalRunHandler): void {
+function captureLine(state: ProcessState, line: string, onExternalRun: ExternalRunObserver): void {
   if (!line.trim()) return;
   const event = JSON.parse(line) as CodexStreamEvent;
   state.externalRunId = event.thread_id ?? state.externalRunId;
@@ -192,7 +232,7 @@ function createProcessState(): ProcessState {
   return { externalRunId: null, finalMessage: "", stderr: "" };
 }
 
-function buildEntryPrompt(input: AdapterInput): string {
+function buildEntryPrompt(input: CodexInput): string {
   return `${input.definition.entry.trim()}\n\n${runtimeMarker}\n${JSON.stringify({
     phase: "entry",
     blobId: input.blob.id,
@@ -203,7 +243,7 @@ function buildEntryPrompt(input: AdapterInput): string {
   }, null, 2)}`.trim();
 }
 
-function buildContinuationPrompt(input: AdapterInput): string {
+function buildContinuationPrompt(input: CodexInput): string {
   return `${runtimeMarker}
 Continue blob ${input.blob.id} at the same step ${input.step.id} using the fresh human input below.
 ${JSON.stringify({
@@ -214,7 +254,7 @@ ${JSON.stringify({
   }, null, 2)}`.trim();
 }
 
-function buildExitPrompt(input: AdapterInput): string {
+function buildExitPrompt(input: CodexInput): string {
   return `${input.definition.exit.trim()}\n\n${runtimeMarker}
 Evaluate blob ${input.blob.id} at step ${input.step.id}.
 Return only the schema-conforming JSON decision:
@@ -224,7 +264,7 @@ Return only the schema-conforming JSON decision:
 Include a concise reason and an outputArtifacts array of durable artifact references.`.trim();
 }
 
-function parseExitResult(message: string): Pick<AdapterResult, "status" | "reason" | "outputArtifacts"> {
+function parseExitResult(message: string): Pick<HarnessResult, "decision" | "reason" | "outputArtifacts"> {
   const parsed = JSON.parse(message) as { decision?: string; reason?: string; outputArtifacts?: unknown };
   if (!["advance", "retry", "blocked"].includes(parsed.decision ?? "")) {
     throw new Error(`Invalid exit decision: ${message}`);
@@ -234,7 +274,7 @@ function parseExitResult(message: string): Pick<AdapterResult, "status" | "reaso
     throw new Error("Exit result requires string output artifact references.");
   }
   return {
-    status: parsed.decision as AdapterOutcome,
+    decision: parsed.decision as HarnessDecision,
     reason: parsed.reason,
     outputArtifacts: parsed.outputArtifacts as string[],
   };
@@ -249,14 +289,28 @@ type CodexStreamEvent = {
 type ProcessState = { externalRunId: string | null; finalMessage: string; stderr: string };
 type ProcessResult = { externalRunId: string; finalMessage: string };
 type AbortWait = { promise: Promise<never>; dispose: () => void };
+type ActiveRun = { controller: AbortController; done: Promise<void> };
+type CodexInput = HarnessRunInput & {
+  continuationThreadId: string | null;
+  signal?: AbortSignal;
+};
+type ExternalRunObserver = (externalRunId: string) => void;
 
 const runtimeMarker = "---\naxi-factorio runtime context";
 const exitSchemaPath = fileURLToPath(new URL("./exit-result.schema.json", import.meta.url));
 const terminationGraceMs = 2_000;
 const processCheckMs = 10;
 
-import type { AdapterInput, AdapterOutcome, AdapterResult } from "./Types.ts";
-import type { ExternalRunHandler, ToolAdapter } from "./Adapter.ts";
+import type { HarnessDecision } from "./Types.ts";
+import type {
+  AgentHarness,
+  HarnessCancelInput,
+  HarnessObserver,
+  HarnessResult,
+  HarnessResumeInput,
+  HarnessRunInput,
+  HarnessStartInput,
+} from "./Harness.ts";
 import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";

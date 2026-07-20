@@ -124,22 +124,36 @@ test("human review cycles reuse one external thread and retain approval provenan
   fixture.database.close();
 });
 
-class FakeAdapter implements ToolAdapter {
+class FakeAdapter implements AgentHarness {
   readonly name = "fake";
-  readonly inputs: AdapterInput[] = [];
-  private readonly outcomes: AdapterOutcome[];
+  readonly inputs: HarnessRunInput[] = [];
+  private readonly outcomes: HarnessDecision[];
 
-  constructor(outcomes: AdapterOutcome[]) {
+  constructor(outcomes: HarnessDecision[]) {
     this.outcomes = outcomes;
   }
 
-  async execute(input: AdapterInput, onExternalRun: ExternalRunHandler): Promise<AdapterResult> {
+  async start(input: HarnessStartInput, observer: HarnessObserver): Promise<HarnessResult> {
+    return this.execute(input, null, observer);
+  }
+
+  async resume(input: HarnessResumeInput, observer: HarnessObserver): Promise<HarnessResult> {
+    return this.execute(input, input.externalRunId, observer);
+  }
+
+  async cancel(): Promise<void> {}
+
+  private async execute(
+    input: HarnessRunInput,
+    continuationThreadId: string | null,
+    observer: HarnessObserver,
+  ): Promise<HarnessResult> {
     this.inputs.push(input);
-    const externalRunId = input.continuationThreadId ?? `fake-run-${this.inputs.length}`;
-    onExternalRun(externalRunId);
+    const externalRunId = continuationThreadId ?? `fake-run-${this.inputs.length}`;
+    observer.event({ type: "external-run", externalRunId });
     const status = this.outcomes.shift() ?? "advance";
     return {
-      status,
+      decision: status,
       reason: status,
       outputArtifacts: [`artifact:${input.step.id}`],
       externalRunId,
@@ -149,7 +163,7 @@ class FakeAdapter implements ToolAdapter {
 
 function createRunnerFixture(
   steps: string[],
-  outcomes: AdapterOutcome[] = [],
+  outcomes: HarnessDecision[] = [],
 ): RunnerFixture {
   const pipeline = createPipeline(steps);
   const database = new FactorioDatabase(join(pipeline.root, "factorio.sqlite"));
@@ -185,8 +199,15 @@ type RunnerFixture = PipelineFixture & {
   runner: ConveyorRunner;
 };
 
-import type { AdapterInput, AdapterOutcome, AdapterResult, BlobInput } from "../src/Types.ts";
-import type { ExternalRunHandler, ToolAdapter } from "../src/Adapter.ts";
+import type { BlobInput, HarnessDecision } from "../src/Types.ts";
+import type {
+  AgentHarness,
+  HarnessObserver,
+  HarnessResult,
+  HarnessResumeInput,
+  HarnessRunInput,
+  HarnessStartInput,
+} from "../src/Harness.ts";
 import type { PipelineFixture } from "./Fixtures.ts";
 import { commitAll, createPipeline, writeStep } from "./Fixtures.ts";
 import { FactorioDatabase } from "../src/Database.ts";

@@ -42,7 +42,7 @@ test("fresh storage includes projects, blobs, receipts, and the dispatcher lease
 
   assert.deepEqual(
     rows.map((row) => row.name),
-    ["blobs", "dispatcherLeases", "humanInputs", "projects", "receipts"],
+    ["blobs", "dispatcherLeases", "executionEvents", "humanInputs", "projects", "receipts"],
   );
   fixture.database.close();
 });

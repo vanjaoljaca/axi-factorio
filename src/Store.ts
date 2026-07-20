@@ -88,7 +88,7 @@ export class ConveyorStore {
       this.requireActiveLease(ownerId);
       const receipt = this.requireReceipt(receiptId);
       if (receipt.externalRunId && receipt.externalRunId !== externalRunId) {
-        throw new Error("Adapter external run ID changed.");
+        throw new Error("Harness external run ID changed.");
       }
       this.database.connection.prepare(receiptExternalRunUpdate).run(externalRunId, receiptId);
     });
@@ -96,7 +96,7 @@ export class ConveyorStore {
 
   completeReceipt(
     receiptId: string,
-    result: AdapterResult,
+    result: ExecutionResult,
     nextStepId: string | null,
     ownerId?: string,
   ): Blob {
@@ -214,6 +214,25 @@ export class ConveyorStore {
     return rows.map((row) => mapReceipt(asRecord(row)));
   }
 
+  listExecutionEvents(blobId?: string): ExecutionEvent[] {
+    const rows = blobId
+      ? this.database.connection.prepare(executionEventsByBlobQuery).all(blobId)
+      : this.database.connection.prepare(executionEventsQuery).all();
+    return rows.map(executionEventFromRow);
+  }
+
+  recordExecutionEvent(
+    receiptId: string,
+    blobId: string,
+    stepId: string,
+    name: string,
+    attributes: Record<string, string | number | boolean>,
+  ): void {
+    this.database.connection.prepare(executionEventInsert).run(
+      receiptId, blobId, stepId, name, JSON.stringify(attributes), this.now(),
+    );
+  }
+
   listHumanInputs(blobId?: string): HumanInput[] {
     const rows = blobId
       ? this.database.connection.prepare(humanInputListByBlob).all(blobId)
@@ -310,14 +329,14 @@ export class ConveyorStore {
     }
   }
 
-  private finishReceipt(receiptId: string, result: AdapterResult): void {
+  private finishReceipt(receiptId: string, result: ExecutionResult): void {
     this.database.connection.prepare(receiptCompleteUpdate).run(
       result.status, JSON.stringify(result.outputArtifacts), result.externalRunId,
       result.reason, this.now(), receiptId,
     );
   }
 
-  private enforceHumanGate(receipt: Receipt, result: AdapterResult): AdapterResult {
+  private enforceHumanGate(receipt: Receipt, result: ExecutionResult): ExecutionResult {
     if (result.status !== "advance") return result;
     const blob = this.requireBlob(receipt.blobId);
     if (blob.humanGateStepId !== receipt.stepId || blob.humanGateApprovalInputId) return result;
@@ -328,7 +347,7 @@ export class ConveyorStore {
     };
   }
 
-  private projectResult(receipt: Receipt, result: AdapterResult, nextStepId: string | null): void {
+  private projectResult(receipt: Receipt, result: ExecutionResult, nextStepId: string | null): void {
     const blob = this.requireBlob(receipt.blobId);
     const continueRun = Number(blob.runRequested && blob.executionMode === "continuous");
     if (result.status === "retry") {
@@ -574,6 +593,25 @@ function mapReceipt(row: Record<string, unknown>): Receipt {
   };
 }
 
+function executionEventFromRow(row: unknown): ExecutionEvent {
+  const record = asRecord(row);
+  return {
+    id: Number(record.id),
+    receiptId: String(record.receiptId),
+    blobId: String(record.blobId),
+    stepId: String(record.stepId),
+    name: String(record.name),
+    attributes: parseObject(record.attributesJson),
+    createdAt: String(record.createdAt),
+  };
+}
+
+function parseObject(value: unknown): Record<string, string | number | boolean> {
+  const parsed = JSON.parse(String(value)) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  return parsed as Record<string, string | number | boolean>;
+}
+
 function sameBlobInput(blob: Blob, input: BlobInput): boolean {
   return blob.title === input.title
     && blob.projectId === (input.projectId ?? "default")
@@ -696,6 +734,10 @@ const humanInputPendingList = `SELECT * FROM humanInputs WHERE blobId = ? AND st
   AND receiptId IS NULL ORDER BY createdAt, id`;
 const humanInputReceiptUpdate = `UPDATE humanInputs SET receiptId = ?
   WHERE blobId = ? AND stepId = ? AND receiptId IS NULL`;
+const executionEventsQuery = "SELECT * FROM executionEvents ORDER BY id";
+const executionEventsByBlobQuery = "SELECT * FROM executionEvents WHERE blobId = ? ORDER BY id";
+const executionEventInsert = `INSERT INTO executionEvents
+  (receiptId, blobId, stepId, name, attributesJson, createdAt) VALUES (?, ?, ?, ?, ?, ?)`;
 const leaseDeleteExpired = "DELETE FROM dispatcherLeases WHERE name = 'runner' AND leaseUntil <= ?";
 const leaseInsert = `INSERT OR IGNORE INTO dispatcherLeases
   (name, ownerId, leaseUntil, updatedAt) VALUES ('runner', ?, ?, ?)`;
@@ -713,9 +755,10 @@ const projectSelect = "SELECT * FROM projects WHERE id = ?";
 const projectList = "SELECT * FROM projects ORDER BY name, id";
 
 import type {
-  AdapterResult,
+  ExecutionResult,
   ClaimedExecution,
   DefinitionSnapshot,
+  ExecutionEvent,
   Receipt,
   ReceiptStatus,
   HumanInput,

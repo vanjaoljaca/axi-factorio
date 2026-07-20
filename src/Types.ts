@@ -1,7 +1,7 @@
 export type BlobState = string;
 export type ExecutionMode = "continuous" | "step";
 export type ReceiptStatus = "running" | "advance" | "retry" | "blocked" | "failed" | "interrupted";
-export type AdapterOutcome = "advance" | "retry" | "blocked";
+export type HarnessDecision = "advance" | "retry" | "blocked";
 
 export type StepDefinition = {
   id: string;
@@ -96,6 +96,16 @@ export type Receipt = {
   invalidatedAt: string | null;
 };
 
+export type ExecutionEvent = {
+  id: number;
+  receiptId: string;
+  blobId: string;
+  stepId: string;
+  name: string;
+  attributes: Record<string, string | number | boolean>;
+  createdAt: string;
+};
+
 export type ImportAttestation = {
   step: StepDefinition;
   definition: DefinitionSnapshot;
@@ -109,19 +119,8 @@ export type ClaimedExecution = {
   definition: DefinitionSnapshot;
 };
 
-export type AdapterInput = {
-  blob: Blob;
-  step: StepDefinition;
-  definition: DefinitionSnapshot;
-  inputArtifacts: string[];
-  continuationThreadId: string | null;
-  humanInputs: HumanInput[];
-  approvalEvidence: HumanInput | null;
-  signal?: AbortSignal;
-};
-
-export type AdapterResult = {
-  status: AdapterOutcome;
+export type ExecutionResult = {
+  status: HarnessDecision;
   reason: string;
   outputArtifacts: string[];
   externalRunId: string | null;

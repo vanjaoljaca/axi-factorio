@@ -10,16 +10,23 @@ export function startServiceViewer(
   return childResult(child, controller);
 }
 
-export function installService(databasePath: string, port: number): ServiceStatus {
+export function installService(
+  databasePath: string,
+  port: number,
+  harness: string,
+  instrumentation: string,
+): ServiceStatus {
   const paths = servicePaths();
   mkdirSync(dirname(paths.plist), { recursive: true });
   mkdirSync(paths.logs, { recursive: true });
-  writeFileSync(paths.plist, renderPlist(paths, resolve(databasePath), port));
+  writeFileSync(paths.plist, renderPlist(
+    paths, resolve(databasePath), port, harness, instrumentation,
+  ));
   bootout(paths);
   execFileSync("launchctl", ["bootstrap", domain(), paths.plist], { stdio: "inherit" });
   execFileSync("launchctl", ["kickstart", "-k", `${domain()}/${label}`], { stdio: "inherit" });
   log("service.installed", { plist: paths.plist, url: `http://127.0.0.1:${port}` });
-  return { label, state: "running", pid: null, url: `http://127.0.0.1:${port}` };
+  return { label, state: "running", pid: null, url: `http://127.0.0.1:${port}`, harness };
 }
 
 export function showServiceStatus(): ServiceStatus {
@@ -30,6 +37,7 @@ export function showServiceStatus(): ServiceStatus {
     state: output.match(/^\s*state = (.+)$/m)?.[1] ?? "unknown",
     pid: numberMatch(output, /^\s*pid = (\d+)$/m),
     url: `http://127.0.0.1:${port}`,
+    harness: output.match(/--harness\s+(\S+)/)?.[1] ?? "codex",
   };
 }
 
@@ -38,7 +46,7 @@ export function uninstallService(): ServiceStatus {
   bootout(paths);
   rmSync(paths.plist, { force: true });
   log("service.uninstalled", { plist: paths.plist });
-  return { label, state: "uninstalled", pid: null, url: null };
+  return { label, state: "uninstalled", pid: null, url: null, harness: null };
 }
 
 function childResult(child: ChildProcess, controller: AbortController): Promise<void> {
@@ -49,10 +57,17 @@ function childResult(child: ChildProcess, controller: AbortController): Promise<
   }));
 }
 
-function renderPlist(paths: ServicePaths, databasePath: string, port: number): string {
+function renderPlist(
+  paths: ServicePaths,
+  databasePath: string,
+  port: number,
+  harness: string,
+  instrumentation: string,
+): string {
   const argumentsList = [
     process.execPath, cliPath, "service", "run",
     "--db", databasePath, "--port", String(port),
+    "--harness", harness, "--instrumentation", instrumentation,
   ].map((value) => `    <string>${escapeXml(value)}</string>`).join("\n");
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -127,6 +142,7 @@ export type ServiceStatus = {
   state: string;
   pid: number | null;
   url: string | null;
+  harness: string | null;
 };
 
 const label = "me.oljaca.axi-factorio";
