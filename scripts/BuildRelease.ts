@@ -93,11 +93,14 @@ npx axi-factorio project upsert APP_ID "APP NAME" \\
 npx axi-factorio project show APP_ID --json
 \`\`\`
 
-New blobs use the project root as their harness working directory and resolve the
-highest \`vN\` under the shared pipeline root. Existing rc.4 through rc.17 databases
+New blobs default their execution workspace to the project root and resolve the
+highest \`vN\` under the shared pipeline root. Use \`bind-execution\` deliberately
+when the harness needs a containing workspace without changing app identity.
+Existing rc.4 through rc.18 databases
 migrate on first open, including imported-receipt provenance and durable
 execution-control columns, blob revisions, immutable attempt evidence, and the
-append-only harness event table. Use
+append-only harness event table. Existing blobs preserve prior behavior with
+their current app root as the execution workspace. Use
 \`project upsert\` to replace the migrated
 \`<old-cwd>/pipelines\` root with the shared workspace pipeline root.
 

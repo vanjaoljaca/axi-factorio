@@ -60,7 +60,7 @@ async function executeCodex(
     observer.event({ type: "status", status: "running", message: "exit" });
     const exitPrompt = buildExitPrompt(input);
     const exit = await runCodex(
-      exitArgs(input.blob.cwd, entry.externalRunId, exitPrompt),
+      exitArgs(executionRoot(input), entry.externalRunId, exitPrompt),
       executionInput.signal,
       onExternalRun,
     );
@@ -78,8 +78,8 @@ async function executeCodex(
 async function runEntry(input: CodexInput, onExternalRun: ExternalRunObserver): Promise<ProcessResult> {
   const prompt = input.continuationThreadId ? buildContinuationPrompt(input) : buildEntryPrompt(input);
   const args = input.continuationThreadId
-    ? continuationArgs(input.blob.cwd, input.continuationThreadId, prompt)
-    : entryArgs(input.blob.cwd, prompt);
+    ? continuationArgs(executionRoot(input), input.continuationThreadId, prompt)
+    : entryArgs(executionRoot(input), prompt);
   return runCodex(args, input.signal, onExternalRun);
 }
 
@@ -256,6 +256,8 @@ function buildEntryPrompt(input: CodexInput): string {
     title: input.blob.title,
     body: input.blob.body,
     stepId: input.step.id,
+    projectRoot: input.blob.cwd,
+    executionWorkspaceRoot: executionRoot(input),
     inputArtifacts: input.inputArtifacts,
   }, null, 2)}`.trim();
 }
@@ -265,6 +267,8 @@ function buildContinuationPrompt(input: CodexInput): string {
 Continue blob ${input.blob.id} at the same step ${input.step.id} using the fresh human input below.
 ${JSON.stringify({
     phase: "continuation",
+    projectRoot: input.blob.cwd,
+    executionWorkspaceRoot: executionRoot(input),
     humanInputs: input.humanInputs,
     approvalEvidence: input.approvalEvidence,
     inputArtifacts: input.inputArtifacts,
@@ -274,11 +278,17 @@ ${JSON.stringify({
 function buildExitPrompt(input: CodexInput): string {
   return `${input.definition.exit.trim()}\n\n${runtimeMarker}
 Evaluate blob ${input.blob.id} at step ${input.step.id}.
+Project root / app root: ${input.blob.cwd}
+Execution workspace root: ${executionRoot(input)}
 Return only the schema-conforming JSON decision:
 - advance: this step passed and the item may move down the conveyor
 - retry: run this same step again
 - blocked: explicit external input is required
 Include a concise reason and an outputArtifacts array of durable artifact references.`.trim();
+}
+
+function executionRoot(input: CodexInput): string {
+  return input.blob.executionWorkspaceRoot || input.blob.cwd;
 }
 
 function parseExitResult(message: string): Pick<HarnessResult, "decision" | "reason" | "outputArtifacts"> {

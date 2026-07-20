@@ -44,8 +44,61 @@ test("fresh storage includes projects, blobs, receipts, and the dispatcher lease
     rows.map((row) => row.name),
     [
       "attemptEvidence", "blobRevisions", "blobs", "dispatcherLeases",
-      "executionEvents", "humanInputs", "projects", "receipts", "workspaceRelocations",
+      "executionEvents", "executionWorkspaceBindings", "humanInputs", "projects",
+      "receipts", "workspaceRelocations",
     ],
+  );
+  fixture.database.close();
+});
+
+test("execution workspace binding keeps app identity and pipeline while widening only the sandbox root", () => {
+  const fixture = createStoreFixture(["plan.define"]);
+  const worktree = join(fixture.root, "worktree");
+  const appRoot = join(worktree, "apps", "example");
+  mkdirSync(appRoot, { recursive: true });
+  fixture.store.createProject("example", {
+    name: "Example", root: appRoot, pipelineRoot: fixture.root, defaultPipeline: fixture.pipelinePath,
+  });
+  const blob = fixture.store.createBlob("bound", {
+    ...blobInput(fixture), cwd: appRoot, projectId: "example",
+  }).blob;
+
+  const binding = fixture.store.bindExecutionWorkspace(blob.id, worktree, ["worktree:exact-head"]);
+  const updated = fixture.store.getBlob(blob.id)!;
+
+  assert.equal(updated.cwd, appRoot);
+  assert.equal(updated.executionWorkspaceRoot, realpathSync(worktree));
+  assert.equal(updated.pipelineId, blob.pipelineId);
+  assert.equal(updated.pipelinePath, blob.pipelinePath);
+  assert.deepEqual(fixture.store.listExecutionWorkspaceBindings(blob.id), [binding]);
+  fixture.database.close();
+});
+
+test("execution workspace binding rejects escape, missing evidence, and running receipts", () => {
+  const fixture = createStoreFixture();
+  const worktree = join(fixture.root, "worktree");
+  const appRoot = join(worktree, "apps", "example");
+  const outside = join(fixture.root, "outside");
+  mkdirSync(appRoot, { recursive: true });
+  mkdirSync(outside);
+  const blob = fixture.store.createBlob("bound", {
+    ...blobInput(fixture), cwd: appRoot,
+  }).blob;
+
+  assert.throws(() => fixture.store.bindExecutionWorkspace(blob.id, worktree, []), /requires evidence/);
+  assert.throws(
+    () => fixture.store.bindExecutionWorkspace(blob.id, outside, ["proof:x"]),
+    /outside execution workspace/,
+  );
+  fixture.store.requestStep(blob.id);
+  const step = discoverPipeline(fixture.pipelinePath)[0];
+  fixture.store.beginReceipt({
+    blobId: blob.id, step, definition: snapshotDefinition(step, fixture.pipelinePath),
+    adapter: "fake", inputArtifacts: [],
+  });
+  assert.throws(
+    () => fixture.store.bindExecutionWorkspace(blob.id, worktree, ["proof:x"]),
+    /running blob/,
   );
   fixture.database.close();
 });
@@ -61,6 +114,7 @@ test("workspace relocation moves one blob and project while preserving pipeline 
   const relocation = fixture.store.relocateBlobWorkspace(first.id, target, ["worktree:exact-head"]);
 
   assert.equal(fixture.store.getBlob(first.id)?.cwd, canonicalTarget);
+  assert.equal(fixture.store.getBlob(first.id)?.executionWorkspaceRoot, canonicalTarget);
   assert.equal(fixture.store.getBlob(second.id)?.cwd, second.cwd);
   assert.equal(fixture.store.getProject(first.projectId)?.root, canonicalTarget);
   assert.equal(fixture.store.getBlob(first.id)?.pipelineId, first.pipelineId);

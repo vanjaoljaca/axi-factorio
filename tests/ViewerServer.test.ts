@@ -135,6 +135,31 @@ test("viewer relocation API deliberately rebinds one blob and exposes durable pr
   assert.deepEqual(learning.workspaceRelocations[0].evidence, ["api:explicit-rebind"]);
 });
 
+test("viewer binds a containing execution workspace without moving the app project root", async () => {
+  const fixture = createPipeline(["g1.first"]);
+  const databasePath = join(fixture.root, "factorio.sqlite");
+  const worktree = join(fixture.root, "worktree");
+  const appRoot = join(worktree, "apps", "example");
+  mkdirSync(appRoot, { recursive: true });
+  const database = new FactorioDatabase(databasePath);
+  const store = new ConveyorStore(database);
+  store.createBlob("bound", { ...blobInput(fixture, "Bound item"), cwd: appRoot });
+  database.close();
+  const server = createViewerServer(databasePath);
+  const endpoint = await listen(server);
+
+  const result = await postJson(endpoint, "bound", "execution-workspace", {
+    root: worktree, evidence: ["api:worktree"],
+  });
+  const learning = await fetch(`${endpoint}/api/blobs/bound/learning`).then(readJson);
+  await close(server);
+
+  assert.equal(result.blob.cwd, appRoot);
+  assert.equal(result.blob.executionWorkspaceRoot, realpathSync(worktree));
+  assert.equal(learning.executionWorkspaceBindings.length, 1);
+  assert.deepEqual(learning.executionWorkspaceBindings[0].evidence, ["api:worktree"]);
+});
+
 test("production learning API preserves revisions, prompt provenance, reruns, and restart history", async () => {
   const fixture = createPipeline(["build.first", "review.second"]);
   const databasePath = join(fixture.root, "factorio.sqlite");

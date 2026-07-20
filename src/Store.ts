@@ -42,7 +42,8 @@ export class ConveyorStore {
         defaultPipeline: "default",
       });
       this.database.connection.prepare(blobInsert).run(
-        id, projectId, input.title, input.body, input.cwd, pipelineId, input.pipelinePath,
+        id, projectId, input.title, input.body, input.cwd,
+        input.executionWorkspaceRoot ?? input.cwd, pipelineId, input.pipelinePath,
         JSON.stringify(input.inputArtifacts), initialState, at, at,
       );
       this.insertBlobRevision(id, 1, input.title, input.body, at);
@@ -273,6 +274,29 @@ export class ConveyorStore {
       ? this.database.connection.prepare(workspaceRelocationListByBlob).all(blobId)
       : this.database.connection.prepare(workspaceRelocationList).all();
     return rows.map((row) => mapWorkspaceRelocation(asRecord(row)));
+  }
+
+  bindExecutionWorkspace(
+    blobId: string,
+    targetRoot: string,
+    evidence: string[],
+  ): ExecutionWorkspaceBinding {
+    if (!evidence.length) throw new Error("Execution workspace binding requires evidence.");
+    const executionRoot = requireDirectory(targetRoot);
+    return this.database.transaction(() => {
+      const blob = this.requireBlob(blobId);
+      if (this.hasRunningReceipt(blob.id)) throw new Error("A running blob cannot change execution workspace.");
+      const projectRoot = requireDirectory(blob.cwd);
+      requireContainedProject(projectRoot, executionRoot);
+      return this.persistExecutionWorkspaceBinding(blob, projectRoot, executionRoot, evidence);
+    });
+  }
+
+  listExecutionWorkspaceBindings(blobId?: string): ExecutionWorkspaceBinding[] {
+    const rows = blobId
+      ? this.database.connection.prepare(executionWorkspaceBindingListByBlob).all(blobId)
+      : this.database.connection.prepare(executionWorkspaceBindingList).all();
+    return rows.map((row) => mapExecutionWorkspaceBinding(asRecord(row)));
   }
 
   recordExecutionEvent(
@@ -588,7 +612,9 @@ export class ConveyorStore {
     }
     const relocation = workspaceRelocation(blob, project, newRoot, evidence, this.now());
     this.database.connection.prepare(projectWorkspaceUpdate).run(newRoot, newRoot, relocation.createdAt, project.id);
-    this.database.connection.prepare(blobWorkspaceUpdate).run(newRoot, relocation.createdAt, blob.id);
+    this.database.connection.prepare(blobWorkspaceUpdate).run(
+      newRoot, blob.cwd, newRoot, relocation.createdAt, blob.id,
+    );
     this.database.connection.prepare(workspaceRelocationInsert).run(
       relocation.id, relocation.blobId, relocation.projectId,
       relocation.oldCwd, relocation.newCwd, relocation.oldProjectRoot, relocation.newProjectRoot,
@@ -599,6 +625,30 @@ export class ConveyorStore {
       throw new Error("Workspace relocation changed the blob pipeline identity.");
     }
     return relocation;
+  }
+
+  private persistExecutionWorkspaceBinding(
+    blob: Blob,
+    projectRoot: string,
+    executionRoot: string,
+    evidence: string[],
+  ): ExecutionWorkspaceBinding {
+    if (blob.executionWorkspaceRoot === executionRoot) {
+      throw new Error(`Blob ${blob.id} already executes in workspace ${executionRoot}.`);
+    }
+    const binding = executionWorkspaceBinding(blob, projectRoot, executionRoot, evidence, this.now());
+    this.database.connection.prepare(blobExecutionWorkspaceUpdate)
+      .run(executionRoot, binding.createdAt, blob.id);
+    this.database.connection.prepare(executionWorkspaceBindingInsert).run(
+      binding.id, binding.blobId, binding.projectId, binding.projectRoot,
+      binding.oldExecutionWorkspaceRoot, binding.newExecutionWorkspaceRoot,
+      binding.pipelineId, binding.pipelinePath, JSON.stringify(binding.evidence), binding.createdAt,
+    );
+    const updated = this.requireBlob(blob.id);
+    if (updated.cwd !== blob.cwd || updated.pipelineId !== blob.pipelineId || updated.pipelinePath !== blob.pipelinePath) {
+      throw new Error("Execution workspace binding changed project or pipeline identity.");
+    }
+    return binding;
   }
 
   private requireReceipt(id: string): Receipt {
@@ -655,6 +705,7 @@ function mapBlob(row: Record<string, unknown>): Blob {
     title: String(row.title),
     body: String(row.body),
     cwd: String(row.cwd),
+    executionWorkspaceRoot: String(row.executionWorkspaceRoot || row.cwd),
     pipelineId: String(row.pipelineId || row.pipelinePath),
     pipelinePath: String(row.pipelinePath),
     inputArtifacts: JSON.parse(String(row.inputArtifactsJson)) as string[],
@@ -726,6 +777,7 @@ function sameBlobInput(blob: Blob, input: BlobInput): boolean {
     && blob.projectId === (input.projectId ?? "default")
     && blob.body === input.body
     && blob.cwd === input.cwd
+    && blob.executionWorkspaceRoot === (input.executionWorkspaceRoot ?? input.cwd)
     && blob.pipelineId === (input.pipelineId ?? input.pipelinePath)
     && blob.pipelinePath === input.pipelinePath
     && JSON.stringify(blob.inputArtifacts) === JSON.stringify(input.inputArtifacts);
@@ -817,8 +869,9 @@ type BeginReceiptInput = {
 };
 
 const blobInsert = `INSERT INTO blobs
-  (id, projectId, title, body, cwd, pipelineId, pipelinePath, inputArtifactsJson, state, createdAt, updatedAt)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+  (id, projectId, title, body, cwd, executionWorkspaceRoot, pipelineId, pipelinePath,
+   inputArtifactsJson, state, createdAt, updatedAt)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 const blobSelect = "SELECT * FROM blobs WHERE id = ?";
 const blobList = "SELECT * FROM blobs ORDER BY createdAt DESC, id ASC";
 const blobContentUpdate = "UPDATE blobs SET title = ?, body = ?, updatedAt = ? WHERE id = ?";
@@ -908,7 +961,17 @@ const workspaceRelocationInsert = `INSERT INTO workspaceRelocations
 const workspaceRelocationList = "SELECT * FROM workspaceRelocations ORDER BY createdAt, id";
 const workspaceRelocationListByBlob = `SELECT * FROM workspaceRelocations
   WHERE blobId = ? ORDER BY createdAt, id`;
-const blobWorkspaceUpdate = "UPDATE blobs SET cwd = ?, updatedAt = ? WHERE id = ?";
+const executionWorkspaceBindingInsert = `INSERT INTO executionWorkspaceBindings
+  (id, blobId, projectId, projectRoot, oldExecutionWorkspaceRoot, newExecutionWorkspaceRoot,
+   pipelineId, pipelinePath, evidenceJson, createdAt)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+const executionWorkspaceBindingList = "SELECT * FROM executionWorkspaceBindings ORDER BY createdAt, id";
+const executionWorkspaceBindingListByBlob = `SELECT * FROM executionWorkspaceBindings
+  WHERE blobId = ? ORDER BY createdAt, id`;
+const blobWorkspaceUpdate = `UPDATE blobs SET cwd = ?,
+  executionWorkspaceRoot = CASE WHEN executionWorkspaceRoot = ? THEN ? ELSE executionWorkspaceRoot END,
+  updatedAt = ? WHERE id = ?`;
+const blobExecutionWorkspaceUpdate = "UPDATE blobs SET executionWorkspaceRoot = ?, updatedAt = ? WHERE id = ?";
 const projectWorkspaceUpdate = `UPDATE projects SET cwd = ?, root = ?, updatedAt = ? WHERE id = ?`;
 const leaseDeleteExpired = "DELETE FROM dispatcherLeases WHERE name = 'runner' AND leaseUntil <= ?";
 const leaseInsert = `INSERT OR IGNORE INTO dispatcherLeases
@@ -930,6 +993,12 @@ function requireDirectory(path: string): string {
   const resolved = realpathSync(path);
   if (!statSync(resolved).isDirectory()) throw new Error(`Workspace target is not a directory: ${resolved}`);
   return resolved;
+}
+
+function requireContainedProject(projectRoot: string, executionRoot: string): void {
+  const child = relative(executionRoot, projectRoot);
+  if (child === "" || (!child.startsWith("..") && !isAbsolute(child))) return;
+  throw new Error(`Project root ${projectRoot} is outside execution workspace ${executionRoot}.`);
 }
 
 function workspaceRelocation(
@@ -958,6 +1027,33 @@ function mapWorkspaceRelocation(row: Record<string, unknown>): WorkspaceRelocati
   };
 }
 
+function executionWorkspaceBinding(
+  blob: Blob,
+  projectRoot: string,
+  executionRoot: string,
+  evidence: string[],
+  createdAt: string,
+): ExecutionWorkspaceBinding {
+  return {
+    id: randomUUID(), blobId: blob.id, projectId: blob.projectId, projectRoot,
+    oldExecutionWorkspaceRoot: blob.executionWorkspaceRoot,
+    newExecutionWorkspaceRoot: executionRoot,
+    pipelineId: blob.pipelineId, pipelinePath: blob.pipelinePath,
+    evidence: [...evidence], createdAt,
+  };
+}
+
+function mapExecutionWorkspaceBinding(row: Record<string, unknown>): ExecutionWorkspaceBinding {
+  return {
+    id: String(row.id), blobId: String(row.blobId), projectId: String(row.projectId),
+    projectRoot: String(row.projectRoot),
+    oldExecutionWorkspaceRoot: String(row.oldExecutionWorkspaceRoot),
+    newExecutionWorkspaceRoot: String(row.newExecutionWorkspaceRoot),
+    pipelineId: String(row.pipelineId), pipelinePath: String(row.pipelinePath),
+    evidence: JSON.parse(String(row.evidenceJson)) as string[], createdAt: String(row.createdAt),
+  };
+}
+
 import type {
   ExecutionResult,
   ClaimedExecution,
@@ -978,9 +1074,10 @@ import type {
   AttemptEvidence,
   BlobRevision,
   WorkspaceRelocation,
+  ExecutionWorkspaceBinding,
 } from "./Types.ts";
 import type { FactorioDatabase } from "./Database.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { discoverPipeline } from "./Pipeline.ts";
-import { dirname } from "node:path";
+import { dirname, isAbsolute, relative } from "node:path";
 import { realpathSync, statSync } from "node:fs";

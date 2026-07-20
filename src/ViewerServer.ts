@@ -11,6 +11,8 @@ type ViewExecutionControl = {
 type ViewBlob = {
   id: string;
   title: string;
+  projectRoot: string;
+  executionWorkspaceRoot: string;
   stepId: string;
   paused: boolean;
   running: boolean;
@@ -177,6 +179,10 @@ function learningMutation(
     const relocation = store.relocateBlobWorkspace(blob.id, text(body.root), stringList(body.evidence));
     return { relocation, blob: store.getBlob(blob.id), project: store.getProject(blob.projectId) };
   }
+  if (action === "execution-workspace") {
+    const binding = store.bindExecutionWorkspace(blob.id, text(body.root), stringList(body.evidence));
+    return { binding, blob: store.getBlob(blob.id), project: store.getProject(blob.projectId) };
+  }
   throw new Error(`Unknown learning action: ${action}`);
 }
 
@@ -199,6 +205,7 @@ function learningSnapshot(store: ConveyorStore, blobId: string): object {
     attempts,
     humanInputs: store.listHumanInputs(blob.id),
     workspaceRelocations: store.listWorkspaceRelocations(blob.id),
+    executionWorkspaceBindings: store.listExecutionWorkspaceBindings(blob.id),
   };
 }
 
@@ -330,6 +337,8 @@ function viewBlob(blob: Blob, receipts: Receipt[]): ViewBlob {
   return {
     id: blob.id,
     title: blob.title,
+    projectRoot: blob.cwd,
+    executionWorkspaceRoot: blob.executionWorkspaceRoot,
     stepId: blob.state,
     paused: blob.paused,
     running: latest?.status === "running",

@@ -120,7 +120,10 @@ export class ConveyorRunner {
     observer: HarnessObserver,
     claim: ClaimedExecution,
   ): Promise<HarnessResult> {
-    this.recordBoundary("start", claim, {});
+    this.recordBoundary("start", claim, {
+      projectRoot: claim.blob.cwd,
+      executionWorkspaceRoot: claim.blob.executionWorkspaceRoot,
+    });
     return this.harness.start(input, observer);
   }
 
@@ -130,7 +133,11 @@ export class ConveyorRunner {
     observer: HarnessObserver,
     claim: ClaimedExecution,
   ): Promise<HarnessResult> {
-    this.recordBoundary("resume", claim, { externalRunId });
+    this.recordBoundary("resume", claim, {
+      externalRunId,
+      projectRoot: claim.blob.cwd,
+      executionWorkspaceRoot: claim.blob.executionWorkspaceRoot,
+    });
     return this.harness.resume({ ...input, externalRunId }, observer);
   }
 

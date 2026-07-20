@@ -63,6 +63,8 @@ export class FactorioDatabase {
     const columns = tableColumns(this.connection, "blobs");
     addColumn(this.connection, columns, "paused", "INTEGER NOT NULL DEFAULT 0");
     addColumn(this.connection, columns, "pipelineId", "TEXT NOT NULL DEFAULT ''");
+    addColumn(this.connection, columns, "executionWorkspaceRoot", "TEXT NOT NULL DEFAULT ''");
+    this.connection.exec("UPDATE blobs SET executionWorkspaceRoot = cwd WHERE executionWorkspaceRoot = ''");
     if (!columns.has("projectId")) {
       const at = new Date().toISOString();
       this.connection.prepare(projectMigrationInsert).run(at, at);
@@ -117,6 +119,7 @@ const schema = `
     title TEXT NOT NULL,
     body TEXT NOT NULL,
     cwd TEXT NOT NULL,
+    executionWorkspaceRoot TEXT NOT NULL,
     pipelineId TEXT NOT NULL,
     pipelinePath TEXT NOT NULL,
     inputArtifactsJson TEXT NOT NULL,
@@ -232,6 +235,22 @@ const schema = `
   CREATE INDEX IF NOT EXISTS workspaceRelocationsByBlob
     ON workspaceRelocations(blobId, createdAt);
 
+  CREATE TABLE IF NOT EXISTS executionWorkspaceBindings (
+    id TEXT PRIMARY KEY,
+    blobId TEXT NOT NULL REFERENCES blobs(id),
+    projectId TEXT NOT NULL REFERENCES projects(id),
+    projectRoot TEXT NOT NULL,
+    oldExecutionWorkspaceRoot TEXT NOT NULL,
+    newExecutionWorkspaceRoot TEXT NOT NULL,
+    pipelineId TEXT NOT NULL,
+    pipelinePath TEXT NOT NULL,
+    evidenceJson TEXT NOT NULL,
+    createdAt TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS executionWorkspaceBindingsByBlob
+    ON executionWorkspaceBindings(blobId, createdAt);
+
   CREATE TABLE IF NOT EXISTS dispatcherLeases (
     name TEXT PRIMARY KEY,
     ownerId TEXT NOT NULL,
@@ -277,6 +296,7 @@ const columnTables: Record<string, string> = {
   humanGateApprovalInputId: "blobs",
   executionMode: "blobs",
   runRequested: "blobs",
+  executionWorkspaceRoot: "blobs",
   continuationThreadId: "receipts",
   humanInputJson: "receipts",
   approvalEvidenceJson: "receipts",

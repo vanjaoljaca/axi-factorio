@@ -39,6 +39,7 @@ async function runCommand(
     case "approve": return approveHumanReview(args.slice(1), store, json);
     case "adopt": return adoptBlob(args.slice(1), store, json);
     case "relocate": return relocateBlob(args.slice(1), store, json);
+    case "bind-execution": return bindExecutionWorkspace(args.slice(1), store, json);
     case "rewind":
     case "kick": return rewindBlob(args.slice(1), store, json, args[0]);
     case "run":
@@ -113,6 +114,21 @@ function relocateBlob(args: string[], store: ConveyorStore, json: boolean): void
     relocation,
     blob: blobSummary(store.getBlob(relocation.blobId)!),
     project: projectSummary(store.getProject(relocation.projectId)!),
+  }, json);
+}
+
+function bindExecutionWorkspace(args: string[], store: ConveyorStore, json: boolean): void {
+  const parsed = parseArgs(args, { "--root": "value", "--evidence": "value" });
+  requirePositionals(parsed, 1, "bind-execution requires one blob ID.");
+  const root = firstFlag(parsed, "--root");
+  if (!root) throw usage("bind-execution requires --root DIR.");
+  const binding = store.bindExecutionWorkspace(
+    parsed.positionals[0], resolve(root), parsed.flags["--evidence"] ?? [],
+  );
+  printOutput({
+    ok: `bind-execution ${binding.blobId} -> ${binding.newExecutionWorkspaceRoot}`,
+    binding,
+    blob: blobDetail(store.getBlob(binding.blobId)!),
   }, json);
 }
 
@@ -509,6 +525,8 @@ function blobDetail(blob: Blob): Record<string, unknown> {
     pipeline: blob.pipelineId,
     pipelinePath: blob.pipelinePath,
     cwd: blob.cwd,
+    projectRoot: blob.cwd,
+    executionWorkspaceRoot: blob.executionWorkspaceRoot,
     lastCompletedStep: blob.lastCompletedStepId,
     forcedStep: blob.forcedStepId,
     humanGateStep: blob.humanGateStepId,
@@ -645,7 +663,7 @@ function serviceAbortController(): AbortController {
 }
 
 function printVersion(): void {
-  process.stdout.write("axi-factorio 0.1.0-rc.18\n");
+  process.stdout.write("axi-factorio 0.1.0-rc.19\n");
 }
 
 function helpCommand(args: string[]): string | undefined {
@@ -698,10 +716,10 @@ const harnessFlags: FlagSpec = {
 };
 
 const helpText: Record<string, string> = {
-  root: `axi-factorio 0.1.0-rc.18
+  root: `axi-factorio 0.1.0-rc.19
 
 Usage: axi-factorio <command> [flags]
-Commands: project, add, adopt, relocate, list, status, show, receipts, play, step, stop, retry, review, feedback, approve, rewind, kick, run, service, init
+Commands: project, add, adopt, relocate, bind-execution, list, status, show, receipts, play, step, stop, retry, review, feedback, approve, rewind, kick, run, service, init
 Globals: --db PATH, --json, --help, --version
 
 Run without arguments for the live conveyor dashboard.
@@ -727,6 +745,7 @@ Run without arguments for the live conveyor dashboard.
   approve: `Usage: axi-factorio approve BLOB_ID --evidence REF... [--note TEXT]\n`,
   adopt: `Usage: axi-factorio adopt BLOB_ID CURRENT_STEP --source KIND:EXACT_ID --evidence STEP_ID=REF...\n`,
   relocate: `Usage: axi-factorio relocate BLOB_ID --root DIR --evidence REF...\n`,
+  "bind-execution": `Usage: axi-factorio bind-execution BLOB_ID --root DIR --evidence REF...\n`,
   rewind: `Usage: axi-factorio rewind BLOB_ID STEP_ID\n`,
   kick: `Usage: axi-factorio kick BLOB_ID STEP_ID\n`,
   run: `Usage: axi-factorio run [--harness codex|module:SPECIFIER[#EXPORT]] [--instrumentation module:SPECIFIER[#EXPORT]]\n`,

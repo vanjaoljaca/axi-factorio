@@ -187,7 +187,7 @@ npm run build
 
 This recreates `release/` with:
 
-- `axi-factorio-0.1.0-rc.18.tgz`, the installable package;
+- `axi-factorio-0.1.0-rc.19.tgz`, the installable package;
 - `SHA256SUMS`, for artifact verification; and
 - `INSTALL.md`, with direct and vendored installation commands.
 
@@ -199,7 +199,7 @@ Do not use `npm link` for a consuming project. Install the exact tarball so
 Install the exact candidate in the consuming npm project:
 
 ```sh
-npm install --save-exact /path/to/axi-factorio-0.1.0-rc.18.tgz
+npm install --save-exact /path/to/axi-factorio-0.1.0-rc.19.tgz
 ```
 
 From the consuming project root, the defaults are:
@@ -335,9 +335,28 @@ project root and only the selected blob's working directory; other existing
 blobs are not silently moved. The same operation is available through
 `POST /api/blobs/:id/relocate` with `{ root, evidence }`.
 
-Opening an rc.4 through rc.17 database with rc.18 migrates projects, receipt
+An app may need a larger execution sandbox without changing its project
+identity. Bind the selected blob to an existing containing workspace:
+
+```sh
+npx axi-factorio bind-execution account-export-1 \
+  --root ../.. \
+  --evidence worktree-head:abc123
+```
+
+The blob keeps its app project root for app-relative artifacts and pipeline
+context. Codex entry, same-step continuation, and exit evaluation use the
+separate execution workspace as `-C` and the `workspace-write` sandbox root.
+The project root must be contained by the execution root, no receipt may be
+running, and evidence is required. Every binding is append-only provenance.
+The same operation is available through
+`POST /api/blobs/:id/execution-workspace` with `{ root, evidence }`.
+
+Opening an rc.4 through rc.18 database with rc.19 migrates projects, receipt
 provenance, durable execution-control columns, blob revisions, and immutable
-attempt evidence automatically. Existing
+attempt evidence automatically. Existing blobs receive an
+`executionWorkspaceRoot` equal to their current app root, preserving prior
+behavior until explicitly rebound. Existing
 blobs migrate in the stopped continuous mode. The old
 project `cwd` becomes the app root, and its initial pipeline root becomes
 `<old-cwd>/pipelines`. Run `project upsert` afterward to point projects at a
@@ -362,7 +381,7 @@ Rewind-and-rerun invalidates the selected step for progression while keeping
 all prior receipts available for side-by-side comparison.
 
 Future multi-pipeline integration is deliberately parked in [ROADMAP.md](ROADMAP.md)
-under **pipeline merger**. rc.18 does not implement it.
+under **pipeline merger**. rc.19 does not implement it.
 
 Explicitly move it back to a step:
 

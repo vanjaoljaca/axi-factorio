@@ -34,16 +34,18 @@ export type BlobInput = {
   title: string;
   body: string;
   cwd: string;
+  executionWorkspaceRoot?: string;
   projectId?: string;
   pipelineId?: string;
   pipelinePath: string;
   inputArtifacts: string[];
 };
 
-export type Blob = Omit<BlobInput, "pipelineId" | "projectId"> & {
+export type Blob = Omit<BlobInput, "executionWorkspaceRoot" | "pipelineId" | "projectId"> & {
   id: string;
   projectId: string;
   pipelineId: string;
+  executionWorkspaceRoot: string;
   state: BlobState;
   paused: boolean;
   executionMode: ExecutionMode;
@@ -133,6 +135,19 @@ export type WorkspaceRelocation = {
   newCwd: string;
   oldProjectRoot: string;
   newProjectRoot: string;
+  pipelineId: string;
+  pipelinePath: string;
+  evidence: string[];
+  createdAt: string;
+};
+
+export type ExecutionWorkspaceBinding = {
+  id: string;
+  blobId: string;
+  projectId: string;
+  projectRoot: string;
+  oldExecutionWorkspaceRoot: string;
+  newExecutionWorkspaceRoot: string;
   pipelineId: string;
   pipelinePath: string;
   evidence: string[];

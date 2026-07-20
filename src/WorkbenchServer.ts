@@ -93,6 +93,10 @@ function scenarioIndex(): object[] {
       id: "blob-workspace-relocation", name: "Blob workspace relocation",
       description: "root A → deliberate rebind → next receipt only in root B",
     },
+    {
+      id: "codex-execution-workspace", name: "Codex execution workspace",
+      description: "app project root + containing worktree sandbox + sibling fixture",
+    },
   ];
 }
 
@@ -116,6 +120,11 @@ async function scenario(url: URL): Promise<Scenario> {
     const { runBlobWorkspaceRelocationScenario } =
       await import("../test/harness/BlobWorkspaceRelocationScenario.ts");
     return runBlobWorkspaceRelocationScenario();
+  }
+  if (id === "codex-execution-workspace") {
+    const { runCodexExecutionWorkspaceScenario } =
+      await import("../test/harness/CodexExecutionWorkspaceScenario.ts");
+    return runCodexExecutionWorkspaceScenario();
   }
   throw new Error(`Unknown scenario: ${id}`);
 }

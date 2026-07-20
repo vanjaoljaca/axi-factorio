@@ -20,7 +20,7 @@ test("root help exposes service installation and keeps workbench internal", () =
 test("every public command exposes concise help without opening runtime state", () => {
   const fixture = createCliFixture();
   const commands = [
-    "project", "add", "adopt", "list", "status", "show", "receipts", "retry", "rewind",
+    "project", "add", "adopt", "relocate", "bind-execution", "list", "status", "show", "receipts", "retry", "rewind",
     "kick", "run", "evaluate", "service", "init",
   ];
   for (const command of commands) {
