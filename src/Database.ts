@@ -215,6 +215,23 @@ const schema = `
 
   CREATE INDEX IF NOT EXISTS executionEventsByBlob ON executionEvents(blobId, id);
 
+  CREATE TABLE IF NOT EXISTS workspaceRelocations (
+    id TEXT PRIMARY KEY,
+    blobId TEXT NOT NULL REFERENCES blobs(id),
+    projectId TEXT NOT NULL REFERENCES projects(id),
+    oldCwd TEXT NOT NULL,
+    newCwd TEXT NOT NULL,
+    oldProjectRoot TEXT NOT NULL,
+    newProjectRoot TEXT NOT NULL,
+    pipelineId TEXT NOT NULL,
+    pipelinePath TEXT NOT NULL,
+    evidenceJson TEXT NOT NULL,
+    createdAt TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS workspaceRelocationsByBlob
+    ON workspaceRelocations(blobId, createdAt);
+
   CREATE TABLE IF NOT EXISTS dispatcherLeases (
     name TEXT PRIMARY KEY,
     ownerId TEXT NOT NULL,

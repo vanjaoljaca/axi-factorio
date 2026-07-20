@@ -257,6 +257,24 @@ export class ConveyorStore {
     return rows.map(executionEventFromRow);
   }
 
+  relocateBlobWorkspace(blobId: string, targetRoot: string, evidence: string[]): WorkspaceRelocation {
+    if (!evidence.length) throw new Error("Workspace relocation requires evidence.");
+    const resolvedRoot = requireDirectory(targetRoot);
+    return this.database.transaction(() => {
+      const blob = this.requireBlob(blobId);
+      if (this.hasRunningReceipt(blob.id)) throw new Error("A running blob cannot be relocated.");
+      const project = this.requireProject(blob.projectId);
+      return this.persistWorkspaceRelocation(blob, project, resolvedRoot, evidence);
+    });
+  }
+
+  listWorkspaceRelocations(blobId?: string): WorkspaceRelocation[] {
+    const rows = blobId
+      ? this.database.connection.prepare(workspaceRelocationListByBlob).all(blobId)
+      : this.database.connection.prepare(workspaceRelocationList).all();
+    return rows.map((row) => mapWorkspaceRelocation(asRecord(row)));
+  }
+
   recordExecutionEvent(
     receiptId: string,
     blobId: string,
@@ -551,6 +569,36 @@ export class ConveyorStore {
     const blob = this.getBlob(id);
     if (!blob) throw new Error(`Blob ${id} was not found.`);
     return blob;
+  }
+
+  private requireProject(id: string): Project {
+    const project = this.getProject(id);
+    if (!project) throw new Error(`Project ${id} was not found.`);
+    return project;
+  }
+
+  private persistWorkspaceRelocation(
+    blob: Blob,
+    project: Project,
+    newRoot: string,
+    evidence: string[],
+  ): WorkspaceRelocation {
+    if (blob.cwd === newRoot && project.root === newRoot) {
+      throw new Error(`Blob ${blob.id} already uses workspace ${newRoot}.`);
+    }
+    const relocation = workspaceRelocation(blob, project, newRoot, evidence, this.now());
+    this.database.connection.prepare(projectWorkspaceUpdate).run(newRoot, newRoot, relocation.createdAt, project.id);
+    this.database.connection.prepare(blobWorkspaceUpdate).run(newRoot, relocation.createdAt, blob.id);
+    this.database.connection.prepare(workspaceRelocationInsert).run(
+      relocation.id, relocation.blobId, relocation.projectId,
+      relocation.oldCwd, relocation.newCwd, relocation.oldProjectRoot, relocation.newProjectRoot,
+      relocation.pipelineId, relocation.pipelinePath, JSON.stringify(relocation.evidence), relocation.createdAt,
+    );
+    const updated = this.requireBlob(blob.id);
+    if (updated.pipelineId !== blob.pipelineId || updated.pipelinePath !== blob.pipelinePath) {
+      throw new Error("Workspace relocation changed the blob pipeline identity.");
+    }
+    return relocation;
   }
 
   private requireReceipt(id: string): Receipt {
@@ -853,6 +901,15 @@ const executionEventsQuery = "SELECT * FROM executionEvents ORDER BY id";
 const executionEventsByBlobQuery = "SELECT * FROM executionEvents WHERE blobId = ? ORDER BY id";
 const executionEventInsert = `INSERT INTO executionEvents
   (receiptId, blobId, stepId, name, attributesJson, createdAt) VALUES (?, ?, ?, ?, ?, ?)`;
+const workspaceRelocationInsert = `INSERT INTO workspaceRelocations
+  (id, blobId, projectId, oldCwd, newCwd, oldProjectRoot, newProjectRoot,
+   pipelineId, pipelinePath, evidenceJson, createdAt)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+const workspaceRelocationList = "SELECT * FROM workspaceRelocations ORDER BY createdAt, id";
+const workspaceRelocationListByBlob = `SELECT * FROM workspaceRelocations
+  WHERE blobId = ? ORDER BY createdAt, id`;
+const blobWorkspaceUpdate = "UPDATE blobs SET cwd = ?, updatedAt = ? WHERE id = ?";
+const projectWorkspaceUpdate = `UPDATE projects SET cwd = ?, root = ?, updatedAt = ? WHERE id = ?`;
 const leaseDeleteExpired = "DELETE FROM dispatcherLeases WHERE name = 'runner' AND leaseUntil <= ?";
 const leaseInsert = `INSERT OR IGNORE INTO dispatcherLeases
   (name, ownerId, leaseUntil, updatedAt) VALUES ('runner', ?, ?, ?)`;
@@ -868,6 +925,38 @@ const projectUpdate = `UPDATE projects SET name = ?, cwd = ?, root = ?, pipeline
   defaultPipeline = ?, updatedAt = ? WHERE id = ?`;
 const projectSelect = "SELECT * FROM projects WHERE id = ?";
 const projectList = "SELECT * FROM projects ORDER BY name, id";
+
+function requireDirectory(path: string): string {
+  const resolved = realpathSync(path);
+  if (!statSync(resolved).isDirectory()) throw new Error(`Workspace target is not a directory: ${resolved}`);
+  return resolved;
+}
+
+function workspaceRelocation(
+  blob: Blob,
+  project: Project,
+  newRoot: string,
+  evidence: string[],
+  createdAt: string,
+): WorkspaceRelocation {
+  return {
+    id: randomUUID(), blobId: blob.id, projectId: project.id,
+    oldCwd: blob.cwd, newCwd: newRoot,
+    oldProjectRoot: project.root, newProjectRoot: newRoot,
+    pipelineId: blob.pipelineId, pipelinePath: blob.pipelinePath,
+    evidence: [...evidence], createdAt,
+  };
+}
+
+function mapWorkspaceRelocation(row: Record<string, unknown>): WorkspaceRelocation {
+  return {
+    id: String(row.id), blobId: String(row.blobId), projectId: String(row.projectId),
+    oldCwd: String(row.oldCwd), newCwd: String(row.newCwd),
+    oldProjectRoot: String(row.oldProjectRoot), newProjectRoot: String(row.newProjectRoot),
+    pipelineId: String(row.pipelineId), pipelinePath: String(row.pipelinePath),
+    evidence: JSON.parse(String(row.evidenceJson)) as string[], createdAt: String(row.createdAt),
+  };
+}
 
 import type {
   ExecutionResult,
@@ -888,8 +977,10 @@ import type {
   ImportAttestation,
   AttemptEvidence,
   BlobRevision,
+  WorkspaceRelocation,
 } from "./Types.ts";
 import type { FactorioDatabase } from "./Database.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { discoverPipeline } from "./Pipeline.ts";
 import { dirname } from "node:path";
+import { realpathSync, statSync } from "node:fs";

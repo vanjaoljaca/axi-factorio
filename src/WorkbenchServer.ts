@@ -89,6 +89,10 @@ function scenarioIndex(): object[] {
       id: "codex-writable-continuation", name: "Writable Codex continuation",
       description: "entry retry · same-task continuation · exit advance · durable artifact",
     },
+    {
+      id: "blob-workspace-relocation", name: "Blob workspace relocation",
+      description: "root A → deliberate rebind → next receipt only in root B",
+    },
   ];
 }
 
@@ -107,6 +111,11 @@ async function scenario(url: URL): Promise<Scenario> {
     const { runCodexWritableContinuationScenario } =
       await import("../test/harness/CodexWritableContinuationScenario.ts");
     return runCodexWritableContinuationScenario();
+  }
+  if (id === "blob-workspace-relocation") {
+    const { runBlobWorkspaceRelocationScenario } =
+      await import("../test/harness/BlobWorkspaceRelocationScenario.ts");
+    return runBlobWorkspaceRelocationScenario();
   }
   throw new Error(`Unknown scenario: ${id}`);
 }

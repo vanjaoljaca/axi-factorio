@@ -111,6 +111,30 @@ test("viewer execution API persists Play, Step, and Stop without duplicate reque
   assert.equal(stepped.blob.runRequested, true);
 });
 
+test("viewer relocation API deliberately rebinds one blob and exposes durable provenance", async () => {
+  const fixture = createPipeline(["g1.first"]);
+  const databasePath = join(fixture.root, "factorio.sqlite");
+  const database = new FactorioDatabase(databasePath);
+  const store = new ConveyorStore(database);
+  store.createBlob("relocated", blobInput(fixture, "Relocated item"));
+  database.close();
+  const target = join(fixture.root, "workspace-b");
+  mkdirSync(target);
+  const server = createViewerServer(databasePath);
+  const endpoint = await listen(server);
+
+  const result = await postJson(endpoint, "relocated", "relocate", {
+    root: target, evidence: ["api:explicit-rebind"],
+  });
+  const learning = await fetch(`${endpoint}/api/blobs/relocated/learning`).then(readJson);
+  await close(server);
+
+  assert.equal(result.blob.cwd, realpathSync(target));
+  assert.equal(result.project.root, realpathSync(target));
+  assert.equal(learning.workspaceRelocations.length, 1);
+  assert.deepEqual(learning.workspaceRelocations[0].evidence, ["api:explicit-rebind"]);
+});
+
 test("production learning API preserves revisions, prompt provenance, reruns, and restart history", async () => {
   const fixture = createPipeline(["build.first", "review.second"]);
   const databasePath = join(fixture.root, "factorio.sqlite");
@@ -276,6 +300,6 @@ import { ConveyorRunner } from "../src/Runner.ts";
 import { ConveyorService } from "../src/Service.ts";
 import { MockAgentHarness } from "../test/harness/MockHarness.ts";
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, renameSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, renameSync } from "node:fs";
 import test from "node:test";
 import { dirname, join } from "node:path";

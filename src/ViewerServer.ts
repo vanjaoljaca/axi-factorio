@@ -173,6 +173,10 @@ function learningMutation(
     store.approveHumanGate(blob.id, text(body.text), stringList(body.evidence));
     return null;
   }
+  if (action === "relocate") {
+    const relocation = store.relocateBlobWorkspace(blob.id, text(body.root), stringList(body.evidence));
+    return { relocation, blob: store.getBlob(blob.id), project: store.getProject(blob.projectId) };
+  }
   throw new Error(`Unknown learning action: ${action}`);
 }
 
@@ -194,6 +198,7 @@ function learningSnapshot(store: ConveyorStore, blobId: string): object {
     })),
     attempts,
     humanInputs: store.listHumanInputs(blob.id),
+    workspaceRelocations: store.listWorkspaceRelocations(blob.id),
   };
 }
 

@@ -187,7 +187,7 @@ npm run build
 
 This recreates `release/` with:
 
-- `axi-factorio-0.1.0-rc.17.tgz`, the installable package;
+- `axi-factorio-0.1.0-rc.18.tgz`, the installable package;
 - `SHA256SUMS`, for artifact verification; and
 - `INSTALL.md`, with direct and vendored installation commands.
 
@@ -199,7 +199,7 @@ Do not use `npm link` for a consuming project. Install the exact tarball so
 Install the exact candidate in the consuming npm project:
 
 ```sh
-npm install --save-exact /path/to/axi-factorio-0.1.0-rc.17.tgz
+npm install --save-exact /path/to/axi-factorio-0.1.0-rc.18.tgz
 ```
 
 From the consuming project root, the defaults are:
@@ -321,7 +321,21 @@ external task. Approval requires at least one evidence reference. The prompt
 still decides whether the step passes; Factorio only supplies and records the
 human evidence.
 
-Opening an rc.4 through rc.16 database with rc.17 migrates projects, receipt
+Relocating an existing blob to a new app workspace is deliberate and audited:
+
+```sh
+npx axi-factorio relocate account-export-1 \
+  --root ./apps/example \
+  --evidence worktree-head:abc123
+```
+
+The target must exist, no receipt may be running, and the blob keeps its exact
+pipeline identity and append-only receipt history. The operation updates the
+project root and only the selected blob's working directory; other existing
+blobs are not silently moved. The same operation is available through
+`POST /api/blobs/:id/relocate` with `{ root, evidence }`.
+
+Opening an rc.4 through rc.17 database with rc.18 migrates projects, receipt
 provenance, durable execution-control columns, blob revisions, and immutable
 attempt evidence automatically. Existing
 blobs migrate in the stopped continuous mode. The old
@@ -348,7 +362,7 @@ Rewind-and-rerun invalidates the selected step for progression while keeping
 all prior receipts available for side-by-side comparison.
 
 Future multi-pipeline integration is deliberately parked in [ROADMAP.md](ROADMAP.md)
-under **pipeline merger**. rc.17 does not implement it.
+under **pipeline merger**. rc.18 does not implement it.
 
 Explicitly move it back to a step:
 

@@ -125,6 +125,20 @@ export type ExecutionEvent = {
   createdAt: string;
 };
 
+export type WorkspaceRelocation = {
+  id: string;
+  blobId: string;
+  projectId: string;
+  oldCwd: string;
+  newCwd: string;
+  oldProjectRoot: string;
+  newProjectRoot: string;
+  pipelineId: string;
+  pipelinePath: string;
+  evidence: string[];
+  createdAt: string;
+};
+
 export type ImportAttestation = {
   step: StepDefinition;
   definition: DefinitionSnapshot;

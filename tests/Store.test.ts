@@ -44,9 +44,49 @@ test("fresh storage includes projects, blobs, receipts, and the dispatcher lease
     rows.map((row) => row.name),
     [
       "attemptEvidence", "blobRevisions", "blobs", "dispatcherLeases",
-      "executionEvents", "humanInputs", "projects", "receipts",
+      "executionEvents", "humanInputs", "projects", "receipts", "workspaceRelocations",
     ],
   );
+  fixture.database.close();
+});
+
+test("workspace relocation moves one blob and project while preserving pipeline identity", () => {
+  const fixture = createStoreFixture(["plan.define", "dev.build"]);
+  const first = fixture.store.createBlob("blob-1", blobInput(fixture)).blob;
+  const second = fixture.store.createBlob("blob-2", blobInput(fixture)).blob;
+  const target = join(fixture.root, "relocated");
+  mkdirSync(target);
+  const canonicalTarget = realpathSync(target);
+
+  const relocation = fixture.store.relocateBlobWorkspace(first.id, target, ["worktree:exact-head"]);
+
+  assert.equal(fixture.store.getBlob(first.id)?.cwd, canonicalTarget);
+  assert.equal(fixture.store.getBlob(second.id)?.cwd, second.cwd);
+  assert.equal(fixture.store.getProject(first.projectId)?.root, canonicalTarget);
+  assert.equal(fixture.store.getBlob(first.id)?.pipelineId, first.pipelineId);
+  assert.equal(fixture.store.getBlob(first.id)?.pipelinePath, first.pipelinePath);
+  assert.deepEqual(fixture.store.listWorkspaceRelocations(first.id), [relocation]);
+  fixture.database.close();
+});
+
+test("workspace relocation rejects missing targets, missing evidence, and running receipts", () => {
+  const fixture = createStoreFixture();
+  const blob = fixture.store.createBlob("blob-1", blobInput(fixture)).blob;
+  const target = join(fixture.root, "relocated");
+  mkdirSync(target);
+
+  assert.throws(
+    () => fixture.store.relocateBlobWorkspace(blob.id, join(fixture.root, "missing"), ["proof:x"]),
+    /ENOENT/,
+  );
+  assert.throws(() => fixture.store.relocateBlobWorkspace(blob.id, target, []), /requires evidence/);
+  fixture.store.requestStep(blob.id);
+  const step = discoverPipeline(fixture.pipelinePath)[0];
+  fixture.store.beginReceipt({
+    blobId: blob.id, step, definition: snapshotDefinition(step, fixture.pipelinePath),
+    adapter: "fake", inputArtifacts: [],
+  });
+  assert.throws(() => fixture.store.relocateBlobWorkspace(blob.id, target, ["proof:x"]), /running blob/);
   fixture.database.close();
 });
 
@@ -256,6 +296,6 @@ import { FactorioDatabase } from "../src/Database.ts";
 import { discoverPipeline, snapshotDefinition } from "../src/Pipeline.ts";
 import { ConveyorStore } from "../src/Store.ts";
 import assert from "node:assert/strict";
-import { renameSync } from "node:fs";
+import { mkdirSync, realpathSync, renameSync } from "node:fs";
 import test from "node:test";
 import { join } from "node:path";
