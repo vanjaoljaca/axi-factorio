@@ -306,9 +306,11 @@ export class ConveyorStore {
     name: string,
     attributes: Record<string, string | number | boolean>,
   ): void {
+    const at = this.now();
     this.database.connection.prepare(executionEventInsert).run(
-      receiptId, blobId, stepId, name, JSON.stringify(attributes), this.now(),
+      receiptId, blobId, stepId, name, JSON.stringify(attributes), at,
     );
+    this.updateReceiptTelemetry(receiptId, name, attributes, at);
   }
 
   listHumanInputs(blobId?: string): HumanInput[] {
@@ -365,9 +367,11 @@ export class ConveyorStore {
     const approval = currentApproval ? { ...currentApproval, receiptId: id } : null;
     this.database.connection.prepare(receiptInsert).run(
       id, blob.id, input.step.id, input.step.order, attempt, input.adapter,
+      input.model ?? null, input.reasoningEffort ?? null,
       input.definition.gitSha, input.definition.contentHash,
       JSON.stringify(input.inputArtifacts), continuation,
-      JSON.stringify(humanInputs), approval ? JSON.stringify(approval) : null, at,
+      JSON.stringify(humanInputs), approval ? JSON.stringify(approval) : null,
+      blob.updatedAt, at, at, "Starting agent harness",
     );
     this.database.connection.prepare(humanInputReceiptUpdate).run(id, blob.id, input.step.id);
     this.insertAttemptEvidence(id, blob, input, at);
@@ -381,6 +385,25 @@ export class ConveyorStore {
       input.definition.gitSha, input.definition.contentHash,
       input.definition.entry, input.definition.exit,
       input.adapter, input.model ?? null, JSON.stringify(input.inputArtifacts), at,
+    );
+  }
+
+  private updateReceiptTelemetry(
+    receiptId: string,
+    name: string,
+    attributes: Record<string, string | number | boolean>,
+    at: string,
+  ): void {
+    const operation = telemetryOperation(name, attributes);
+    this.database.connection.prepare(receiptProgressUpdate).run(operation, at, receiptId);
+    if (attributes.eventType !== "metrics") return;
+    const input = telemetryNumber(attributes.inputTokens);
+    const cached = telemetryNumber(attributes.cachedInputTokens);
+    const output = telemetryNumber(attributes.outputTokens);
+    const total = telemetryNumber(attributes.totalTokens)
+      ?? (input !== null && output !== null ? input + output : null);
+    this.database.connection.prepare(receiptMetricsUpdate).run(
+      input, cached, output, total, receiptId,
     );
   }
 
@@ -406,7 +429,7 @@ export class ConveyorStore {
       randomUUID(), blob.id, attestation.step.id, attestation.step.order,
       sourceIdentity, JSON.stringify(attestation.evidence),
       attestation.definition.gitSha, attestation.definition.contentHash,
-      JSON.stringify(blob.inputArtifacts), JSON.stringify(attestation.evidence), at, at,
+      JSON.stringify(blob.inputArtifacts), JSON.stringify(attestation.evidence), at, at, at, at,
     );
   }
 
@@ -733,6 +756,8 @@ function mapReceipt(row: Record<string, unknown>): Receipt {
     status: row.status as ReceiptStatus,
     executionKind: String(row.executionKind || "automated") as Receipt["executionKind"],
     adapter: String(row.adapter),
+    model: nullableString(row.model),
+    reasoningEffort: nullableString(row.reasoningEffort),
     attestationSource: nullableString(row.attestationSource),
     attestationEvidence: JSON.parse(String(row.attestationEvidenceJson || "[]")) as string[],
     definitionGitSha: String(row.definitionGitSha),
@@ -747,7 +772,14 @@ function mapReceipt(row: Record<string, unknown>): Receipt {
       : null,
     reason: nullableString(row.reason),
     error: nullableString(row.error),
+    queuedAt: String(row.queuedAt || row.startedAt),
     startedAt: String(row.startedAt),
+    lastProgressAt: String(row.lastProgressAt || row.finishedAt || row.startedAt),
+    currentOperation: nullableString(row.currentOperation),
+    inputTokens: nullableNumber(row.inputTokens),
+    cachedInputTokens: nullableNumber(row.cachedInputTokens),
+    outputTokens: nullableNumber(row.outputTokens),
+    totalTokens: nullableNumber(row.totalTokens),
     finishedAt: nullableString(row.finishedAt),
     invalidatedAt: nullableString(row.invalidatedAt),
   };
@@ -850,6 +882,28 @@ function nullableNumber(value: unknown): number | null {
   return value === null || value === undefined ? null : Number(value);
 }
 
+function telemetryNumber(value: string | number | boolean | undefined): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return null;
+  return Math.round(value);
+}
+
+function telemetryOperation(
+  name: string,
+  attributes: Record<string, string | number | boolean>,
+): string | null {
+  if (attributes.eventType === "status" && typeof attributes.message === "string") {
+    return attributes.message.trim() || null;
+  }
+  const phase = name.replace("axi_factorio.harness.", "");
+  if (phase === "start") return "Starting agent harness";
+  if (phase === "resume") return "Resuming agent session";
+  if (phase === "terminal") return `Terminal decision: ${String(attributes.decision || "complete")}`;
+  if (phase === "error") return "Harness failed";
+  if (attributes.eventType === "artifact") return "Recording output artifact";
+  if (attributes.eventType === "metrics") return "Recording usage";
+  return null;
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
@@ -865,6 +919,7 @@ type BeginReceiptInput = {
   definition: DefinitionSnapshot;
   adapter: string;
   model: string | null;
+  reasoningEffort?: string | null;
   inputArtifacts: string[];
 };
 
@@ -898,16 +953,16 @@ const blobAdoptUpdate = `UPDATE blobs SET state = ?, paused = 0, lastCompletedSt
   lastCompletedOrder = ?, forcedStepId = NULL, humanGateStepId = NULL,
   humanGateApprovalInputId = NULL, runRequested = 0, updatedAt = ? WHERE id = ?`;
 const receiptInsert = `INSERT INTO receipts
-  (id, blobId, stepId, stepOrder, attempt, status, adapter, definitionGitSha,
+  (id, blobId, stepId, stepOrder, attempt, status, adapter, model, reasoningEffort, definitionGitSha,
    definitionHash, inputArtifactsJson, outputArtifactsJson, continuationThreadId,
-   humanInputJson, approvalEvidenceJson, startedAt)
-  VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, '[]', ?, ?, ?, ?)`;
+   humanInputJson, approvalEvidenceJson, queuedAt, startedAt, lastProgressAt, currentOperation)
+  VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, ?, ?, ?)`;
 const importedReceiptInsert = `INSERT INTO receipts
   (id, blobId, stepId, stepOrder, attempt, status, executionKind, adapter,
    attestationSource, attestationEvidenceJson, definitionGitSha, definitionHash,
-   inputArtifactsJson, outputArtifactsJson, reason, startedAt, finishedAt)
+   inputArtifactsJson, outputArtifactsJson, reason, queuedAt, startedAt, lastProgressAt, finishedAt)
   VALUES (?, ?, ?, ?, 1, 'advance', 'imported', 'attested-import', ?, ?, ?, ?, ?, ?,
-    'Imported completion attested; no automation was run.', ?, ?)`;
+    'Imported completion attested; no automation was run.', ?, ?, ?, ?)`;
 const receiptSelect = "SELECT * FROM receipts WHERE id = ?";
 const receiptList = "SELECT * FROM receipts ORDER BY startedAt, stepOrder, attempt";
 const receiptListByBlob = "SELECT * FROM receipts WHERE blobId = ? ORDER BY startedAt, stepOrder, attempt";
@@ -925,6 +980,11 @@ const attemptEvidenceByBlob = `SELECT attemptEvidence.*, receipts.blobId
   FROM attemptEvidence JOIN receipts ON receipts.id = attemptEvidence.receiptId
   WHERE receipts.blobId = ? ORDER BY receipts.startedAt, receipts.attempt`;
 const receiptExternalRunUpdate = "UPDATE receipts SET externalRunId = ? WHERE id = ?";
+const receiptProgressUpdate = `UPDATE receipts SET currentOperation = COALESCE(?, currentOperation),
+  lastProgressAt = ? WHERE id = ?`;
+const receiptMetricsUpdate = `UPDATE receipts SET inputTokens = COALESCE(?, inputTokens),
+  cachedInputTokens = COALESCE(?, cachedInputTokens), outputTokens = COALESCE(?, outputTokens),
+  totalTokens = COALESCE(?, totalTokens) WHERE id = ?`;
 const receiptCompleteUpdate = `UPDATE receipts SET status = ?, outputArtifactsJson = ?,
   externalRunId = ?, reason = ?, finishedAt = ? WHERE id = ?`;
 const receiptFailureUpdate = "UPDATE receipts SET status = 'failed', error = ?, finishedAt = ? WHERE id = ?";

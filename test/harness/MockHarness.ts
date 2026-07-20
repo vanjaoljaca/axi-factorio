@@ -1,6 +1,7 @@
 export class MockAgentHarness implements AgentHarness {
   readonly name = "deterministic-mock";
   readonly model = "deterministic-v1";
+  readonly reasoningEffort = "low";
   private nextFailure = false;
   private nextRetry = false;
   private nextBlock = false;
@@ -49,7 +50,14 @@ export class MockAgentHarness implements AgentHarness {
       const decision = this.decision(input);
       const artifactRef = `mock-artifact:${input.blob.id}:${input.step.id}:${decision}`;
       observer.event({ type: "artifact", artifactRef });
-      observer.event({ type: "metrics", inputTokens: 40 + input.step.order, outputTokens: 20 });
+      const inputTokens = 40 + input.step.order;
+      observer.event({
+        type: "metrics",
+        inputTokens,
+        cachedInputTokens: 12,
+        outputTokens: 20,
+        totalTokens: inputTokens + 20,
+      });
       observer.event({ type: "status", status: decision, message: "deterministic terminal" });
       return {
         decision,

@@ -18,7 +18,11 @@ test("rc.4 project cwd migrates to distinct project and pipeline roots", () => {
   assert.equal(project?.defaultPipeline, "default");
   const receiptColumns = database.connection.prepare("PRAGMA table_info(receipts)").all() as
     Array<{ name: string }>;
-  assert(["executionKind", "attestationSource", "attestationEvidenceJson"].every((name) =>
+  assert([
+    "executionKind", "attestationSource", "attestationEvidenceJson",
+    "queuedAt", "lastProgressAt", "currentOperation",
+    "inputTokens", "cachedInputTokens", "outputTokens", "totalTokens",
+  ].every((name) =>
     receiptColumns.some((column) => column.name === name)));
   const blobColumns = database.connection.prepare("PRAGMA table_info(blobs)").all() as
     Array<{ name: string }>;

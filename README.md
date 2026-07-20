@@ -39,6 +39,13 @@ The default happy-path scenario calls `createTestHarness()`, loads the paired
 definitions in `test/harness/default/`, creates a fresh temporary SQLite
 database, and moves a blob through the real `ConveyorRunner`.
 
+The Live agent sessions scenario is deliberately time-based. Play starts a
+slow deterministic agent harness through the production Store and Runner,
+activity updates while its receipt remains running, the first attempt requests
+a retry, and the second attempt advances through the same external session.
+Reset recreates the temporary database. It uses the same execution-telemetry
+component as the installed Viewer.
+
 The workbench is not included in the release artifact or exposed as an
 installed CLI command. The installed service has a separate user
 view: project-grouped task rows, pipeline beads, status, and execution controls. Raw
@@ -187,7 +194,7 @@ npm run build
 
 This recreates `release/` with:
 
-- `axi-factorio-0.1.0-rc.20.tgz`, the installable package;
+- `axi-factorio-0.1.0-rc.21.tgz`, the installable package;
 - `SHA256SUMS`, for artifact verification; and
 - `INSTALL.md`, with direct and vendored installation commands.
 
@@ -199,7 +206,7 @@ Do not use `npm link` for a consuming project. Install the exact tarball so
 Install the exact candidate in the consuming npm project:
 
 ```sh
-npm install --save-exact /path/to/axi-factorio-0.1.0-rc.20.tgz
+npm install --save-exact /path/to/axi-factorio-0.1.0-rc.21.tgz
 ```
 
 From the consuming project root, the defaults are:
@@ -360,7 +367,7 @@ harness adds only the Git-owned state required to commit through repeatable
 folders. The assigned workspace must equal Git's reported work root; non-Git
 workspaces retain their previous behavior.
 
-Opening an rc.4 through rc.19 database with rc.20 migrates projects, receipt
+Opening an rc.4 through rc.20 database with rc.21 migrates projects, receipt
 provenance, durable execution-control columns, blob revisions, and immutable
 attempt evidence automatically. Existing blobs receive an
 `executionWorkspaceRoot` equal to their current app root, preserving prior
@@ -388,8 +395,18 @@ a diff and write the actual pipeline Markdown only after explicit save.
 Rewind-and-rerun invalidates the selected step for progression while keeping
 all prior receipts available for side-by-side comparison.
 
+The execution-session panel shows in-flight and recent completed receipts.
+Every receipt retains queued, started, last-progress, finished, and elapsed
+time; current operation; external harness session; attempt number; model and
+reasoning effort when the harness reports them; authoritative input, cached
+input, output, and total token usage when available; and the terminal
+reason/error. Missing usage is rendered as `Unknown`, never estimated. A
+running receipt with no persisted progress for five minutes is labeled
+`No recent progress for 5m or more — check session`; the text, rather than color
+alone, carries the health meaning.
+
 Future multi-pipeline integration is deliberately parked in [ROADMAP.md](ROADMAP.md)
-under **pipeline merger**. rc.20 does not implement it.
+under **pipeline merger**. rc.21 does not implement it.
 
 Explicitly move it back to a step:
 

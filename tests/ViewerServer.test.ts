@@ -85,6 +85,31 @@ test("viewer keeps paused zero-receipt inventory neutral", () => {
   });
 });
 
+test("viewer exposes persisted running and completed execution telemetry", async () => {
+  const fixture = createPipeline(["g1.first", "g2.second"]);
+  const databasePath = join(fixture.root, "factorio.sqlite");
+  const database = new FactorioDatabase(databasePath);
+  const store = new ConveyorStore(database);
+  store.createBlob("telemetry", blobInput(fixture, "Telemetry item"));
+  store.requestStep("telemetry");
+  await new ConveyorRunner(store, new MockAgentHarness()).runOnce();
+
+  const snapshot = createViewSnapshot(databasePath) as ViewSnapshot;
+  const execution = snapshot.executionSessions[0];
+
+  assert.equal(execution.blobId, "telemetry");
+  assert.equal(execution.status, "advance");
+  assert.equal(execution.model, "deterministic-v1");
+  assert.equal(execution.reasoningEffort, "low");
+  assert.equal(execution.cachedInputTokens, 12);
+  assert.equal(execution.totalTokens, 60);
+  assert.equal(execution.finishedAt !== null, true);
+  assert.equal(execution.lastProgressAt >= execution.startedAt, true);
+  assert.match(snapshot.executionOverviewHtml, /Execution sessions/u);
+  assert.match(snapshot.executionOverviewHtml, /Advanced/u);
+  database.close();
+});
+
 test("viewer execution API persists Play, Step, and Stop without duplicate requests", async () => {
   const fixture = createPipeline(["g1.first", "g2.second"]);
   const databasePath = join(fixture.root, "factorio.sqlite");
@@ -300,6 +325,18 @@ function blobInput(fixture: PipelineFixture, title: string): BlobInput {
 
 type ViewSnapshot = {
   stats: { projects: number; tasks: number };
+  executionOverviewHtml: string;
+  executionSessions: Array<{
+    blobId: string;
+    status: string;
+    model: string | null;
+    reasoningEffort: string | null;
+    cachedInputTokens: number | null;
+    totalTokens: number | null;
+    startedAt: string;
+    lastProgressAt: string;
+    finishedAt: string | null;
+  }>;
   projects: Array<{
     root: string;
     pipelineRoot: string;

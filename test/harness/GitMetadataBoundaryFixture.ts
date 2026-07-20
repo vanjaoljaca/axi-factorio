@@ -1,4 +1,4 @@
-export async function runAgentGitCommitBoundaryScenario(): Promise<AgentGitCommitBoundaryResult> {
+export async function runGitMetadataBoundaryFixture(): Promise<GitMetadataBoundaryResult> {
   const fixture = createFixture();
   try {
     return await fixture.run();
@@ -38,7 +38,7 @@ class ScenarioFixture {
     this.paths = paths;
   }
 
-  async run(): Promise<AgentGitCommitBoundaryResult> {
+  async run(): Promise<GitMetadataBoundaryResult> {
     this.prepare();
     const beforeHead = head(this.paths.worktree);
     process.env.FAKE_BEFORE_HEAD = beforeHead;
@@ -75,7 +75,7 @@ class ScenarioFixture {
     }
   }
 
-  private result(beforeHead: string): AgentGitCommitBoundaryResult {
+  private result(beforeHead: string): GitMetadataBoundaryResult {
     const receipts = this.base.store.listReceipts(blobId);
     const argv = existsSync(this.paths.argvLog) ? readFileSync(this.paths.argvLog, "utf8") : "";
     const afterHead = head(this.paths.worktree);
@@ -139,8 +139,8 @@ function workbenchFrame(
   const advanced = receipt?.status === "advance";
   const required = [paths.gitDir, paths.gitObjects, paths.gitRefs, paths.gitLogs];
   return {
-    name: "Agent commits in assigned workspace",
-    description: "The harness keeps the workspace bounded while the agent edits files and creates a Git commit.",
+    name: "Harness Git metadata boundary fixture",
+    description: "Low-level regression evidence for narrowly writable Git-owned metadata.",
     source: "scenario",
     steps: [{ id: "g1.first", label: "Build + commit" }],
     blobs: [{
@@ -264,7 +264,7 @@ case "$last" in
 esac
 `;
 
-export type AgentGitCommitBoundaryResult = {
+export type GitMetadataBoundaryResult = {
   id: string;
   frames: WorkbenchFrame[];
   receipts: Receipt[];

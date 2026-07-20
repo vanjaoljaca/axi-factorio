@@ -43,7 +43,9 @@ export class ConveyorRunner {
     const inputArtifacts = this.store.inputArtifactsFor(blob.id);
     const claim = this.store.beginReceipt({
       blobId: blob.id, step, definition, adapter: this.harness.name,
-      model: this.harness.model ?? null, inputArtifacts,
+      model: this.harness.model ?? null,
+      reasoningEffort: this.harness.reasoningEffort ?? null,
+      inputArtifacts,
     }, ownerId);
     log("receipt_started", { blobId: blob.id, receiptId: claim.receipt.id, stepId: step.id });
     await this.executeClaim(claim, steps, signal, ownerId);
@@ -250,12 +252,17 @@ function harnessInput(claim: ClaimedExecution): HarnessRunInput {
 function harnessEventAttributes(event: HarnessEvent): Record<string, string | number> {
   if (event.type === "external-run") return { eventType: event.type, externalRunId: event.externalRunId };
   if (event.type === "artifact") return { eventType: event.type, artifactRef: event.artifactRef };
-  if (event.type === "metrics") return {
-    eventType: event.type,
-    inputTokens: event.inputTokens ?? -1,
-    outputTokens: event.outputTokens ?? -1,
-  };
+  if (event.type === "metrics") return metricAttributes(event);
   return { eventType: event.type, status: event.status, message: event.message ?? "" };
+}
+
+function metricAttributes(event: Extract<HarnessEvent, { type: "metrics" }>): Record<string, string | number> {
+  const attributes: Record<string, string | number> = { eventType: event.type };
+  if (event.inputTokens !== undefined) attributes.inputTokens = event.inputTokens;
+  if (event.cachedInputTokens !== undefined) attributes.cachedInputTokens = event.cachedInputTokens;
+  if (event.outputTokens !== undefined) attributes.outputTokens = event.outputTokens;
+  if (event.totalTokens !== undefined) attributes.totalTokens = event.totalTokens;
+  return attributes;
 }
 
 function followingStep(step: StepDefinition, steps: StepDefinition[]): StepDefinition | null {

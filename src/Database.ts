@@ -84,6 +84,19 @@ export class FactorioDatabase {
     addColumn(this.connection, columns, "executionKind", "TEXT NOT NULL DEFAULT 'automated'");
     addColumn(this.connection, columns, "attestationSource", "TEXT");
     addColumn(this.connection, columns, "attestationEvidenceJson", "TEXT NOT NULL DEFAULT '[]'");
+    addColumn(this.connection, columns, "model", "TEXT");
+    addColumn(this.connection, columns, "reasoningEffort", "TEXT");
+    addColumn(this.connection, columns, "queuedAt", "TEXT NOT NULL DEFAULT ''");
+    addColumn(this.connection, columns, "lastProgressAt", "TEXT NOT NULL DEFAULT ''");
+    addColumn(this.connection, columns, "currentOperation", "TEXT");
+    addColumn(this.connection, columns, "inputTokens", "INTEGER");
+    addColumn(this.connection, columns, "cachedInputTokens", "INTEGER");
+    addColumn(this.connection, columns, "outputTokens", "INTEGER");
+    addColumn(this.connection, columns, "totalTokens", "INTEGER");
+    this.connection.exec("UPDATE receipts SET queuedAt = startedAt WHERE queuedAt = ''");
+    this.connection.exec(
+      "UPDATE receipts SET lastProgressAt = COALESCE(finishedAt, startedAt) WHERE lastProgressAt = ''",
+    );
   }
 
   private migrateBlobRevisions(): void {
@@ -147,6 +160,8 @@ const schema = `
     status TEXT NOT NULL,
     executionKind TEXT NOT NULL DEFAULT 'automated',
     adapter TEXT NOT NULL,
+    model TEXT,
+    reasoningEffort TEXT,
     attestationSource TEXT,
     attestationEvidenceJson TEXT NOT NULL DEFAULT '[]',
     definitionGitSha TEXT NOT NULL,
@@ -159,7 +174,14 @@ const schema = `
     approvalEvidenceJson TEXT,
     reason TEXT,
     error TEXT,
+    queuedAt TEXT NOT NULL,
     startedAt TEXT NOT NULL,
+    lastProgressAt TEXT NOT NULL,
+    currentOperation TEXT,
+    inputTokens INTEGER,
+    cachedInputTokens INTEGER,
+    outputTokens INTEGER,
+    totalTokens INTEGER,
     finishedAt TEXT,
     invalidatedAt TEXT,
     UNIQUE(blobId, stepId, attempt)
@@ -303,6 +325,15 @@ const columnTables: Record<string, string> = {
   executionKind: "receipts",
   attestationSource: "receipts",
   attestationEvidenceJson: "receipts",
+  model: "receipts",
+  reasoningEffort: "receipts",
+  queuedAt: "receipts",
+  lastProgressAt: "receipts",
+  currentOperation: "receipts",
+  inputTokens: "receipts",
+  cachedInputTokens: "receipts",
+  outputTokens: "receipts",
+  totalTokens: "receipts",
 };
 
 import { DatabaseSync } from "node:sqlite";

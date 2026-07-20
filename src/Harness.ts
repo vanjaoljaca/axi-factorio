@@ -1,6 +1,7 @@
 export interface AgentHarness {
   readonly name: string;
   readonly model?: string;
+  readonly reasoningEffort?: string;
   start(input: HarnessStartInput, observer: HarnessObserver): Promise<HarnessResult>;
   resume(input: HarnessResumeInput, observer: HarnessObserver): Promise<HarnessResult>;
   cancel(input: HarnessCancelInput): Promise<void>;
@@ -48,7 +49,13 @@ export type HarnessEvent =
   | { type: "status"; status: string; message?: string }
   | { type: "external-run"; externalRunId: string }
   | { type: "artifact"; artifactRef: string }
-  | { type: "metrics"; inputTokens?: number; outputTokens?: number };
+  | {
+    type: "metrics";
+    inputTokens?: number;
+    cachedInputTokens?: number;
+    outputTokens?: number;
+    totalTokens?: number;
+  };
 
 export type HarnessObserver = {
   event(event: HarnessEvent): void;

@@ -100,6 +100,8 @@ export type Receipt = {
   status: ReceiptStatus;
   executionKind: "automated" | "imported";
   adapter: string;
+  model: string | null;
+  reasoningEffort: string | null;
   attestationSource: string | null;
   attestationEvidence: string[];
   definitionGitSha: string;
@@ -112,7 +114,14 @@ export type Receipt = {
   approvalEvidence: HumanInput | null;
   reason: string | null;
   error: string | null;
+  queuedAt: string;
   startedAt: string;
+  lastProgressAt: string;
+  currentOperation: string | null;
+  inputTokens: number | null;
+  cachedInputTokens: number | null;
+  outputTokens: number | null;
+  totalTokens: number | null;
   finishedAt: string | null;
   invalidatedAt: string | null;
 };
