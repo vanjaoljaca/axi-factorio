@@ -52,56 +52,72 @@ async function executeCodex(
   signal: AbortSignal,
   observer: HarnessObserver,
 ): Promise<HarnessResult> {
-    observer.event({ type: "status", status: "running", message: "entry" });
-    const onExternalRun = (externalRunId: string) =>
-      observer.event({ type: "external-run", externalRunId });
-    const executionInput = { ...input, signal };
-    const entry = await runEntry(executionInput, onExternalRun);
-    observer.event({ type: "status", status: "running", message: "exit" });
-    const exitPrompt = buildExitPrompt(input);
-    const exit = await runCodex(
-      exitArgs(executionRoot(input), entry.externalRunId, exitPrompt),
-      executionInput.signal,
-      onExternalRun,
-    );
-    const result = parseExitResult(exit.finalMessage);
-    const outputArtifacts = [...new Set([...result.outputArtifacts, `codex-thread:${entry.externalRunId}`])];
-    for (const artifactRef of outputArtifacts) observer.event({ type: "artifact", artifactRef });
-    return {
-      decision: result.decision,
-      reason: result.reason,
-      outputArtifacts,
-      externalRunId: entry.externalRunId,
-    };
+  observer.event({ type: "status", status: "running", message: "entry" });
+  const onExternalRun = (externalRunId: string) =>
+    observer.event({ type: "external-run", externalRunId });
+  const executionInput = { ...input, signal };
+  const writableDirectories = resolveGitWritableDirectories(executionRoot(input));
+  const entry = await runEntry(executionInput, onExternalRun, writableDirectories);
+  observer.event({ type: "status", status: "running", message: "exit" });
+  const exitPrompt = buildExitPrompt(input);
+  const exit = await runCodex(
+    exitArgs(executionRoot(input), entry.externalRunId, exitPrompt, writableDirectories),
+    executionInput.signal,
+    onExternalRun,
+  );
+  const result = parseExitResult(exit.finalMessage);
+  const outputArtifacts = [...new Set([...result.outputArtifacts, `codex-thread:${entry.externalRunId}`])];
+  for (const artifactRef of outputArtifacts) observer.event({ type: "artifact", artifactRef });
+  return {
+    decision: result.decision,
+    reason: result.reason,
+    outputArtifacts,
+    externalRunId: entry.externalRunId,
+  };
 }
 
-async function runEntry(input: CodexInput, onExternalRun: ExternalRunObserver): Promise<ProcessResult> {
+async function runEntry(
+  input: CodexInput,
+  onExternalRun: ExternalRunObserver,
+  writableDirectories: string[],
+): Promise<ProcessResult> {
   const prompt = input.continuationThreadId ? buildContinuationPrompt(input) : buildEntryPrompt(input);
   const args = input.continuationThreadId
-    ? continuationArgs(executionRoot(input), input.continuationThreadId, prompt)
-    : entryArgs(executionRoot(input), prompt);
+    ? continuationArgs(executionRoot(input), input.continuationThreadId, prompt, writableDirectories)
+    : entryArgs(executionRoot(input), prompt, writableDirectories);
   return runCodex(args, input.signal, onExternalRun);
 }
 
-function entryArgs(cwd: string, prompt: string): string[] {
-  return [...commonExecArgs(cwd), "--", prompt];
+function entryArgs(cwd: string, prompt: string, writableDirectories: string[]): string[] {
+  return [...commonExecArgs(cwd, writableDirectories), "--", prompt];
 }
 
-function exitArgs(cwd: string, threadId: string, prompt: string): string[] {
+function exitArgs(
+  cwd: string,
+  threadId: string,
+  prompt: string,
+  writableDirectories: string[],
+): string[] {
   return [
-    ...commonExecArgs(cwd), "--output-schema", exitSchemaPath,
+    ...commonExecArgs(cwd, writableDirectories), "--output-schema", exitSchemaPath,
     "resume", threadId, "--", prompt,
   ];
 }
 
-function continuationArgs(cwd: string, threadId: string, prompt: string): string[] {
-  return [...commonExecArgs(cwd), "resume", threadId, "--", prompt];
+function continuationArgs(
+  cwd: string,
+  threadId: string,
+  prompt: string,
+  writableDirectories: string[],
+): string[] {
+  return [...commonExecArgs(cwd, writableDirectories), "resume", threadId, "--", prompt];
 }
 
-function commonExecArgs(cwd: string): string[] {
+function commonExecArgs(cwd: string, writableDirectories: string[]): string[] {
   return [
     "exec", "--ignore-user-config", "--json", "--color", "never",
     "--sandbox", "workspace-write", "-C", cwd,
+    ...writableDirectories.flatMap((path) => ["--add-dir", path]),
   ];
 }
 
@@ -506,6 +522,7 @@ const initializeParams = {
 };
 
 import type { HarnessDecision } from "./Types.ts";
+import { resolveGitWritableDirectories } from "./GitWritableDirectories.ts";
 import type {
   AgentHarness,
   HarnessCancelInput,

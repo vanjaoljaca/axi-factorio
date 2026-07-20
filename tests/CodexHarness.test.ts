@@ -111,6 +111,22 @@ test("keeps entry, same-step continuation, and exit evaluation workspace-writabl
   }
 });
 
+test("adds linked-worktree Git metadata to entry, continuation, and exit", async () => {
+  const fixture = createLinkedWorktreeAdapterFixture();
+
+  await fixture.adapter.start(adapterInput(fixture), observer());
+  await fixture.adapter.resume(
+    { ...adapterInput(fixture), externalRunId: "thread-existing" },
+    observer(),
+  );
+
+  const calls = readArgvCalls(fixture);
+  assert.equal(calls.length, 4);
+  assert(calls.every((call) => call.filter((arg) => arg === "--add-dir").length === 4));
+  assert(calls.every((call) => call.some((arg) => arg.endsWith("/objects"))));
+  assert(calls.every((call) => call.some((arg) => arg.includes("/worktrees/"))));
+});
+
 test("rejects Windows before starting Codex", () => {
   assert.throws(
     () => new CodexHarness("win32"),
@@ -187,6 +203,21 @@ function createAdapterFixture(): AdapterFixture {
   process.env.FAKE_CODEX_ARGS = argsLog;
   process.env.FAKE_CODEX_ARGV = argvLog;
   return { root, argsLog, argvLog, adapter: new CodexHarness() };
+}
+
+function createLinkedWorktreeAdapterFixture(): AdapterFixture {
+  const fixture = createAdapterFixture();
+  const repository = join(fixture.root, "repository");
+  const worktree = join(fixture.root, "worktree");
+  mkdirSync(repository);
+  execFileSync("git", ["-C", repository, "init", "-b", "main"]);
+  execFileSync("git", ["-C", repository, "config", "user.name", "Factorio Test"]);
+  execFileSync("git", ["-C", repository, "config", "user.email", "test@axi-factorio.local"]);
+  writeFileSync(join(repository, "README.md"), "fixture\n");
+  execFileSync("git", ["-C", repository, "add", "."]);
+  execFileSync("git", ["-C", repository, "commit", "-m", "fixture"]);
+  execFileSync("git", ["-C", repository, "worktree", "add", "-b", "fixture", worktree]);
+  return { ...fixture, root: worktree };
 }
 
 function adapterInput(fixture: AdapterFixture): HarnessStartInput {
@@ -273,6 +304,7 @@ type AdapterFixture = { root: string; argsLog: string; argvLog: string; adapter:
 import type { HarnessObserver, HarnessStartInput } from "../src/Harness.ts";
 import { CodexHarness } from "../src/CodexHarness.ts";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import test from "node:test";
 import { tmpdir } from "node:os";

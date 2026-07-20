@@ -96,7 +96,7 @@ npx axi-factorio project show APP_ID --json
 New blobs default their execution workspace to the project root and resolve the
 highest \`vN\` under the shared pipeline root. Use \`bind-execution\` deliberately
 when the harness needs a containing workspace without changing app identity.
-Existing rc.4 through rc.18 databases
+Existing rc.4 through rc.19 databases
 migrate on first open, including imported-receipt provenance and durable
 execution-control columns, blob revisions, immutable attempt evidence, and the
 append-only harness event table. Existing blobs preserve prior behavior with
