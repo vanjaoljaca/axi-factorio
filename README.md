@@ -145,6 +145,10 @@ terminal. The failed attempt remains append-only and paused. An explicit
 restart recovery also terminalizes and pauses orphaned running receipts instead
 of silently auto-running them.
 
+All resumed Codex prompts are passed after the CLI `--` option terminator.
+Editable prompts may therefore begin with Markdown rules or option-like text
+without being parsed as command-line flags.
+
 Optional instrumentation uses the same module selector form with
 `--instrumentation`. It receives OpenTelemetry-compatible boundary event names
 and attributes, but rc.10 does not ship or claim an OpenTelemetry exporter.
@@ -170,7 +174,7 @@ npm run build
 
 This recreates `release/` with:
 
-- `axi-factorio-0.1.0-rc.12.tgz`, the installable package;
+- `axi-factorio-0.1.0-rc.13.tgz`, the installable package;
 - `SHA256SUMS`, for artifact verification; and
 - `INSTALL.md`, with direct and vendored installation commands.
 
@@ -182,7 +186,7 @@ Do not use `npm link` for a consuming project. Install the exact tarball so
 Install the exact candidate in the consuming npm project:
 
 ```sh
-npm install --save-exact /path/to/axi-factorio-0.1.0-rc.12.tgz
+npm install --save-exact /path/to/axi-factorio-0.1.0-rc.13.tgz
 ```
 
 From the consuming project root, the defaults are:
@@ -304,7 +308,7 @@ external task. Approval requires at least one evidence reference. The prompt
 still decides whether the step passes; Factorio only supplies and records the
 human evidence.
 
-Opening an rc.4 through rc.11 database with rc.12 migrates projects, receipt
+Opening an rc.4 through rc.12 database with rc.13 migrates projects, receipt
 provenance, durable execution-control columns, blob revisions, and immutable
 attempt evidence automatically. Existing
 blobs migrate in the stopped continuous mode. The old
@@ -331,7 +335,7 @@ Rewind-and-rerun invalidates the selected step for progression while keeping
 all prior receipts available for side-by-side comparison.
 
 Future multi-pipeline integration is deliberately parked in [ROADMAP.md](ROADMAP.md)
-under **pipeline merger**. rc.12 does not implement it.
+under **pipeline merger**. rc.13 does not implement it.
 
 Explicitly move it back to a step:
 

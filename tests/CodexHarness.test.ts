@@ -40,6 +40,38 @@ test("continues a human review cycle in the existing Codex thread", async () => 
   assert.equal(result.externalRunId, "thread-existing");
 });
 
+test("passes every resumed prompt after the option terminator", async () => {
+  const fixture = createAdapterFixture();
+  const input = adapterInput(fixture);
+  input.definition.exit = "";
+  input.humanInputs = [{
+    id: "input-dashes",
+    blobId: "blob-1",
+    stepId: "plan.define",
+    kind: "feedback",
+    text: "--foo\n\n---\nUnicode: こんにちは 👋\n\n   ",
+    evidence: [],
+    createdAt: "2026-07-20T00:00:00.000Z",
+    receiptId: null,
+  }];
+
+  await fixture.adapter.resume(
+    { ...input, externalRunId: "thread-existing" },
+    observer(),
+  );
+
+  const calls = readArgvCalls(fixture);
+  assert.equal(calls.length, 2);
+  for (const call of calls) {
+    const resume = call.indexOf("resume");
+    assert.equal(call[resume + 1], "thread-existing");
+    assert.equal(call[resume + 2], "--");
+    assert.match(call[resume + 3], /^---\n/u);
+  }
+  assert.match(calls[0].at(-1) ?? "", /--foo[\s\S]*こんにちは 👋/u);
+  assert.match(calls[1].at(-1) ?? "", /Evaluate blob blob-1/u);
+});
+
 test("rejects Windows before starting Codex", () => {
   assert.throws(
     () => new CodexHarness("win32"),
@@ -108,12 +140,14 @@ function createAdapterFixture(): AdapterFixture {
   const root = mkdtempSync(join(tmpdir(), "axi-factorio-codex-"));
   const bin = join(root, "bin");
   const argsLog = join(root, "args.log");
+  const argvLog = join(root, "argv.log");
   mkdirSync(bin);
   writeFileSync(join(bin, "codex"), fakeCodex);
   chmodSync(join(bin, "codex"), 0o755);
   process.env.PATH = `${bin}${delimiter}${process.env.PATH}`;
   process.env.FAKE_CODEX_ARGS = argsLog;
-  return { root, argsLog, adapter: new CodexHarness() };
+  process.env.FAKE_CODEX_ARGV = argvLog;
+  return { root, argsLog, argvLog, adapter: new CodexHarness() };
 }
 
 function adapterInput(fixture: AdapterFixture): HarnessStartInput {
@@ -156,8 +190,18 @@ function observer(externalRuns: string[] = []): HarnessObserver {
   };
 }
 
+function readArgvCalls(fixture: AdapterFixture): string[][] {
+  const tokens = readFileSync(fixture.argvLog).toString("utf8").split("\0").filter(Boolean);
+  return tokens.reduce<string[][]>((calls, token) => {
+    if (token === "exec") calls.push([]);
+    calls.at(-1)?.push(token);
+    return calls;
+  }, []);
+}
+
 const fakeCodex = `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_CODEX_ARGS"
+printf '%s\\0' "$@" >> "$FAKE_CODEX_ARGV"
 if [ "$FAKE_CODEX_MODE" = "malformed" ]; then
   printf '%s\\n' '{not-json}'
   exit 0
@@ -185,7 +229,7 @@ esac
 printf '%s\\n' '{"type":"turn.completed"}'
 `;
 
-type AdapterFixture = { root: string; argsLog: string; adapter: CodexHarness };
+type AdapterFixture = { root: string; argsLog: string; argvLog: string; adapter: CodexHarness };
 
 import type { HarnessObserver, HarnessStartInput } from "../src/Harness.ts";
 import { CodexHarness } from "../src/CodexHarness.ts";

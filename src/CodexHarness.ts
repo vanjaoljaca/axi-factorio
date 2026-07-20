@@ -90,12 +90,12 @@ function entryArgs(cwd: string, prompt: string): string[] {
 function exitArgs(cwd: string, threadId: string, prompt: string): string[] {
   return [
     "exec", "--json", "--color", "never", "-C", cwd,
-    "--output-schema", exitSchemaPath, "resume", threadId, prompt,
+    "--output-schema", exitSchemaPath, "resume", threadId, "--", prompt,
   ];
 }
 
 function continuationArgs(cwd: string, threadId: string, prompt: string): string[] {
-  return ["exec", "--json", "--color", "never", "-C", cwd, "resume", threadId, prompt];
+  return ["exec", "--json", "--color", "never", "-C", cwd, "resume", threadId, "--", prompt];
 }
 
 async function runCodex(
