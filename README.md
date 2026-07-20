@@ -326,7 +326,7 @@ Relocating an existing blob to a new app workspace is deliberate and audited:
 ```sh
 npx axi-factorio relocate account-export-1 \
   --root ./apps/example \
-  --evidence worktree-head:abc123
+  --evidence git-head:abc123
 ```
 
 The target must exist, no receipt may be running, and the blob keeps its exact
@@ -341,7 +341,7 @@ identity. Bind the selected blob to an existing containing workspace:
 ```sh
 npx axi-factorio bind-execution account-export-1 \
   --root ../.. \
-  --evidence worktree-head:abc123
+  --evidence git-head:abc123
 ```
 
 The blob keeps its app project root for app-relative artifacts and pipeline
@@ -352,13 +352,14 @@ running, and evidence is required. Every binding is append-only provenance.
 The same operation is available through
 `POST /api/blobs/:id/execution-workspace` with `{ root, evidence }`.
 
-When that execution workspace is the exact root of a linked Git worktree, the
-Codex harness asks Git for the registered worktree, Git dir, common dir, and
-`objects`, `refs`, and `logs` paths. It adds only the linked-worktree state and
-those shared Git stores through repeatable `--add-dir` arguments, allowing the
-agent to stage and commit without widening the workspace sandbox to unrelated
-folders. A linked-worktree subdirectory is rejected as an execution root;
-non-Git workspaces retain their previous behavior.
+When an assigned execution workspace belongs to a Git repository whose writable
+metadata resolves outside that workspace, the Codex harness asks Git for the
+work root, Git dir, common dir, and `objects`, `refs`, and `logs` paths. A linked
+Git worktree is one topology that exposes this case. The harness adds only the
+Git-owned state required to commit through repeatable `--add-dir` arguments,
+without widening the workspace sandbox to unrelated folders. The assigned
+workspace must equal Git's reported work root; non-Git workspaces retain their
+previous behavior.
 
 Opening an rc.4 through rc.19 database with rc.20 migrates projects, receipt
 provenance, durable execution-control columns, blob revisions, and immutable

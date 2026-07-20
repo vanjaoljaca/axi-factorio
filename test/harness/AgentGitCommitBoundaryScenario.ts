@@ -1,4 +1,4 @@
-export async function runCodexGitWorktreeScenario(): Promise<CodexGitWorktreeResult> {
+export async function runAgentGitCommitBoundaryScenario(): Promise<AgentGitCommitBoundaryResult> {
   const fixture = createFixture();
   try {
     return await fixture.run();
@@ -38,7 +38,7 @@ class ScenarioFixture {
     this.paths = paths;
   }
 
-  async run(): Promise<CodexGitWorktreeResult> {
+  async run(): Promise<AgentGitCommitBoundaryResult> {
     this.prepare();
     const beforeHead = head(this.paths.worktree);
     process.env.FAKE_BEFORE_HEAD = beforeHead;
@@ -60,7 +60,7 @@ class ScenarioFixture {
     });
     this.base.store.createBlob(blobId, {
       title: "Commit app and Workbench together",
-      body: "Edit both fixtures and commit the exact linked-worktree head.",
+      body: "Edit both fixtures and commit the exact assigned-workspace head.",
       cwd: this.paths.app, executionWorkspaceRoot: this.paths.worktree, projectId,
       pipelineId: "default/v1", pipelinePath: this.base.pipelinePath, inputArtifacts: [],
     });
@@ -75,7 +75,7 @@ class ScenarioFixture {
     }
   }
 
-  private result(beforeHead: string): CodexGitWorktreeResult {
+  private result(beforeHead: string): AgentGitCommitBoundaryResult {
     const receipts = this.base.store.listReceipts(blobId);
     const argv = existsSync(this.paths.argvLog) ? readFileSync(this.paths.argvLog, "utf8") : "";
     const afterHead = head(this.paths.worktree);
@@ -139,8 +139,8 @@ function workbenchFrame(
   const advanced = receipt?.status === "advance";
   const required = [paths.gitDir, paths.gitObjects, paths.gitRefs, paths.gitLogs];
   return {
-    name: "Commit safely from a linked Git worktree",
-    description: "The worktree stays the sandbox; only Git-owned metadata required to commit is added.",
+    name: "Agent commits in assigned workspace",
+    description: "The harness keeps the workspace bounded while the agent edits files and creates a Git commit.",
     source: "scenario",
     steps: [{ id: "g1.first", label: "Build + commit" }],
     blobs: [{
@@ -149,23 +149,24 @@ function workbenchFrame(
     }],
     receipts: receipts.map(viewReceipt),
     assertions: [
-      { label: "Git reports the linked worktree and metadata roots", passed: paths.gitDir !== paths.gitCommonDir },
-      { label: "Codex runs with the linked worktree as cwd", passed: parseArgv(argv).every((call) => cwd(call) === paths.worktree) },
+      { label: "Fixture exposes Git metadata outside the assigned workspace", passed: paths.gitDir !== paths.gitCommonDir },
+      { label: "Agent runs from the assigned workspace", passed: parseArgv(argv).every((call) => cwd(call) === paths.worktree) },
       { label: "Only required Git metadata directories are additionally writable", passed: samePaths(writableDirs, required) },
       { label: "App and sibling Workbench fixtures changed", passed: files.app && files.sibling },
-      { label: "Git head advanced in the linked worktree", passed: beforeHead !== afterHead },
+      { label: "Git head advanced in the assigned workspace", passed: beforeHead !== afterHead },
       { label: "Exit observed the commit and advanced", passed: advanced },
-      { label: "No write escaped the worktree or resolved Git metadata", passed: !files.outside },
+      { label: "No write escaped the assigned workspace or resolved Git metadata", passed: !files.outside },
     ],
     visual: {
-      kind: "git-worktree", worktreeRoot: paths.worktree, projectRoot: paths.app,
+      kind: "git-commit", executionRoot: paths.worktree, projectRoot: paths.app,
       siblingRoot: paths.sibling, gitDir: paths.gitDir, gitCommonDir: paths.gitCommonDir,
       writableDirs, beforeHead, afterHead, decision: receipt?.status ?? "missing", files,
     },
     evidenceCards: [
       { label: "Exact Codex argv", value: parseArgv(argv).map(formatArgv).join("\n\n") },
-      { label: "Resolved Git paths", value: JSON.stringify({
-        worktree: paths.worktree, gitDir: paths.gitDir, gitCommonDir: paths.gitCommonDir,
+      { label: "Fixture topology and resolved Git paths", value: JSON.stringify({
+        fixtureVariant: "linked Git worktree",
+        executionRoot: paths.worktree, gitDir: paths.gitDir, gitCommonDir: paths.gitCommonDir,
         writableDirs,
       }, null, 2) },
     ],
@@ -217,9 +218,9 @@ function git(root: string, args: string[]): string {
   return execFileSync("git", ["-C", root, ...args], { encoding: "utf8" });
 }
 
-const scenarioId = "codex-git-worktree";
-const projectId = "git-worktree-project";
-const blobId = "git-worktree-blob";
+const scenarioId = "agent-git-commit-boundary";
+const projectId = "git-commit-project";
+const blobId = "git-commit-blob";
 const scenarioEnvironment = [
   "FAKE_CODEX_ARGV", "FAKE_WORKTREE_ROOT", "FAKE_APP_ROOT", "FAKE_SIBLING_ROOT",
   "FAKE_OUTSIDE_ROOT", "FAKE_GIT_DIR", "FAKE_GIT_OBJECTS", "FAKE_GIT_REFS", "FAKE_GIT_LOGS",
@@ -239,13 +240,13 @@ $arg"
   last="$arg"
 done
 printf '\\n' >> "$FAKE_CODEX_ARGV"
-printf '%s\\n' '{"type":"thread.started","thread_id":"thread-git-worktree"}'
+printf '%s\\n' '{"type":"thread.started","thread_id":"thread-git-commit"}'
 case "$last" in
   *"Evaluate blob"*)
     before="$FAKE_BEFORE_HEAD"
     after="$(git -C "$FAKE_WORKTREE_ROOT" rev-parse HEAD)"
     [ "$before" != "$after" ] && decision=advance || decision=retry
-    printf '%s\\n' "{\\"type\\":\\"item.completed\\",\\"item\\":{\\"type\\":\\"agent_message\\",\\"text\\":\\"{\\\\\\"decision\\\\\\":\\\\\\"$decision\\\\\\",\\\\\\"reason\\\\\\":\\\\\\"git worktree $decision\\\\\\",\\\\\\"outputArtifacts\\\\\\":[\\\\\\"git-head:$after\\\\\\"]}\\"}}"
+    printf '%s\\n' "{\\"type\\":\\"item.completed\\",\\"item\\":{\\"type\\":\\"agent_message\\",\\"text\\":\\"{\\\\\\"decision\\\\\\":\\\\\\"$decision\\\\\\",\\\\\\"reason\\\\\\":\\\\\\"git commit $decision\\\\\\",\\\\\\"outputArtifacts\\\\\\":[\\\\\\"git-head:$after\\\\\\"]}\\"}}"
     ;;
   *)
     required=1
@@ -263,7 +264,7 @@ case "$last" in
 esac
 `;
 
-export type CodexGitWorktreeResult = {
+export type AgentGitCommitBoundaryResult = {
   id: string;
   frames: WorkbenchFrame[];
   receipts: Receipt[];
@@ -309,8 +310,8 @@ type WorkbenchFrame = {
   assertions: Array<{ label: string; passed: boolean }>;
   evidenceCards: Array<{ label: string; value: string }>;
   visual: {
-    kind: "git-worktree";
-    worktreeRoot: string;
+    kind: "git-commit";
+    executionRoot: string;
     projectRoot: string;
     siblingRoot: string;
     gitDir: string;

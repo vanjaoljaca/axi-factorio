@@ -2,7 +2,7 @@ export function resolveGitWritableDirectories(executionRoot: string): string[] {
   const root = realpathSync(executionRoot);
   const repository = readRepository(root);
   if (!repository || repository.gitDir === repository.commonDir) return [];
-  requireExactWorktree(root, repository);
+  requireAssignedGitRoot(root, repository);
   return writableGitPaths(root, repository);
 }
 
@@ -18,16 +18,16 @@ function readRepository(root: string): RepositoryPaths | null {
   return { topLevel, gitDir, commonDir };
 }
 
-function requireExactWorktree(root: string, repository: RepositoryPaths): void {
+function requireAssignedGitRoot(root: string, repository: RepositoryPaths): void {
   if (repository.topLevel !== root) {
-    throw new Error("Linked-worktree Git metadata requires the execution workspace to equal the worktree root.");
+    throw new Error("External Git metadata requires the execution workspace to equal Git's reported work root.");
   }
   const registered = gitOutput(root, ["worktree", "list", "--porcelain", "-z"])
     .split("\0").filter((field) => field.startsWith("worktree "))
     .map((field) => canonical(field.slice("worktree ".length)));
-  if (!registered.includes(root)) throw new Error("Execution workspace is not a registered Git worktree.");
+  if (!registered.includes(root)) throw new Error("Execution workspace is not registered by Git.");
   if (!containedBy(repository.gitDir, repository.commonDir)) {
-    throw new Error("Git worktree metadata is outside its reported common directory.");
+    throw new Error("Git metadata is outside its reported common directory.");
   }
 }
 

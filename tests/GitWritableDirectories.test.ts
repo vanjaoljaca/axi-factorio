@@ -3,15 +3,15 @@ test("returns no additional roots outside Git", () => {
   assert.deepEqual(resolveGitWritableDirectories(root), []);
 });
 
-test("rejects a linked-worktree subdirectory as the execution root", () => {
+test("rejects an assigned workspace below Git's reported work root", () => {
   const fixture = createLinkedWorktree();
   assert.throws(
     () => resolveGitWritableDirectories(join(fixture.worktree, "apps", "example")),
-    /execution workspace to equal the worktree root/,
+    /execution workspace to equal Git's reported work root/,
   );
 });
 
-test("returns only Git-reported writable stores for an exact linked worktree", () => {
+test("returns only Git-reported stores outside the assigned workspace", () => {
   const fixture = createLinkedWorktree();
   const paths = resolveGitWritableDirectories(fixture.worktree);
   const common = git(fixture.worktree, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).trim();

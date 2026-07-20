@@ -111,7 +111,7 @@ test("keeps entry, same-step continuation, and exit evaluation workspace-writabl
   }
 });
 
-test("adds linked-worktree Git metadata to entry, continuation, and exit", async () => {
+test("adds Git-owned metadata to entry, continuation, and exit", async () => {
   const fixture = createLinkedWorktreeAdapterFixture();
 
   await fixture.adapter.start(adapterInput(fixture), observer());

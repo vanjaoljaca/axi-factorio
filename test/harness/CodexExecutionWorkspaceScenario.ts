@@ -64,7 +64,7 @@ class ScenarioFixture {
     });
     this.base.store.createBlob(blobId, {
       title: "Build app and sibling Workbench",
-      body: "Keep app-relative artifacts while executing from the containing worktree.",
+      body: "Keep app-relative artifacts while executing from the assigned workspace.",
       cwd: this.paths.appRoot, projectId, pipelineId: "default/v1",
       pipelinePath: this.base.pipelinePath, inputArtifacts: [`file:${this.paths.planPath}`],
     });
@@ -74,7 +74,7 @@ class ScenarioFixture {
     return spawnSync(process.execPath, [
       "--disable-warning=ExperimentalWarning", cliPath,
       "--db", databasePath(this.base), "bind-execution", blobId,
-      "--root", this.paths.worktreeRoot, "--evidence", "scenario:worktree-root", "--json",
+      "--root", this.paths.worktreeRoot, "--evidence", "scenario:execution-root", "--json",
     ], { encoding: "utf8" });
   }
 
@@ -122,7 +122,7 @@ function frame(
   const complete = receipt?.status === "advance";
   return {
     name: "App root inside an execution workspace",
-    description: "Project identity stays apps/example while Codex executes within the containing worktree.",
+    description: "Project identity stays apps/example while Codex executes within its assigned workspace.",
     source: "scenario",
     steps: [{ id: "g1.first", label: "Build" }],
     blobs: [{
@@ -133,7 +133,7 @@ function frame(
     assertions: [
       { label: "Explicit execution-workspace binding succeeds", passed: binding.status === 0 },
       { label: "Project root remains the app subdirectory", passed: blob.cwd === paths.appRoot },
-      { label: "Codex cwd and sandbox root are the worktree", passed: calls.every((call) => cwd(call) === paths.worktreeRoot) },
+      { label: "Codex cwd and sandbox root are the assigned workspace", passed: calls.every((call) => cwd(call) === paths.worktreeRoot) },
       { label: "Entry reads app plan and edits app plus sibling Workbench", passed: files.plan && files.app && files.sibling },
       { label: "Exit observes both writes and advances", passed: complete },
       { label: "No write escapes the execution workspace", passed: !files.outside },
@@ -142,7 +142,7 @@ function frame(
     ],
     evidenceCards: [
       { label: "Project root / app root", value: paths.appRoot },
-      { label: "Binding CLI", value: `axi-factorio bind-execution ${blobId} --root ${paths.worktreeRoot} --evidence scenario:worktree-root\nexit ${binding.status}` },
+      { label: "Binding CLI", value: `axi-factorio bind-execution ${blobId} --root ${paths.worktreeRoot} --evidence scenario:execution-root\nexit ${binding.status}` },
       { label: "Execution workspace root", value: blob.executionWorkspaceRoot ?? "(not bound)" },
       { label: "Entry argv / cwd", value: formatArgv(calls[0]) },
       { label: "Exit argv / cwd", value: formatArgv(calls[1]) },
