@@ -72,6 +72,28 @@ test("passes every resumed prompt after the option terminator", async () => {
   assert.match(calls[1].at(-1) ?? "", /Evaluate blob blob-1/u);
 });
 
+test("passes a dash-prefixed fresh prompt after the option terminator", async () => {
+  const fixture = createAdapterFixture();
+  const input = adapterInput(fixture);
+  input.definition.entry = "---\n--foo\nUnicode: こんにちは 👋";
+
+  await fixture.adapter.start(input, observer());
+
+  const entry = readArgvCalls(fixture)[0];
+  assert.equal(entry.at(-2), "--");
+  assert.match(entry.at(-1) ?? "", /^---[\s\S]*--foo[\s\S]*こんにちは 👋/u);
+});
+
+test("isolates every Codex invocation from unrelated user MCP configuration", async () => {
+  const fixture = createAdapterFixture();
+
+  await fixture.adapter.start(adapterInput(fixture), observer());
+
+  const calls = readArgvCalls(fixture);
+  assert.equal(calls.length, 2);
+  assert(calls.every((call) => call.includes("--ignore-user-config")));
+});
+
 test("rejects Windows before starting Codex", () => {
   assert.throws(
     () => new CodexHarness("win32"),

@@ -84,18 +84,24 @@ async function runEntry(input: CodexInput, onExternalRun: ExternalRunObserver): 
 }
 
 function entryArgs(cwd: string, prompt: string): string[] {
-  return ["exec", "--json", "--color", "never", "--sandbox", "workspace-write", "-C", cwd, prompt];
+  return [
+    "exec", "--ignore-user-config", "--json", "--color", "never",
+    "--sandbox", "workspace-write", "-C", cwd, "--", prompt,
+  ];
 }
 
 function exitArgs(cwd: string, threadId: string, prompt: string): string[] {
   return [
-    "exec", "--json", "--color", "never", "-C", cwd,
+    "exec", "--ignore-user-config", "--json", "--color", "never", "-C", cwd,
     "--output-schema", exitSchemaPath, "resume", threadId, "--", prompt,
   ];
 }
 
 function continuationArgs(cwd: string, threadId: string, prompt: string): string[] {
-  return ["exec", "--json", "--color", "never", "-C", cwd, "resume", threadId, "--", prompt];
+  return [
+    "exec", "--ignore-user-config", "--json", "--color", "never",
+    "-C", cwd, "resume", threadId, "--", prompt,
+  ];
 }
 
 async function runCodex(

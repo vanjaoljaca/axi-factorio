@@ -80,6 +80,10 @@ function scenarioIndex(): object[] {
       id: "codex-active-turn", name: "Active Codex reconciliation",
       description: "notLoaded container · fresh active turn · production receipt path",
     },
+    {
+      id: "codex-mcp-isolation", name: "Codex MCP isolation",
+      description: "unrelated MCP startup failure · production Codex harness · receipt path",
+    },
   ];
 }
 
@@ -89,6 +93,10 @@ async function scenario(url: URL): Promise<Scenario> {
   if (id === "codex-active-turn") {
     const { runCodexActiveTurnScenario } = await import("../test/harness/CodexActiveTurnScenario.ts");
     return runCodexActiveTurnScenario();
+  }
+  if (id === "codex-mcp-isolation") {
+    const { runCodexMcpIsolationScenario } = await import("../test/harness/CodexMcpIsolationScenario.ts");
+    return runCodexMcpIsolationScenario();
   }
   throw new Error(`Unknown scenario: ${id}`);
 }
