@@ -57,6 +57,25 @@ export type Blob = Omit<BlobInput, "pipelineId" | "projectId"> & {
   updatedAt: string;
 };
 
+export type BlobRevision = {
+  blobId: string;
+  revision: number;
+  title: string;
+  body: string;
+  contentHash: string;
+  createdAt: string;
+};
+
+export type AttemptEvidence = {
+  receiptId: string;
+  blobRevision: BlobRevision;
+  definition: DefinitionSnapshot;
+  harness: string;
+  model: string | null;
+  inputArtifacts: string[];
+  createdAt: string;
+};
+
 export type HumanInputKind = "review" | "feedback" | "approval";
 
 export type HumanInput = {

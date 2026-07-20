@@ -45,6 +45,7 @@ export class ConveyorStore {
         id, projectId, input.title, input.body, input.cwd, pipelineId, input.pipelinePath,
         JSON.stringify(input.inputArtifacts), initialState, at, at,
       );
+      this.insertBlobRevision(id, 1, input.title, input.body, at);
       return { blob: this.requireBlob(id), already: false };
     });
   }
@@ -207,6 +208,41 @@ export class ConveyorStore {
     return this.database.connection.prepare(blobList).all().map((row) => mapBlob(asRecord(row)));
   }
 
+  currentBlobRevision(blobId: string): BlobRevision {
+    this.requireBlob(blobId);
+    const row = this.database.connection.prepare(blobRevisionCurrent).get(blobId);
+    if (!row) throw new Error(`Blob ${blobId} has no revision.`);
+    return mapBlobRevision(asRecord(row));
+  }
+
+  listBlobRevisions(blobId: string): BlobRevision[] {
+    this.requireBlob(blobId);
+    return this.database.connection.prepare(blobRevisionList).all(blobId)
+      .map((row) => mapBlobRevision(asRecord(row)));
+  }
+
+  reviseBlob(blobId: string, title: string, body: string, expectedRevision: number): BlobRevision {
+    return this.database.transaction(() => {
+      const blob = this.requireBlob(blobId);
+      if (this.hasRunningReceipt(blob.id)) throw new Error("A running blob cannot be edited.");
+      if (!title.trim()) throw new Error("Blob title cannot be empty.");
+      if (!body.trim()) throw new Error("Blob content cannot be empty.");
+      const current = this.currentBlobRevision(blob.id);
+      if (current.revision !== expectedRevision) throw new Error("Blob revision changed; preview the edit again.");
+      if (current.title === title && current.body === body) throw new Error("Blob content is unchanged.");
+      const at = this.now();
+      this.database.connection.prepare(blobContentUpdate).run(title, body, at, blob.id);
+      this.insertBlobRevision(blob.id, current.revision + 1, title, body, at);
+      return this.currentBlobRevision(blob.id);
+    });
+  }
+
+  listAttemptEvidence(blobId: string): AttemptEvidence[] {
+    this.requireBlob(blobId);
+    return this.database.connection.prepare(attemptEvidenceByBlob).all(blobId)
+      .map((row) => mapAttemptEvidence(asRecord(row)));
+  }
+
   listReceipts(blobId?: string): Receipt[] {
     const rows = blobId
       ? this.database.connection.prepare(receiptListByBlob).all(blobId)
@@ -292,7 +328,30 @@ export class ConveyorStore {
       JSON.stringify(humanInputs), approval ? JSON.stringify(approval) : null, at,
     );
     this.database.connection.prepare(humanInputReceiptUpdate).run(id, blob.id, input.step.id);
+    this.insertAttemptEvidence(id, blob, input, at);
     return this.requireReceipt(id);
+  }
+
+  private insertAttemptEvidence(id: string, blob: Blob, input: BeginReceiptInput, at: string): void {
+    const revision = this.currentBlobRevision(blob.id);
+    this.database.connection.prepare(attemptEvidenceInsert).run(
+      id, revision.revision, revision.title, revision.body, revision.contentHash,
+      input.definition.gitSha, input.definition.contentHash,
+      input.definition.entry, input.definition.exit,
+      input.adapter, input.model ?? null, JSON.stringify(input.inputArtifacts), at,
+    );
+  }
+
+  private insertBlobRevision(
+    blobId: string,
+    revision: number,
+    title: string,
+    body: string,
+    at: string,
+  ): void {
+    this.database.connection.prepare(blobRevisionInsert).run(
+      blobId, revision, title, body, revisionHash(title, body), at,
+    );
   }
 
   private insertImportedReceipt(
@@ -642,6 +701,45 @@ function mapHumanInput(row: Record<string, unknown>): HumanInput {
   };
 }
 
+function mapBlobRevision(row: Record<string, unknown>): BlobRevision {
+  return {
+    blobId: String(row.blobId),
+    revision: Number(row.revision),
+    title: String(row.title),
+    body: String(row.body),
+    contentHash: String(row.contentHash),
+    createdAt: String(row.createdAt),
+  };
+}
+
+function mapAttemptEvidence(row: Record<string, unknown>): AttemptEvidence {
+  return {
+    receiptId: String(row.receiptId),
+    blobRevision: {
+      blobId: String(row.blobId),
+      revision: Number(row.blobRevision),
+      title: String(row.blobTitle),
+      body: String(row.blobBody),
+      contentHash: String(row.blobContentHash),
+      createdAt: String(row.createdAt),
+    },
+    definition: {
+      gitSha: String(row.definitionGitSha),
+      contentHash: String(row.definitionHash),
+      entry: String(row.entryMarkdown),
+      exit: String(row.exitMarkdown),
+    },
+    harness: String(row.harness),
+    model: nullableString(row.model),
+    inputArtifacts: JSON.parse(String(row.inputArtifactsJson)) as string[],
+    createdAt: String(row.createdAt),
+  };
+}
+
+function revisionHash(title: string, body: string): string {
+  return createHash("sha256").update(`${title}\n${body}`).digest("hex");
+}
+
 function nullableString(value: unknown): string | null {
   return value === null || value === undefined ? null : String(value);
 }
@@ -664,6 +762,7 @@ type BeginReceiptInput = {
   step: StepDefinition;
   definition: DefinitionSnapshot;
   adapter: string;
+  model: string | null;
   inputArtifacts: string[];
 };
 
@@ -672,6 +771,7 @@ const blobInsert = `INSERT INTO blobs
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 const blobSelect = "SELECT * FROM blobs WHERE id = ?";
 const blobList = "SELECT * FROM blobs ORDER BY createdAt DESC, id ASC";
+const blobContentUpdate = "UPDATE blobs SET title = ?, body = ?, updatedAt = ? WHERE id = ?";
 const blobNext = `SELECT * FROM blobs WHERE state != 'complete' AND paused = 0 AND runRequested = 1
   AND NOT EXISTS (SELECT 1 FROM receipts WHERE receipts.blobId = blobs.id
     AND receipts.status = 'running' AND receipts.invalidatedAt IS NULL)
@@ -709,6 +809,19 @@ const importedReceiptInsert = `INSERT INTO receipts
 const receiptSelect = "SELECT * FROM receipts WHERE id = ?";
 const receiptList = "SELECT * FROM receipts ORDER BY startedAt, stepOrder, attempt";
 const receiptListByBlob = "SELECT * FROM receipts WHERE blobId = ? ORDER BY startedAt, stepOrder, attempt";
+const blobRevisionInsert = `INSERT INTO blobRevisions
+  (blobId, revision, title, body, contentHash, createdAt) VALUES (?, ?, ?, ?, ?, ?)`;
+const blobRevisionCurrent = `SELECT * FROM blobRevisions
+  WHERE blobId = ? ORDER BY revision DESC LIMIT 1`;
+const blobRevisionList = "SELECT * FROM blobRevisions WHERE blobId = ? ORDER BY revision";
+const attemptEvidenceInsert = `INSERT INTO attemptEvidence
+  (receiptId, blobRevision, blobTitle, blobBody, blobContentHash,
+   definitionGitSha, definitionHash, entryMarkdown, exitMarkdown,
+   harness, model, inputArtifactsJson, createdAt)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+const attemptEvidenceByBlob = `SELECT attemptEvidence.*, receipts.blobId
+  FROM attemptEvidence JOIN receipts ON receipts.id = attemptEvidence.receiptId
+  WHERE receipts.blobId = ? ORDER BY receipts.startedAt, receipts.attempt`;
 const receiptExternalRunUpdate = "UPDATE receipts SET externalRunId = ? WHERE id = ?";
 const receiptCompleteUpdate = `UPDATE receipts SET status = ?, outputArtifactsJson = ?,
   externalRunId = ?, reason = ?, finishedAt = ? WHERE id = ?`;
@@ -771,8 +884,10 @@ import type {
   Project,
   ProjectInput,
   ImportAttestation,
+  AttemptEvidence,
+  BlobRevision,
 } from "./Types.ts";
 import type { FactorioDatabase } from "./Database.ts";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { discoverPipeline } from "./Pipeline.ts";
 import { dirname } from "node:path";

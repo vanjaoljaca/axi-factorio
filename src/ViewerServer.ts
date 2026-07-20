@@ -20,6 +20,14 @@ type ViewBlob = {
   importedStepIds: string[];
   steps: ViewStep[];
 };
+type ViewAttempt = {
+  receipt: Receipt;
+  evidence: AttemptEvidence | null;
+  events: ExecutionEvent[];
+  elapsedMs: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+};
 type ViewProject = {
   id: string;
   name: string;
@@ -52,13 +60,19 @@ export function createViewSnapshot(databasePath: string): object {
 }
 
 export function createViewerServer(databasePath: string): ReturnType<typeof createServer> {
-  return createServer((request, response) => {
+  return createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
     try {
       if (request.method === "GET" && url.pathname === "/api/view") {
         return json(response, createViewSnapshot(databasePath));
       }
-      if (request.method === "POST") return controlRequest(response, databasePath, url.pathname);
+      const learning = url.pathname.match(/^\/api\/blobs\/([^/]+)\/learning$/u);
+      if (request.method === "GET" && learning) {
+        return json(response, createLearningSnapshot(databasePath, decodeURIComponent(learning[1])));
+      }
+      if (request.method === "POST") {
+        return await controlRequest(request, response, databasePath, url.pathname);
+      }
       if (request.method === "GET" && url.pathname === "/") return html(response, viewerHtml);
       response.writeHead(404).end("Not found");
     } catch (error) {
@@ -78,23 +92,174 @@ function startViewer(): void {
   });
 }
 
-function controlRequest(response: ServerResponse, databasePath: string, pathname: string): void {
-  const match = pathname.match(/^\/api\/blobs\/([^/]+)\/(play|step|stop)$/u);
+export function createLearningSnapshot(databasePath: string, blobId: string): object {
+  const database = new FactorioDatabase(databasePath);
+  try {
+    return learningSnapshot(new ConveyorStore(database), blobId);
+  } finally {
+    database.close();
+  }
+}
+
+async function controlRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  databasePath: string,
+  pathname: string,
+): Promise<void> {
+  const match = pathname.match(/^\/api\/blobs\/([^/]+)\/(.+)$/u);
   if (!match) return void response.writeHead(404).end("Not found");
   const database = new FactorioDatabase(databasePath);
   try {
     const store = new ConveyorStore(database);
     const id = decodeURIComponent(match[1]);
     const action = match[2];
-    const result = action === "play"
-      ? store.requestContinuous(id)
-      : action === "step"
-        ? store.requestStep(id)
-        : store.requestStop(id);
-    json(response, { ok: true, already: result.already, blob: result.blob });
+    if (["play", "step", "stop"].includes(action)) {
+      const result = action === "play"
+        ? store.requestContinuous(id)
+        : action === "step"
+          ? store.requestStep(id)
+          : store.requestStop(id);
+      return json(response, { ok: true, already: result.already, blob: result.blob });
+    }
+    const body = await readBody(request);
+    const preview = learningMutation(store, id, action, body);
+    if (preview) return json(response, preview);
+    json(response, learningSnapshot(store, id));
   } finally {
     database.close();
   }
+}
+
+function learningMutation(
+  store: ConveyorStore,
+  blobId: string,
+  action: string,
+  body: Record<string, unknown>,
+): object | null {
+  const blob = requireBlob(store, blobId);
+  if (action === "blob/preview") return previewBlobEdit(
+    store.currentBlobRevision(blob.id), text(body.title), text(body.body),
+  );
+  if (action === "blob/save") {
+    store.reviseBlob(blob.id, text(body.title), text(body.body), number(body.expectedRevision));
+    return null;
+  }
+  if (action === "prompt/preview") return previewPromptEdit(
+    blob, text(body.stepId), promptKind(body.kind), text(body.content),
+  );
+  if (action === "prompt/save") {
+    savePromptEdit(
+      blob, text(body.stepId), promptKind(body.kind), text(body.content),
+      text(body.expectedContentHash),
+    );
+    return null;
+  }
+  if (action === "rewind-step") {
+    const steps = discoverPipeline(blob.pipelinePath);
+    store.rewindBlob(blob.id, requireStep(steps, text(body.stepId)), steps);
+    store.requestStep(blob.id);
+    return null;
+  }
+  if (action === "retry") {
+    store.retryBlob(blob.id);
+    return null;
+  }
+  if (action === "feedback") {
+    store.addHumanFeedback(blob.id, text(body.text), stringList(body.evidence));
+    return null;
+  }
+  if (action === "approve") {
+    store.approveHumanGate(blob.id, text(body.text), stringList(body.evidence));
+    return null;
+  }
+  throw new Error(`Unknown learning action: ${action}`);
+}
+
+function learningSnapshot(store: ConveyorStore, blobId: string): object {
+  const blob = requireBlob(store, blobId);
+  const receipts = store.listReceipts(blob.id);
+  const evidence = new Map(store.listAttemptEvidence(blob.id).map((item) => [item.receiptId, item]));
+  const events = store.listExecutionEvents(blob.id);
+  const attempts = receipts.map((receipt) => viewAttempt(
+    receipt, evidence.get(receipt.id) ?? null, events.filter((event) => event.receiptId === receipt.id),
+  ));
+  return {
+    blob,
+    revision: store.currentBlobRevision(blob.id),
+    revisions: store.listBlobRevisions(blob.id),
+    steps: discoverPipeline(blob.pipelinePath).map((step) => ({
+      ...viewStep(step), order: step.order, entryPath: step.entryPath, exitPath: step.exitPath,
+      ...snapshotDefinition(step, blob.pipelinePath),
+    })),
+    attempts,
+    humanInputs: store.listHumanInputs(blob.id),
+  };
+}
+
+function viewAttempt(
+  receipt: Receipt,
+  evidence: AttemptEvidence | null,
+  events: ExecutionEvent[],
+): ViewAttempt {
+  const metrics = events.find((event) => event.attributes.eventType === "metrics")?.attributes;
+  return {
+    receipt,
+    evidence,
+    events,
+    elapsedMs: receipt.finishedAt
+      ? Math.max(0, Date.parse(receipt.finishedAt) - Date.parse(receipt.startedAt))
+      : null,
+    inputTokens: metric(metrics?.inputTokens),
+    outputTokens: metric(metrics?.outputTokens),
+  };
+}
+
+async function readBody(request: IncomingMessage): Promise<Record<string, unknown>> {
+  let value = "";
+  for await (const chunk of request) {
+    value += String(chunk);
+    if (value.length > 1_000_000) throw new Error("Request body is too large.");
+  }
+  if (!value) return {};
+  const parsed = JSON.parse(value) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Request body must be a JSON object.");
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function requireBlob(store: ConveyorStore, id: string): Blob {
+  const blob = store.getBlob(id);
+  if (!blob) throw new Error(`Blob ${id} was not found.`);
+  return blob;
+}
+
+function text(value: unknown): string {
+  if (typeof value !== "string") throw new Error("A required text value is missing.");
+  return value;
+}
+
+function number(value: unknown): number {
+  if (!Number.isInteger(value)) throw new Error("A required integer value is missing.");
+  return Number(value);
+}
+
+function stringList(value: unknown): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
+    throw new Error("Evidence must be a list of strings.");
+  }
+  return value;
+}
+
+function promptKind(value: unknown): PromptKind {
+  if (value !== "entry" && value !== "exit") throw new Error("Prompt kind must be entry or exit.");
+  return value;
+}
+
+function metric(value: unknown): number | null {
+  return typeof value === "number" && value >= 0 ? value : null;
 }
 
 function groupProjects(records: Project[], blobs: Blob[], receipts: Receipt[]): ViewProject[] {
@@ -315,7 +480,8 @@ const viewerHtml = String.raw`<!doctype html>
 button,input{font:inherit;color:inherit}.app{min-height:100vh;display:grid;grid-template-columns:132px minmax(0,1fr)}.rail{position:fixed;inset:0 auto 0 0;width:132px;height:100vh;border-right:1px solid var(--line);background:var(--rail);padding:20px 10px;display:flex;flex-direction:column}.brand{margin:0 9px 24px;font-size:14px;font-weight:780;letter-spacing:-.03em}.nav{display:grid;gap:5px}.nav-item{height:35px;display:flex;align-items:center;padding:0 10px;border-radius:6px;color:#626c66;font-size:10px}.nav-item.active{background:#eaf3fe;color:#2781c8;font-weight:650}.agent{margin-top:auto;border:1px solid var(--line);border-radius:6px;padding:8px 9px;font-size:9px}.agent strong{display:block}.agent span{color:var(--green)}
 .main{grid-column:2;min-width:0}.topbar{height:58px;border-bottom:1px solid var(--line);display:flex;align-items:center;padding:0 22px;gap:8px}.identity{display:flex;align-items:center;gap:8px;min-width:220px}.identity strong{font-size:13px;letter-spacing:-.02em}.online{font-size:9px;color:var(--muted)}.online:before{content:"";display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--green);margin-right:5px;vertical-align:1px}.search{margin-left:auto;width:min(320px,38vw)}.search input{width:100%;height:30px;border:1px solid var(--line);border-radius:5px;background:#fff;padding:0 10px;outline:none}.search input:focus{border-color:#9eb9aa;box-shadow:0 0 0 3px #0caf6914}.refresh{height:30px;border:1px solid var(--line);border-radius:5px;background:#fff;padding:0 10px;cursor:pointer;color:var(--muted)}.refresh:hover{background:#f7f9f8;color:var(--ink)}
 .content{padding:14px 20px 26px;min-width:0}.toolbar{height:34px;display:flex;align-items:center}.toolbar strong{font-size:11px}.workspace{border:1px solid var(--line);background:#fff;overflow:auto;max-width:100%}.matrix{width:100%}.matrix-head{display:grid;grid-template-columns:280px repeat(var(--steps),minmax(72px,1fr));position:sticky;top:0;z-index:3;background:#fff}.corner{grid-row:span 2;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}.band{height:30px;display:flex;align-items:center;justify-content:center;border-right:1px solid var(--line);border-bottom:1px solid var(--line);font-size:9px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;background:#f7f8f7;color:#5f6963}.step{height:56px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:center;padding:7px;text-align:center;color:#505b55;font-size:9px;line-height:1.25}.project+.project{border-top:1px solid var(--line)}.project-head{position:sticky;left:0;z-index:2;width:100%;height:37px;display:flex;align-items:center;border:0;background:#fff;padding:0 10px;text-align:left;font-weight:700;font-size:10px;cursor:pointer}.project-head:hover{background:#fafbfa}.project-head .count{margin-left:6px;color:var(--muted);font-weight:400}.project-head .toggle{margin-left:auto;color:var(--muted);font-size:9px}.project.collapsed .taskrows{display:none}
-.taskrow{display:grid;grid-template-columns:280px repeat(var(--steps),minmax(72px,1fr));height:38px;align-items:center}.taskrow:hover{background:#fcfdfc}.task-title{position:sticky;left:0;z-index:2;height:38px;display:flex;align-items:center;gap:6px;background:inherit;padding:0 8px 0 24px;color:#3f4944;font-size:10px}.task-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.task-status{margin-left:auto;flex:none;color:var(--muted);font-size:8px}.task-status.waiting,.task-status.blocked{color:var(--attention);font-weight:700}.task-status.failed{color:var(--danger);font-weight:700}.taskrow:hover .task-title{background:#fcfdfc}.run-controls{display:flex;gap:3px;flex:none;margin-left:3px}.control-tip{position:relative;display:inline-flex}.control-tip:focus-visible{outline:2px solid #85938a;outline-offset:1px;border-radius:5px}.control-tip:hover:after,.control-tip:focus-visible:after,.control-tip:focus-within:after{content:attr(data-tip);position:absolute;right:0;bottom:calc(100% + 6px);z-index:20;width:max-content;max-width:240px;padding:6px 8px;border:1px solid var(--line-strong);border-radius:5px;background:#fff;color:var(--ink);box-shadow:0 4px 14px #18201b18;font-size:9px;font-weight:500;line-height:1.35;white-space:normal;pointer-events:none}.run-control{width:24px;height:24px;display:grid;place-items:center;border:1px solid var(--line-strong);border-radius:5px;background:#fff;color:#46504a;padding:0;cursor:pointer}.run-control:hover:not(:disabled){background:var(--neutral-soft);border-color:#aeb7b1}.run-control:focus-visible{outline:2px solid #85938a;outline-offset:1px}.run-control:disabled{cursor:not-allowed;color:#c0c6c2;background:#fafbfa}.run-control.mode.active{color:var(--ink);border-color:#8e9992;box-shadow:inset 0 0 0 1px #8e9992}.run-control.stop.active{color:var(--ink);border-color:#9fa9a3;background:var(--neutral-soft)}.run-control svg{width:11px;height:11px;fill:currentColor}.track-cell{height:38px;position:relative}.track-cell:before{content:"";position:absolute;left:0;right:0;top:19px;height:1px;background:var(--line-strong)}.track-cell.first:before{left:50%}.track-cell.last:before{right:50%}.bead{position:absolute;z-index:1;left:50%;top:50%;width:8px;height:8px;margin:-4px;border-radius:50%;background:var(--quiet)}.bead.done{width:12px;height:12px;margin:-6px;background:var(--ink)}.bead.done:after{content:"✓";position:absolute;inset:-1px 0 0;color:#fff;text-align:center;font-size:8px;font-style:normal;font-weight:800}.bead.done.imported{border-radius:2px;background:#fff;border:1.5px dashed #69736d;transform:rotate(45deg)}.bead.done.imported:after{color:#56605a;transform:rotate(-45deg)}.bead.current{width:12px;height:12px;margin:-6px;background:#fff;border:2px solid var(--ink);box-shadow:0 0 0 2px var(--neutral-soft)}.bead.current.running{background:var(--ink);box-shadow:0 0 0 2px var(--neutral-soft)}.bead.current.waiting,.bead.current.blocked{border-style:double;border-color:var(--attention);box-shadow:0 0 0 2px var(--attention-soft)}.bead.current.failed{border-color:var(--danger);box-shadow:0 0 0 2px var(--danger-soft)}.bead.current.failed:after{content:"×";position:absolute;inset:-4px 0 0;color:var(--danger);text-align:center;font-size:11px;font-style:normal;font-weight:800}.bead.unavailable{background:#fff;border:1px solid #c7ceca}.empty-project{padding:11px 24px;color:var(--muted);font-size:10px}.footer{display:flex;align-items:center;gap:18px;padding:12px 4px 0;color:var(--muted);font-size:9px}.legend{display:flex;align-items:center;gap:15px;flex-wrap:wrap}.legend span{display:flex;align-items:center;gap:6px}.key{position:relative;width:8px;height:8px;border-radius:50%;background:var(--quiet)}.key.complete{width:11px;height:11px;background:var(--ink)}.key.complete:after{content:"✓";position:absolute;inset:-2px 0 0;color:#fff;text-align:center;font-size:8px}.key.imported{width:10px;height:10px;border-radius:2px;background:#fff;border:1px dashed #69736d;transform:rotate(45deg)}.key.inventory{width:10px;height:10px;border-radius:2px;background:#fff;border:1px solid var(--quiet)}.key.current{width:11px;height:11px;background:#fff;border:2px solid var(--ink);box-shadow:0 0 0 2px var(--neutral-soft)}.key.waiting{width:11px;height:11px;background:#fff;border:3px double var(--attention);box-shadow:0 0 0 2px var(--attention-soft)}.key.failed{width:11px;height:11px;background:#fff;border:1px solid var(--danger)}.total{margin-left:auto}.empty{padding:72px 24px;text-align:center;color:var(--muted)}.empty b{display:block;color:var(--ink);font-size:12px;margin-bottom:4px}.no-results{padding:42px 24px;text-align:center;color:var(--muted)}.error{margin-top:12px;padding:10px;border:1px solid #efcece;border-radius:6px;background:#fff7f7;color:#9d3f3f}
+.taskrow{display:grid;grid-template-columns:280px repeat(var(--steps),minmax(72px,1fr));height:38px;align-items:center}.taskrow:hover{background:#fcfdfc}.task-title{position:sticky;left:0;z-index:2;height:38px;display:flex;align-items:center;gap:6px;background:inherit;padding:0 8px 0 24px;color:#3f4944;font-size:10px}.task-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.task-name-button{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border:0;background:transparent;padding:0;text-align:left;cursor:pointer}.task-name-button:hover{text-decoration:underline}.task-status{margin-left:auto;flex:none;color:var(--muted);font-size:8px}.task-status.waiting,.task-status.blocked{color:var(--attention);font-weight:700}.task-status.failed{color:var(--danger);font-weight:700}.taskrow:hover .task-title{background:#fcfdfc}.run-controls{display:flex;gap:3px;flex:none;margin-left:3px}.control-tip{position:relative;display:inline-flex}.control-tip:focus-visible{outline:2px solid #85938a;outline-offset:1px;border-radius:5px}.control-tip:hover:after,.control-tip:focus-visible:after,.control-tip:focus-within:after{content:attr(data-tip);position:absolute;right:0;bottom:calc(100% + 6px);z-index:20;width:max-content;max-width:240px;padding:6px 8px;border:1px solid var(--line-strong);border-radius:5px;background:#fff;color:var(--ink);box-shadow:0 4px 14px #18201b18;font-size:9px;font-weight:500;line-height:1.35;white-space:normal;pointer-events:none}.run-control{width:24px;height:24px;display:grid;place-items:center;border:1px solid var(--line-strong);border-radius:5px;background:#fff;color:#46504a;padding:0;cursor:pointer}.run-control:hover:not(:disabled){background:var(--neutral-soft);border-color:#aeb7b1}.run-control:focus-visible{outline:2px solid #85938a;outline-offset:1px}.run-control:disabled{cursor:not-allowed;color:#c0c6c2;background:#fafbfa}.run-control.mode.active{color:var(--ink);border-color:#8e9992;box-shadow:inset 0 0 0 1px #8e9992}.run-control.stop.active{color:var(--ink);border-color:#9fa9a3;background:var(--neutral-soft)}.run-control svg{width:11px;height:11px;fill:currentColor}.track-cell{height:38px;position:relative}.track-cell:before{content:"";position:absolute;left:0;right:0;top:19px;height:1px;background:var(--line-strong)}.track-cell.first:before{left:50%}.track-cell.last:before{right:50%}.bead{position:absolute;z-index:1;left:50%;top:50%;width:8px;height:8px;margin:-4px;border-radius:50%;background:var(--quiet)}.bead.done{width:12px;height:12px;margin:-6px;background:var(--ink)}.bead.done:after{content:"✓";position:absolute;inset:-1px 0 0;color:#fff;text-align:center;font-size:8px;font-style:normal;font-weight:800}.bead.done.imported{border-radius:2px;background:#fff;border:1.5px dashed #69736d;transform:rotate(45deg)}.bead.done.imported:after{color:#56605a;transform:rotate(-45deg)}.bead.current{width:12px;height:12px;margin:-6px;background:#fff;border:2px solid var(--ink);box-shadow:0 0 0 2px var(--neutral-soft)}.bead.current.running{background:var(--ink);box-shadow:0 0 0 2px var(--neutral-soft)}.bead.current.waiting,.bead.current.blocked{border-style:double;border-color:var(--attention);box-shadow:0 0 0 2px var(--attention-soft)}.bead.current.failed{border-color:var(--danger);box-shadow:0 0 0 2px var(--danger-soft)}.bead.current.failed:after{content:"×";position:absolute;inset:-4px 0 0;color:var(--danger);text-align:center;font-size:11px;font-style:normal;font-weight:800}.bead.unavailable{background:#fff;border:1px solid #c7ceca}.empty-project{padding:11px 24px;color:var(--muted);font-size:10px}.footer{display:flex;align-items:center;gap:18px;padding:12px 4px 0;color:var(--muted);font-size:9px}.legend{display:flex;align-items:center;gap:15px;flex-wrap:wrap}.legend span{display:flex;align-items:center;gap:6px}.key{position:relative;width:8px;height:8px;border-radius:50%;background:var(--quiet)}.key.complete{width:11px;height:11px;background:var(--ink)}.key.complete:after{content:"✓";position:absolute;inset:-2px 0 0;color:#fff;text-align:center;font-size:8px}.key.imported{width:10px;height:10px;border-radius:2px;background:#fff;border:1px dashed #69736d;transform:rotate(45deg)}.key.inventory{width:10px;height:10px;border-radius:2px;background:#fff;border:1px solid var(--quiet)}.key.current{width:11px;height:11px;background:#fff;border:2px solid var(--ink);box-shadow:0 0 0 2px var(--neutral-soft)}.key.waiting{width:11px;height:11px;background:#fff;border:3px double var(--attention);box-shadow:0 0 0 2px var(--attention-soft)}.key.failed{width:11px;height:11px;background:#fff;border:1px solid var(--danger)}.total{margin-left:auto}.empty{padding:72px 24px;text-align:center;color:var(--muted)}.empty b{display:block;color:var(--ink);font-size:12px;margin-bottom:4px}.no-results{padding:42px 24px;text-align:center;color:var(--muted)}.error{margin-top:12px;padding:10px;border:1px solid #efcece;border-radius:6px;background:#fff7f7;color:#9d3f3f}
+.learning{margin-top:16px;border:1px solid var(--line-strong);background:#fff}.learning[hidden]{display:none}.learning-head{height:42px;display:flex;align-items:center;padding:0 12px;border-bottom:1px solid var(--line);gap:8px}.learning-head small{color:var(--muted)}.learning-head button{margin-left:auto}.learning-actions{display:flex;gap:6px;padding:9px 12px;border-bottom:1px solid var(--line)}.learning-actions button,.editor-actions button,.human-actions button,.learning-head button{height:28px;border:1px solid var(--line-strong);border-radius:4px;background:#fff;padding:0 9px;cursor:pointer}.learning-actions .primary{background:var(--ink);color:#fff}.learning-grid{display:grid;grid-template-columns:260px minmax(0,1fr)}.attempt-list{border-right:1px solid var(--line);padding:10px}.attempt-button{display:block;width:100%;border:1px solid var(--line);background:#fff;padding:8px;text-align:left;margin-bottom:6px;cursor:pointer}.attempt-button.selected{border-color:var(--ink)}.attempt-button small{display:block;color:var(--muted)}.attempt-detail{padding:10px}.evidence-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.evidence-card{border:1px solid var(--line);padding:8px;min-width:0}.evidence-card.wide{grid-column:1/-1}.evidence-card small{display:block;color:var(--muted);margin-bottom:4px}.evidence-card pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font:9px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace}.compare{display:grid;grid-template-columns:1fr 1fr;border-top:1px solid var(--line)}.compare>div{padding:10px}.compare>div+div{border-left:1px solid var(--line)}.editors{display:grid;grid-template-columns:1fr 1fr;border-top:1px solid var(--line)}.editor{padding:10px}.editor+.editor{border-left:1px solid var(--line)}.editor input,.editor textarea,.human-actions input{width:100%;border:1px solid var(--line-strong);padding:7px;margin:4px 0}.editor textarea{min-height:90px;resize:vertical}.editor-actions,.human-actions{display:flex;gap:6px;align-items:center}.editor-actions button:disabled{opacity:.4;cursor:not-allowed}.diff{margin-top:8px;border:1px solid var(--line);font:9px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace}.diff div{padding:2px 6px;white-space:pre-wrap}.diff .add{background:#edf7f0}.diff .remove{background:#fff0f0}.validation{color:var(--danger);font-size:9px;margin-top:5px}.human-actions{padding:10px;border-top:1px solid var(--line)}.human-actions input{margin:0}.learning-error{margin:8px 12px;color:var(--danger)}
 @media(max-width:760px){.app{grid-template-columns:76px minmax(0,1fr)}.rail{width:76px;padding-inline:7px}.brand{margin-inline:4px}.nav-item{justify-content:center;padding:0;font-size:9px}.agent{display:none}.identity{min-width:auto}.identity strong{font-size:11px}.content{padding-inline:12px}.topbar{padding-inline:12px}.search{width:min(240px,45vw)}}
 @media(max-width:520px){.app{display:block}.rail{position:static;width:100%;height:48px;border-right:0;border-bottom:1px solid var(--line);display:flex;flex-direction:row;align-items:center;padding:6px 10px}.brand{margin:0 14px 0 0}.nav{display:flex}.nav-item{height:30px;padding:0 8px}.nav-item:not(.active){display:none}.main{display:block}.topbar{height:auto;min-height:92px;flex-wrap:wrap;padding-block:12px}.identity{width:calc(100% - 72px)}.search{order:3;width:100%;margin:0}.content{padding-top:10px}.matrix-head{grid-template-columns:220px repeat(var(--steps),minmax(66px,1fr))}.taskrow{grid-template-columns:220px repeat(var(--steps),minmax(66px,1fr))}.task-title{padding-left:14px}.task-status{display:none}}
 </style></head><body><div class="app">
@@ -328,36 +494,65 @@ button,input{font:inherit;color:inherit}.app{min-height:100vh;display:grid;grid-
 <section class="content"><div class="toolbar"><strong>All Projects</strong></div>
 <div class="workspace" id="workspace"><div class="empty"><b>Loading workspace</b>Your projects will appear here.</div></div>
 <div class="footer"><div class="legend"><span><i class="key complete"></i>Completed</span><span><i class="key imported"></i>Imported</span><span><i class="key inventory"></i>Inventory</span><span><i class="key current"></i>Current</span><span><i class="key waiting"></i>Awaiting review / needs attention</span><span><i class="key"></i>Pending</span><span><i class="key failed"></i>Failed</span></div><span class="total" id="total"></span></div>
-<div id="error" role="status"></div></section></main></div>
+<div id="error" role="status"></div>
+<section class="learning" id="learning" hidden aria-label="Task learning inspector"></section>
+</section></main></div>
 <script>
-const byId=id=>document.getElementById(id);let snapshot=null;
+const byId=id=>document.getElementById(id);let snapshot=null,learning=null,selectedAttemptId=null,blobPreview=null,promptPreview=null;
 async function load(){try{const response=await fetch('/api/view');if(!response.ok)throw new Error('Could not refresh the workspace.');snapshot=await response.json();render();byId('error').innerHTML=''}catch(error){byId('error').innerHTML='<div class="error">'+escapeHtml(error.message)+'</div>'}}
 function render(){const query=byId('search').value.trim().toLowerCase();const projects=snapshot.projects.map(project=>({...project,blobs:project.blobs.filter(blob=>matches(blob,project,query))})).filter(project=>project.blobs.length||(!query&&snapshot.projects.length)||project.name.toLowerCase().includes(query));byId('total').textContent=snapshot.stats.tasks+' '+plural(snapshot.stats.tasks,'task')+' across '+snapshot.stats.projects+' '+plural(snapshot.stats.projects,'project');byId('workspace').innerHTML=projects.length?matrix(projects):'<div class="no-results">'+(query?'No projects or tasks match your search.':'No projects yet. Add a project and its work will appear here.')+'</div>'}
 function matches(blob,project,query){return !query||project.name.toLowerCase().includes(query)||blob.title.toLowerCase().includes(query)||blob.id.toLowerCase().includes(query)}
 function matrix(projects){const steps=snapshot.steps;return '<div class="matrix" style="--steps:'+Math.max(steps.length,1)+'"><div class="matrix-head" style="--steps:'+Math.max(steps.length,1)+'"><div class="corner"></div>'+snapshot.groups.map(group=>'<div class="band" style="grid-column:span '+group.count+'">'+escapeHtml(group.label)+'</div>').join('')+steps.map(step=>'<div class="step">'+escapeHtml(step.label)+'</div>').join('')+'</div>'+projects.map(projectCard).join('')+'</div>'}
 function projectCard(project){const rows=project.blobs.length?project.blobs.map(taskRow).join(''):'<div class="empty-project">No tasks in this project.</div>';return '<section class="project" data-project="'+escapeHtml(project.id)+'"><button class="project-head" aria-expanded="true"><span>'+escapeHtml(project.name)+'</span><span class="count">'+project.blobs.length+'</span><span class="toggle">Hide</span></button><div class="taskrows">'+rows+'</div></section>'}
-function taskRow(blob){const cells=snapshot.steps.map((step,index)=>beadCell(blob,step,index)).join('');const label=statusLabel(blob.status);return '<div class="taskrow" style="--steps:'+Math.max(snapshot.steps.length,1)+'"><div class="task-title" title="'+escapeHtml(blob.title)+'"><span class="task-name">'+escapeHtml(blob.title)+'</span>'+(label?'<small class="task-status '+blob.status+'">'+label+'</small>':'')+runControls(blob)+'</div>'+cells+'</div>'}
-function runControls(blob){return '<span class="run-controls" aria-label="Execution controls">'+controlButton(blob,'play',playIcon())+controlButton(blob,'step',stepIcon())+controlButton(blob,'stop',stopIcon())+'</span>'}
+function taskRow(blob){const cells=snapshot.steps.map((step,index)=>beadCell(blob,step,index)).join('');const label=statusLabel(blob.status);return '<div class="taskrow" style="--steps:'+Math.max(snapshot.steps.length,1)+'"><div class="task-title" title="'+escapeAttr(blob.title)+'"><button class="task-name-button" data-inspect="'+escapeAttr(blob.id)+'">'+escapeHtml(blob.title)+'</button>'+(label?'<small class="task-status '+blob.status+'">'+label+'</small>':'')+runControls(blob)+'</div>'+cells+'</div>'}
+function runControls(blob){return '<span class="run-controls" aria-label="Execution controls">'+controlButton(blob,'step',stepIcon())+controlButton(blob,'play',playIcon())+controlButton(blob,'stop',stopIcon())+'</span>'}
 function controlButton(blob,action,icon){const control=blob.execution[action];const mode=action==='play'||action==='step';const selected=mode&&blob.execution.mode===(action==='play'?'continuous':'step');const active=selected||(action==='stop'&&blob.execution.requested);const label=action==='play'?'Play continuously':action==='step'?'Run one transition':'Stop';const explanation=escapeHtml(control.explanation);return '<span class="control-tip" data-tip="'+explanation+'" '+(control.enabled?'':'tabindex="0" aria-label="'+explanation+'"')+'><button class="run-control '+action+(mode?' mode':'')+(active?' active':'')+'" data-action="'+action+'" data-blob="'+escapeHtml(blob.id)+'" aria-label="'+label+'" aria-pressed="'+active+'" title="'+explanation+'" '+(control.enabled?'':'disabled')+'>'+icon+'</button></span>'}
 function playIcon(){return '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1.3v9.4L10 6z"/></svg>'}function stepIcon(){return '<svg viewBox="0 0 14 12" aria-hidden="true"><path d="M1 1.3v9.4L9 6zM11 1h2v10h-2z"/></svg>'}function stopIcon(){return '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 2h8v8H2z"/></svg>'}
 function beadCell(blob,step,index){const known=blob.steps.some(candidate=>candidate.id===step.id);const done=blob.stepId==='complete'||blob.completedStepIds.includes(step.id);const current=blob.stepId===step.id;const imported=done&&blob.importedStepIds.includes(step.id);const classes=['bead',done?'done':'',imported?'imported':'',current?'current':'',current?blob.status:'',!known?'unavailable':''].filter(Boolean).join(' ');return '<div class="track-cell '+(index===0?'first ':'')+(index===snapshot.steps.length-1?'last':'')+'"><i class="'+classes+'"></i></div>'}
 function statusLabel(status){return {queued:'Queued',held:'Inventory',running:'Running',waiting:'Awaiting review',blocked:'Needs attention',failed:'Failed'}[status]||''}
-function plural(count,word){return count===1?word:word+'s'}function escapeHtml(value){const node=document.createElement('span');node.textContent=String(value);return node.innerHTML}
-async function control(action,blobId){try{const response=await fetch('/api/blobs/'+encodeURIComponent(blobId)+'/'+action,{method:'POST'});const result=await response.json();if(!response.ok)throw new Error(result.error||'The execution request failed.');await load()}catch(error){byId('error').innerHTML='<div class="error">'+escapeHtml(error.message)+'</div>';await load()}}
-byId('refresh').onclick=load;byId('search').oninput=render;document.addEventListener('keydown',event=>{if(event.key==='/'&&document.activeElement!==byId('search')){event.preventDefault();byId('search').focus()}});
-byId('workspace').onclick=event=>{const action=event.target.closest('[data-action]');if(action){action.disabled=true;return void control(action.dataset.action,action.dataset.blob)}const head=event.target.closest('.project-head');if(!head)return;const project=head.closest('.project');project.classList.toggle('collapsed');const expanded=!project.classList.contains('collapsed');head.setAttribute('aria-expanded',String(expanded));head.querySelector('.toggle').textContent=expanded?'Hide':'Show'};
+function plural(count,word){return count===1?word:word+'s'}function escapeHtml(value){const node=document.createElement('span');node.textContent=String(value);return node.innerHTML}function escapeAttr(value){return escapeHtml(value).replaceAll('"','&quot;')}
+async function control(action,blobId){try{const before=learning?.blob.id===blobId?learning.attempts.length:null;const response=await fetch('/api/blobs/'+encodeURIComponent(blobId)+'/'+action,{method:'POST'});const result=await response.json();if(!response.ok)throw new Error(result.error||'The execution request failed.');await load();if(before!==null)await waitForLearning(blobId,before)}catch(error){showLearningError(error);await load()}}
+async function waitForLearning(blobId,before){for(let index=0;index<24;index+=1){await openLearning(blobId);const latest=learning.attempts.at(-1);if((learning.attempts.length>before||!learning.blob.runRequested)&&latest?.receipt.status!=='running'){if(learning.attempts.length>before){selectedAttemptId=latest.receipt.id;renderLearning()}await load();return}await new Promise(resolve=>setTimeout(resolve,100))}}
+async function openLearning(blobId){const response=await fetch('/api/blobs/'+encodeURIComponent(blobId)+'/learning');const result=await response.json();if(!response.ok)throw new Error(result.error||'Could not inspect this task.');learning=result;if(!selectedAttemptId||!learning.attempts.some(item=>item.receipt.id===selectedAttemptId))selectedAttemptId=learning.attempts.at(-1)?.receipt.id||null;blobPreview=null;promptPreview=null;renderLearning()}
+function renderLearning(){const root=byId('learning');if(!learning){root.hidden=true;return}root.hidden=false;const selected=learning.attempts.find(item=>item.receipt.id===selectedAttemptId)||learning.attempts.at(-1);root.innerHTML='<div class="learning-head"><strong>'+escapeHtml(learning.blob.title)+'</strong><small>'+escapeHtml(learning.blob.id)+' · r'+learning.revision.revision+' · '+escapeHtml(learning.blob.state)+'</small><button data-learning-action="close">Close</button></div><div class="learning-actions"><button class="primary" data-learning-action="step">Step once</button><button data-learning-action="rewind" '+(selected?'':'disabled')+'>Rewind + rerun selected step</button><button data-learning-action="retry">Retry</button></div><div class="learning-grid"><div class="attempt-list">'+attemptButtons()+'</div><div class="attempt-detail">'+attemptDetail(selected)+'</div></div>'+compareAttempts()+editors()+humanEditor()+'<div class="learning-error" id="learning-error"></div>'}
+function attemptButtons(){if(!learning.attempts.length)return '<div class="empty">No attempts yet. Run Step once.</div>';return learning.attempts.slice().reverse().map(item=>'<button class="attempt-button '+(item.receipt.id===selectedAttemptId?'selected':'')+'" data-attempt="'+escapeAttr(item.receipt.id)+'"><b>#'+item.receipt.attempt+' · '+escapeHtml(item.receipt.stepId)+' · '+escapeHtml(item.receipt.status)+'</b><small>'+(item.evidence?'blob r'+item.evidence.blobRevision.revision+' · '+short(item.evidence.definition.contentHash):'legacy evidence')+' · '+(item.receipt.invalidatedAt?'superseded':'current')+'</small></button>').join('')}
+function attemptDetail(item){if(!item)return '<div class="empty">Step once to create immutable attempt evidence.</div>';const evidence=item.evidence;const receipt=item.receipt;const events=item.events.map(event=>'#'+event.id+' '+event.name+' '+JSON.stringify(event.attributes)).join('\\n');return '<div class="evidence-grid"><div class="evidence-card wide"><small>Blob input snapshot</small><pre>'+(evidence?'r'+evidence.blobRevision.revision+' · '+short(evidence.blobRevision.contentHash)+'\\n'+escapeHtml(evidence.blobRevision.title)+'\\n'+escapeHtml(evidence.blobRevision.body):'Unavailable for legacy receipt')+'</pre></div><div class="evidence-card"><small>Harness / model</small><pre>'+escapeHtml(evidence?.harness||receipt.adapter)+' / '+escapeHtml(evidence?.model||'not reported')+'\\nrun '+escapeHtml(receipt.externalRunId||'not reported')+'</pre></div><div class="evidence-card"><small>Decision / metrics</small><pre>'+escapeHtml(receipt.status)+'\\n'+escapeHtml(receipt.reason||receipt.error||'')+'\\n'+metricText(item)+'</pre></div><div class="evidence-card wide"><small>Entry Markdown · Git SHA / content hash</small><pre>'+(evidence?short(evidence.definition.gitSha)+' / '+short(evidence.definition.contentHash)+'\\n'+escapeHtml(evidence.definition.entry):'Definition '+short(receipt.definitionGitSha)+' / '+short(receipt.definitionHash))+'</pre></div><div class="evidence-card wide"><small>Exit Markdown</small><pre>'+(evidence?escapeHtml(evidence.definition.exit):'Unavailable for legacy receipt')+'</pre></div><div class="evidence-card wide"><small>Input → output artifacts</small><pre>'+escapeHtml(receipt.inputArtifacts.join('\\n')||'none')+'\\n→\\n'+escapeHtml(receipt.outputArtifacts.join('\\n')||'none')+'</pre></div><div class="evidence-card wide"><small>Append-only harness events</small><pre>'+escapeHtml(events||'none')+'</pre></div></div>'}
+function compareAttempts(){if(learning.attempts.length<2)return '';const pair=learning.attempts.slice(-2);return '<section class="compare">'+pair.map(item=>'<div><b>#'+item.receipt.attempt+' · '+escapeHtml(item.receipt.status)+(item.receipt.invalidatedAt?' · superseded':'')+'</b><p>Blob '+(item.evidence?'r'+item.evidence.blobRevision.revision+' '+short(item.evidence.blobRevision.contentHash):'legacy')+'<br>Prompt '+short(item.evidence?.definition.contentHash||item.receipt.definitionHash)+'<br>'+metricText(item)+'</p></div>').join('')+'</section>'}
+function editors(){const step=selectedStep();return '<section class="editors"><div class="editor"><b>Edit durable blob revision</b><input id="blob-title" value="'+escapeAttr(learning.revision.title)+'" aria-label="Blob title"><textarea id="blob-body" aria-label="Blob content">'+escapeHtml(learning.revision.body)+'</textarea><div class="editor-actions"><button data-learning-action="preview-blob">Preview diff</button><button data-learning-action="save-blob" '+(blobPreview?.valid?'':'disabled')+'>Save revision</button><button data-learning-action="cancel-edit">Cancel</button></div>'+previewHtml(blobPreview)+'</div><div class="editor"><b>Edit actual pipeline Markdown</b><select id="prompt-kind" aria-label="Prompt kind"><option value="entry">Entry</option><option value="exit">Exit</option></select><textarea id="prompt-content" aria-label="Pipeline Markdown">'+escapeHtml(step?.entry||'')+'</textarea><input type="hidden" id="prompt-step" value="'+escapeAttr(step?.id||learning.blob.state)+'"><div class="editor-actions"><button data-learning-action="preview-prompt">Preview diff</button><button data-learning-action="save-prompt" '+(promptPreview?.valid?'':'disabled')+'>Save Markdown</button><button data-learning-action="cancel-edit">Cancel</button></div>'+previewHtml(promptPreview)+'</div></section>'}
+function humanEditor(){return '<div class="human-actions"><input id="human-text" placeholder="Human feedback or approval evidence"><button data-learning-action="feedback">Send feedback</button><button data-learning-action="approve">Approve with exact-head evidence</button></div>'}
+function selectedStep(){const attempt=learning.attempts.find(item=>item.receipt.id===selectedAttemptId)||learning.attempts.at(-1);return learning.steps.find(item=>item.id===(attempt?.receipt.stepId||learning.blob.state))||learning.steps[0]}
+function previewHtml(preview){if(!preview)return '';const lines=preview.diff||preview.bodyDiff||[];return (preview.error?'<div class="validation">'+escapeHtml(preview.error)+'</div>':'')+'<div class="diff">'+lines.map(line=>'<div class="'+line.kind+'">'+(line.kind==='add'?'+ ':line.kind==='remove'?'- ':'  ')+escapeHtml(line.text)+'</div>').join('')+'</div>'}
+function metricText(item){return (item.elapsedMs===null?'time not reported':item.elapsedMs+' ms')+' · '+(item.inputTokens===null?'tokens not reported':item.inputTokens+' input / '+item.outputTokens+' output tokens')}
+function short(value){return value?String(value).slice(0,10)+'…':'not reported'}
+async function learningPost(action,payload={}){const response=await fetch('/api/blobs/'+encodeURIComponent(learning.blob.id)+'/'+action,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});const result=await response.json();if(!response.ok)throw new Error(result.error||'The learning action failed.');return result}
+async function learningAction(action){try{if(action==='close'){learning=null;return renderLearning()}if(action==='step'){await control('step',learning.blob.id);return}if(action==='rewind'){const selected=learning.attempts.find(item=>item.receipt.id===selectedAttemptId);const before=learning.attempts.length;await learningPost('rewind-step',{stepId:selected.receipt.stepId});selectedAttemptId=null;await waitForLearning(learning.blob.id,before);return}if(action==='retry'){const before=learning.attempts.length;await learningPost('retry');await waitForLearning(learning.blob.id,before);return}if(action==='preview-blob'){blobPreview=await learningPost('blob/preview',{title:byId('blob-title').value,body:byId('blob-body').value});return renderLearning()}if(action==='save-blob'){await learningPost('blob/save',{title:blobPreview.after.title,body:blobPreview.after.body,expectedRevision:blobPreview.expectedRevision});await openLearning(learning.blob.id);return}if(action==='preview-prompt'){promptPreview=await learningPost('prompt/preview',{stepId:byId('prompt-step').value,kind:byId('prompt-kind').value,content:byId('prompt-content').value});return renderLearning()}if(action==='save-prompt'){await learningPost('prompt/save',{stepId:promptPreview.stepId,kind:promptPreview.kind,content:promptPreview.after,expectedContentHash:promptPreview.expectedContentHash});await openLearning(learning.blob.id);return}if(action==='cancel-edit'){blobPreview=null;promptPreview=null;return renderLearning()}if(action==='feedback'){const before=learning.attempts.length;await learningPost('feedback',{text:byId('human-text').value,evidence:['viewer:human-feedback']});await waitForLearning(learning.blob.id,before);return}if(action==='approve'){const before=learning.attempts.length;await learningPost('approve',{text:byId('human-text').value,evidence:['viewer:exact-head-approval']});await waitForLearning(learning.blob.id,before)}}catch(error){showLearningError(error)}}
+function showLearningError(error){const target=byId('learning-error')||byId('error');if(target)target.innerHTML='<div class="error">'+escapeHtml(error.message)+'</div>'}
+byId('refresh').onclick=async()=>{await load();if(learning)await openLearning(learning.blob.id)};byId('search').oninput=render;document.addEventListener('keydown',event=>{if(event.key==='/'&&document.activeElement!==byId('search')){event.preventDefault();byId('search').focus()}});
+byId('workspace').onclick=event=>{const inspect=event.target.closest('[data-inspect]');if(inspect)return void openLearning(inspect.dataset.inspect).catch(showLearningError);const action=event.target.closest('[data-action]');if(action){action.disabled=true;return void control(action.dataset.action,action.dataset.blob)}const head=event.target.closest('.project-head');if(!head)return;const project=head.closest('.project');project.classList.toggle('collapsed');const expanded=!project.classList.contains('collapsed');head.setAttribute('aria-expanded',String(expanded));head.querySelector('.toggle').textContent=expanded?'Hide':'Show'};
+byId('learning').onclick=event=>{const attempt=event.target.closest('[data-attempt]');if(attempt){selectedAttemptId=attempt.dataset.attempt;blobPreview=null;promptPreview=null;return renderLearning()}const action=event.target.closest('[data-learning-action]');if(action)return void learningAction(action.dataset.learningAction)};
+byId('learning').onchange=event=>{if(event.target.id!=='prompt-kind')return;const step=selectedStep();byId('prompt-content').value=event.target.value==='entry'?step.entry:step.exit;promptPreview=null};
 load();setInterval(load,5000);
 </script></body></html>`;
 
 if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) startViewer();
 
-import type { ServerResponse } from "node:http";
-import type { Blob, ExecutionMode, Project, Receipt, StepDefinition } from "./Types.ts";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import type {
+  AttemptEvidence,
+  Blob,
+  ExecutionEvent,
+  ExecutionMode,
+  Project,
+  Receipt,
+  StepDefinition,
+} from "./Types.ts";
+import type { PromptKind } from "./Learning.ts";
 import { createServer } from "node:http";
 import { readdirSync, statSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { FactorioDatabase } from "./Database.ts";
 import { log } from "./Logger.ts";
-import { discoverPipeline } from "./Pipeline.ts";
+import { discoverPipeline, requireStep, snapshotDefinition } from "./Pipeline.ts";
+import { previewBlobEdit, previewPromptEdit, savePromptEdit } from "./Learning.ts";
 import { BlobExecutionError, ConveyorStore } from "./Store.ts";

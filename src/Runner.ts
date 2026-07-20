@@ -37,7 +37,8 @@ export class ConveyorRunner {
     const definition = snapshotDefinition(step, blob.pipelinePath);
     const inputArtifacts = this.store.inputArtifactsFor(blob.id);
     const claim = this.store.beginReceipt({
-      blobId: blob.id, step, definition, adapter: this.harness.name, inputArtifacts,
+      blobId: blob.id, step, definition, adapter: this.harness.name,
+      model: this.harness.model ?? null, inputArtifacts,
     }, ownerId);
     log("receipt_started", { blobId: blob.id, receiptId: claim.receipt.id, stepId: step.id });
     await this.executeClaim(claim, steps, signal, ownerId);
@@ -175,9 +176,14 @@ function harnessInput(claim: ClaimedExecution): HarnessRunInput {
   };
 }
 
-function harnessEventAttributes(event: HarnessEvent): Record<string, string> {
+function harnessEventAttributes(event: HarnessEvent): Record<string, string | number> {
   if (event.type === "external-run") return { eventType: event.type, externalRunId: event.externalRunId };
   if (event.type === "artifact") return { eventType: event.type, artifactRef: event.artifactRef };
+  if (event.type === "metrics") return {
+    eventType: event.type,
+    inputTokens: event.inputTokens ?? -1,
+    outputTokens: event.outputTokens ?? -1,
+  };
   return { eventType: event.type, status: event.status, message: event.message ?? "" };
 }
 

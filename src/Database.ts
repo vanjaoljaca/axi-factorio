@@ -36,6 +36,7 @@ export class FactorioDatabase {
     this.migrateBlobs();
     this.migrateProjects();
     this.migrateReceipts();
+    this.migrateBlobRevisions();
   }
 
   private addProjectColumns(): void {
@@ -81,6 +82,20 @@ export class FactorioDatabase {
     addColumn(this.connection, columns, "executionKind", "TEXT NOT NULL DEFAULT 'automated'");
     addColumn(this.connection, columns, "attestationSource", "TEXT");
     addColumn(this.connection, columns, "attestationEvidenceJson", "TEXT NOT NULL DEFAULT '[]'");
+  }
+
+  private migrateBlobRevisions(): void {
+    const rows = this.connection.prepare(
+      `SELECT id, title, body, createdAt FROM blobs
+       WHERE NOT EXISTS (SELECT 1 FROM blobRevisions WHERE blobId = blobs.id)`,
+    ).all() as Array<{ id: string; title: string; body: string; createdAt: string }>;
+    const insert = this.connection.prepare(
+      `INSERT INTO blobRevisions
+       (blobId, revision, title, body, contentHash, createdAt) VALUES (?, 1, ?, ?, ?, ?)`,
+    );
+    for (const row of rows) {
+      insert.run(row.id, row.title, row.body, revisionHash(row.title, row.body), row.createdAt);
+    }
   }
 }
 
@@ -149,6 +164,32 @@ const schema = `
 
   CREATE INDEX IF NOT EXISTS receiptsByBlob ON receipts(blobId, startedAt, stepOrder);
 
+  CREATE TABLE IF NOT EXISTS blobRevisions (
+    blobId TEXT NOT NULL REFERENCES blobs(id),
+    revision INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    contentHash TEXT NOT NULL,
+    createdAt TEXT NOT NULL,
+    PRIMARY KEY(blobId, revision)
+  );
+
+  CREATE TABLE IF NOT EXISTS attemptEvidence (
+    receiptId TEXT PRIMARY KEY REFERENCES receipts(id),
+    blobRevision INTEGER NOT NULL,
+    blobTitle TEXT NOT NULL,
+    blobBody TEXT NOT NULL,
+    blobContentHash TEXT NOT NULL,
+    definitionGitSha TEXT NOT NULL,
+    definitionHash TEXT NOT NULL,
+    entryMarkdown TEXT NOT NULL,
+    exitMarkdown TEXT NOT NULL,
+    harness TEXT NOT NULL,
+    model TEXT,
+    inputArtifactsJson TEXT NOT NULL,
+    createdAt TEXT NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS humanInputs (
     id TEXT PRIMARY KEY,
     blobId TEXT NOT NULL REFERENCES blobs(id),
@@ -204,6 +245,10 @@ function addColumn(
   columns.add(name);
 }
 
+function revisionHash(title: string, body: string): string {
+  return createHash("sha256").update(`${title}\n${body}`).digest("hex");
+}
+
 type ProjectMigrationRow = { id: string; cwd: string; root: string; pipelineRoot: string };
 
 const columnTables: Record<string, string> = {
@@ -224,5 +269,6 @@ const columnTables: Record<string, string> = {
 };
 
 import { DatabaseSync } from "node:sqlite";
+import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";

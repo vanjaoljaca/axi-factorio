@@ -160,7 +160,7 @@ npm run build
 
 This recreates `release/` with:
 
-- `axi-factorio-0.1.0-rc.10.tgz`, the installable package;
+- `axi-factorio-0.1.0-rc.11.tgz`, the installable package;
 - `SHA256SUMS`, for artifact verification; and
 - `INSTALL.md`, with direct and vendored installation commands.
 
@@ -172,7 +172,7 @@ Do not use `npm link` for a consuming project. Install the exact tarball so
 Install the exact candidate in the consuming npm project:
 
 ```sh
-npm install --save-exact /path/to/axi-factorio-0.1.0-rc.10.tgz
+npm install --save-exact /path/to/axi-factorio-0.1.0-rc.11.tgz
 ```
 
 From the consuming project root, the defaults are:
@@ -294,8 +294,9 @@ external task. Approval requires at least one evidence reference. The prompt
 still decides whether the step passes; Factorio only supplies and records the
 human evidence.
 
-Opening an rc.4 through rc.9 database with rc.10 migrates projects, receipt
-provenance, and durable execution-control columns automatically. Existing
+Opening an rc.4 through rc.10 database with rc.11 migrates projects, receipt
+provenance, durable execution-control columns, blob revisions, and immutable
+attempt evidence automatically. Existing
 blobs migrate in the stopped continuous mode. The old
 project `cwd` becomes the app root, and its initial pipeline root becomes
 `<old-cwd>/pipelines`. Run `project upsert` afterward to point projects at a
@@ -310,8 +311,17 @@ new position color. Paused blobs with no receipts are neutral `Inventory`, not
 blocked work. Orange means human attention is needed; red is reserved for
 failure or broken execution.
 
+Select a task name to open its learning inspector. Step is the primary action:
+it runs exactly one transition and then exposes the complete attempt input,
+entry/exit Markdown, definition Git SHA and content hash, harness/model
+identity, events, artifacts, decision, timing, and token metrics when the
+harness reports them. Blob edits create durable revisions. Prompt edits preview
+a diff and write the actual pipeline Markdown only after explicit save.
+Rewind-and-rerun invalidates the selected step for progression while keeping
+all prior receipts available for side-by-side comparison.
+
 Future multi-pipeline integration is deliberately parked in [ROADMAP.md](ROADMAP.md)
-under **pipeline merger**. rc.10 does not implement it.
+under **pipeline merger**. rc.11 does not implement it.
 
 Explicitly move it back to a step:
 

@@ -13,7 +13,7 @@ test("Workbench mock lab visibly exercises production progression and persistenc
 
     snapshot = await lab.action("feedback");
     assert.equal(snapshot.receipts.at(-1)?.status, "blocked");
-    assert.equal(snapshot.receipts.at(-1)?.continuationThreadId, "mock-run:mock-lab-blob:review.human");
+    assert.equal(snapshot.receipts.at(-1)?.continuationThreadId, "mock-run:learning-lab-blob:review.human");
 
     snapshot = await lab.action("restart");
     assert.equal(snapshot.blob.state, "review.human");
@@ -23,6 +23,60 @@ test("Workbench mock lab visibly exercises production progression and persistenc
     assert.equal(snapshot.blob.state, "complete");
     assert.equal(snapshot.receipts.filter((receipt) => receipt.status === "advance").length, 3);
     assert(snapshot.assertions.every((item) => item.passed));
+  } finally {
+    lab.dispose();
+  }
+});
+
+test("Workbench learning loop preserves blob and prompt provenance across reruns", async () => {
+  const lab = new MockHarnessLab();
+  try {
+    await lab.action("step");
+    const first = lab.snapshot().attempts[0];
+
+    lab.previewBlobEdit("Implement an improved request with exact evidence.");
+    lab.saveBlobEdit();
+    const before = lab.promptContent("entry");
+    lab.previewPromptEdit("entry", `${before.trim()}\n\nUse the revised blob evidence.`);
+    lab.savePromptEdit();
+    const snapshot = await lab.action("rewind-step");
+
+    assert.equal(snapshot.attempts.length, 2);
+    assert.equal(snapshot.attempts[0].blobRevision.revision, 1);
+    assert.equal(snapshot.attempts[1].blobRevision.revision, 2);
+    assert.notEqual(snapshot.attempts[0].definition.contentHash, snapshot.attempts[1].definition.contentHash);
+    assert.equal(snapshot.attempts[0].receipt.invalidatedAt === null, false);
+    assert.equal(snapshot.attempts[0].inputSnapshot.body, first.inputSnapshot.body);
+    assert(snapshot.assertions.every((assertion) => assertion.passed));
+  } finally {
+    lab.dispose();
+  }
+});
+
+test("Workbench scenario catalog prepares every requested learning state", async () => {
+  const lab = new MockHarnessLab();
+  try {
+    const ids = lab.snapshot().scenarioCatalog.map((scenario) => scenario.id);
+    assert.deepEqual(ids, [
+      "first-attempt", "blob-edit", "prompt-edit", "rerun", "compare",
+      "retry", "blocked", "failure", "improved", "cancel-invalid",
+    ]);
+
+    let snapshot = await lab.selectScenario("retry");
+    assert.equal(snapshot.attempts.at(-1)?.decision, "retry");
+
+    snapshot = await lab.selectScenario("blocked");
+    assert.equal(snapshot.attempts.at(-1)?.decision, "blocked");
+    assert.equal(snapshot.humanInputs.at(-1)?.kind, "feedback");
+
+    snapshot = await lab.selectScenario("improved");
+    assert.equal(snapshot.attempts.length, 2);
+    assert.equal(snapshot.attempts[0].decision, "retry");
+    assert.equal(snapshot.attempts[1].decision, "advance");
+
+    snapshot = await lab.selectScenario("cancel-invalid");
+    assert.equal(snapshot.editor.valid, false);
+    assert.match(snapshot.editor.error ?? "", /cannot be empty/);
   } finally {
     lab.dispose();
   }

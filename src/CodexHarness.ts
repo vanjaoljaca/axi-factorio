@@ -1,5 +1,6 @@
 export class CodexHarness implements AgentHarness {
   readonly name = "codex";
+  readonly model = "codex-cli-default";
   private readonly active = new Map<string, ActiveRun>();
 
   constructor(platform: NodeJS.Platform = process.platform) {

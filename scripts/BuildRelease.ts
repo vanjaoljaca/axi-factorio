@@ -94,9 +94,10 @@ npx axi-factorio project show APP_ID --json
 \`\`\`
 
 New blobs use the project root as their harness working directory and resolve the
-highest \`vN\` under the shared pipeline root. Existing rc.4 through rc.9 databases
+highest \`vN\` under the shared pipeline root. Existing rc.4 through rc.10 databases
 migrate on first open, including imported-receipt provenance and durable
-execution-control columns and the append-only harness event table. Use
+execution-control columns, blob revisions, immutable attempt evidence, and the
+append-only harness event table. Use
 \`project upsert\` to replace the migrated
 \`<old-cwd>/pipelines\` root with the shared workspace pipeline root.
 

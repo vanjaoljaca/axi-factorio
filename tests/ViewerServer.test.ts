@@ -111,9 +111,128 @@ test("viewer execution API persists Play, Step, and Stop without duplicate reque
   assert.equal(stepped.blob.runRequested, true);
 });
 
+test("production learning API preserves revisions, prompt provenance, reruns, and restart history", async () => {
+  const fixture = createPipeline(["build.first", "review.second"]);
+  const databasePath = join(fixture.root, "factorio.sqlite");
+  let database = new FactorioDatabase(databasePath);
+  let store = new ConveyorStore(database);
+  store.createBlob("learning", {
+    title: "Learning item", body: "First request", cwd: fixture.root,
+    pipelinePath: fixture.pipelinePath, inputArtifacts: ["request:test"],
+  });
+  store.requestStep("learning");
+  await new ConveyorService(store, new ConveyorRunner(store, new MockAgentHarness())).runOnce(
+    new AbortController().signal,
+  );
+  database.close();
+  let server = createViewerServer(databasePath);
+  let endpoint = await listen(server);
+
+  const first = await fetch(`${endpoint}/api/blobs/learning/learning`).then(readJson);
+  assert.equal(first.attempts.length, 1);
+  assert.equal(first.attempts[0].evidence.blobRevision.revision, 1);
+  assert.equal(first.attempts[0].evidence.definition.entry, "entry:build.first");
+  assert.equal(first.attempts[0].inputTokens, 40);
+  assert.equal(first.attempts[0].outputTokens, 20);
+
+  const blobPreview = await postJson(endpoint, "learning", "blob/preview", {
+    title: "Learning item", body: "Improved request",
+  });
+  assert.equal(blobPreview.valid, true);
+  await postJson(endpoint, "learning", "blob/save", {
+    title: "Learning item", body: "Improved request", expectedRevision: 1,
+  });
+  const promptPreview = await postJson(endpoint, "learning", "prompt/preview", {
+    stepId: "build.first", kind: "entry", content: "entry:build.first\nimproved",
+  });
+  assert.equal(promptPreview.valid, true);
+  await postJson(endpoint, "learning", "prompt/save", {
+    stepId: "build.first", kind: "entry", content: "entry:build.first\nimproved",
+    expectedContentHash: promptPreview.expectedContentHash,
+  });
+  await postJson(endpoint, "learning", "rewind-step", { stepId: "build.first" });
+  await close(server);
+
+  database = new FactorioDatabase(databasePath);
+  store = new ConveyorStore(database);
+  await new ConveyorService(store, new ConveyorRunner(store, new MockAgentHarness())).runOnce(
+    new AbortController().signal,
+  );
+  database.close();
+  server = createViewerServer(databasePath);
+  endpoint = await listen(server);
+  const restarted = await fetch(`${endpoint}/api/blobs/learning/learning`).then(readJson);
+  await close(server);
+
+  assert.equal(restarted.revision.revision, 2);
+  assert.equal(restarted.attempts.length, 2);
+  assert.ok(restarted.attempts[0].receipt.invalidatedAt);
+  assert.equal(restarted.attempts[0].evidence.blobRevision.body, "First request");
+  assert.equal(restarted.attempts[1].evidence.blobRevision.body, "Improved request");
+  assert.notEqual(
+    restarted.attempts[0].evidence.definition.contentHash,
+    restarted.attempts[1].evidence.definition.contentHash,
+  );
+});
+
+test("production learning API rejects invalid and stale prompt edits without writing", async () => {
+  const fixture = createPipeline(["build.first"]);
+  const databasePath = join(fixture.root, "factorio.sqlite");
+  const database = new FactorioDatabase(databasePath);
+  const store = new ConveyorStore(database);
+  store.createBlob("safe-edit", blobInput(fixture, "Safe edit"));
+  database.close();
+  const server = createViewerServer(databasePath);
+  const endpoint = await listen(server);
+
+  const invalid = await postJson(endpoint, "safe-edit", "prompt/preview", {
+    stepId: "build.first", kind: "entry", content: "",
+  });
+  assert.equal(invalid.valid, false);
+  const response = await fetch(`${endpoint}/api/blobs/safe-edit/prompt/save`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      stepId: "build.first", kind: "entry", content: "changed", expectedContentHash: "stale",
+    }),
+  });
+  await close(server);
+
+  assert.equal(response.status, 500);
+  assert.equal(readFileSync(discoverPipeline(fixture.pipelinePath)[0].entryPath, "utf8"), "entry:build.first");
+});
+
 async function readJson(response: Response): Promise<any> {
   assert.equal(response.status, 200);
   return response.json();
+}
+
+async function postJson(
+  endpoint: string,
+  blobId: string,
+  action: string,
+  body: Record<string, unknown>,
+): Promise<any> {
+  const response = await fetch(`${endpoint}/api/blobs/${blobId}/${action}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (response.status !== 200) {
+    assert.fail(`Expected 200, received ${response.status}: ${await response.text()}`);
+  }
+  return response.json();
+}
+
+async function listen(server: ReturnType<typeof createViewerServer>): Promise<string> {
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("Viewer did not bind a TCP port.");
+  return `http://127.0.0.1:${address.port}`;
+}
+
+async function close(server: ReturnType<typeof createViewerServer>): Promise<void> {
+  await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
 }
 
 function selectState(
@@ -153,7 +272,10 @@ import { FactorioDatabase } from "../src/Database.ts";
 import { ConveyorStore } from "../src/Store.ts";
 import { createViewerServer, createViewSnapshot } from "../src/ViewerServer.ts";
 import { discoverPipeline, snapshotDefinition } from "../src/Pipeline.ts";
+import { ConveyorRunner } from "../src/Runner.ts";
+import { ConveyorService } from "../src/Service.ts";
+import { MockAgentHarness } from "../test/harness/MockHarness.ts";
 import assert from "node:assert/strict";
-import { mkdirSync, renameSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync } from "node:fs";
 import test from "node:test";
 import { dirname, join } from "node:path";

@@ -1,7 +1,9 @@
 export class MockAgentHarness implements AgentHarness {
   readonly name = "deterministic-mock";
+  readonly model = "deterministic-v1";
   private nextFailure = false;
   private nextRetry = false;
+  private nextBlock = false;
   private active = new Map<string, () => void>();
   private readonly delayMs: number;
 
@@ -15,6 +17,10 @@ export class MockAgentHarness implements AgentHarness {
 
   retryNext(): void {
     this.nextRetry = true;
+  }
+
+  blockNext(): void {
+    this.nextBlock = true;
   }
 
   async start(input: HarnessStartInput, observer: HarnessObserver): Promise<HarnessResult> {
@@ -43,6 +49,7 @@ export class MockAgentHarness implements AgentHarness {
       const decision = this.decision(input);
       const artifactRef = `mock-artifact:${input.blob.id}:${input.step.id}:${decision}`;
       observer.event({ type: "artifact", artifactRef });
+      observer.event({ type: "metrics", inputTokens: 40 + input.step.order, outputTokens: 20 });
       observer.event({ type: "status", status: decision, message: "deterministic terminal" });
       return {
         decision,
@@ -59,6 +66,10 @@ export class MockAgentHarness implements AgentHarness {
     if (this.nextRetry) {
       this.nextRetry = false;
       return "retry";
+    }
+    if (this.nextBlock) {
+      this.nextBlock = false;
+      return "blocked";
     }
     if (input.step.id === "review.human" && !input.approvalEvidence) return "blocked";
     return "advance";
