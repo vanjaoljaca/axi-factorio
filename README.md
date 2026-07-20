@@ -354,12 +354,11 @@ The same operation is available through
 
 When an assigned execution workspace belongs to a Git repository whose writable
 metadata resolves outside that workspace, the Codex harness asks Git for the
-work root, Git dir, common dir, and `objects`, `refs`, and `logs` paths. A linked
-Git worktree is one topology that exposes this case. The harness adds only the
-Git-owned state required to commit through repeatable `--add-dir` arguments,
-without widening the workspace sandbox to unrelated folders. The assigned
-workspace must equal Git's reported work root; non-Git workspaces retain their
-previous behavior.
+work root, Git dir, common dir, and `objects`, `refs`, and `logs` paths. The
+harness adds only the Git-owned state required to commit through repeatable
+`--add-dir` arguments, without widening the workspace sandbox to unrelated
+folders. The assigned workspace must equal Git's reported work root; non-Git
+workspaces retain their previous behavior.
 
 Opening an rc.4 through rc.19 database with rc.20 migrates projects, receipt
 provenance, durable execution-control columns, blob revisions, and immutable
