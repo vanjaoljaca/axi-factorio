@@ -3,11 +3,18 @@ test("Workbench visibly plays and resets a real in-flight Store and Runner execu
   try {
     const ready = scenario.snapshot().frames[0];
     assert.equal(ready.visual.phase, "ready");
+    assert.equal(ready.blobs.length, 1);
+    assert.equal(ready.blobs[0].stepId, "g1.first");
     assert.equal(ready.visual.executions.length, 1);
     assert.equal(ready.visual.executions[0].stale, true);
     assert.deepEqual(ready.visual.statusItems.map((item) => item.status), ["waiting"]);
 
-    const running = (await scenario.play()).frames[0];
+    const queued = (await scenario.play()).frames[0];
+    assert.equal(queued.visual.phase, "queued");
+    assert.equal(queued.blobs[0].stepId, "g1.first");
+
+    await waitUntil(() => scenario.snapshot().frames[0].visual.phase === "running");
+    const running = scenario.snapshot().frames[0];
     const execution = running.visual.executions.find((item) => item.blobId === "visible-agent-session")!;
     assert.equal(running.visual.phase, "running");
     assert.equal(execution.projectName, "Example App");
@@ -19,7 +26,7 @@ test("Workbench visibly plays and resets a real in-flight Store and Runner execu
     assert.equal(execution.status, "running");
     assert.equal(execution.executionWorkspace.length > 0, true);
     assert.deepEqual(running.visual.statusItems.map((item) => item.status), ["queued", "waiting"]);
-    assert.deepEqual(running.blobs.map((blob) => blob.state), ["running", "queued", "waiting", "running"]);
+    assert.deepEqual(running.blobs.map((blob) => blob.state), ["running"]);
 
     await pause(1_050);
     const active = scenario.snapshot().frames[0].visual.executions.find(
@@ -34,6 +41,7 @@ test("Workbench visibly plays and resets a real in-flight Store and Runner execu
     await scenario.play();
     await waitUntil(() => scenario.snapshot().frames[0].visual.phase === "retry");
     const retry = scenario.snapshot().frames[0];
+    assert.equal(retry.blobs[0].stepId, "g1.first");
     const retryReceipt = retry.visual.executions.find(
       (item) => item.blobId === "visible-agent-session",
     )!;
@@ -47,26 +55,26 @@ test("Workbench visibly plays and resets a real in-flight Store and Runner execu
     assert.match(retryReceipt.terminalReason ?? "", /improved pass/u);
 
     await scenario.play();
-    await waitUntil(() => scenario.snapshot().frames[0].visual.phase === "complete");
-    const complete = scenario.snapshot().frames[0];
-    assert.equal(complete.visual.executions.length, 3);
-    assert.equal(complete.visual.executions[0].status, "advance");
-    assert.equal(complete.visual.executions[0].attempt, 2);
-    assert.equal(complete.visual.executions[0].sessionId, retryReceipt.sessionId);
-    assert(complete.receipts.some((receipt) =>
+    await waitUntil(() => scenario.snapshot().frames[0].visual.phase === "advanced");
+    const advanced = scenario.snapshot().frames[0];
+    assert.equal(advanced.blobs[0].stepId, "g2.second");
+    assert.equal(advanced.visual.executions.length, 3);
+    assert.equal(advanced.visual.executions[0].status, "advance");
+    assert.equal(advanced.visual.executions[0].attempt, 2);
+    assert.equal(advanced.visual.executions[0].sessionId, retryReceipt.sessionId);
+    assert(advanced.receipts.some((receipt) =>
       receipt.blobId === "visible-agent-session" && receipt.status === "advance"));
 
     const reset = (await scenario.reset()).frames[0];
     assert.equal(reset.visual.phase, "ready");
-    assert.equal(reset.receipts.length, 2);
-    assert.deepEqual(reset.receipts.map((receipt) => receipt.status).sort(), ["blocked", "running"]);
+    assert.equal(reset.receipts.length, 0);
   } finally {
     await scenario.dispose();
   }
 });
 
 async function waitUntil(condition: () => boolean): Promise<void> {
-  for (let index = 0; index < 60; index += 1) {
+  for (let index = 0; index < 100; index += 1) {
     if (condition()) return;
     await pause(50);
   }

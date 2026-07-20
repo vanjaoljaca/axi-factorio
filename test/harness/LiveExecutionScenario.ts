@@ -13,7 +13,7 @@ type LiveExecutionFrame = {
   assertions: { label: string; passed: boolean }[];
   visual: {
     kind: "live-execution";
-    phase: "ready" | "queued" | "running" | "retry" | "complete" | "failed";
+    phase: "ready" | "queued" | "running" | "retry" | "advanced" | "complete" | "failed";
     executionOverviewHtml: string;
     executions: ExecutionSession[];
     statusItems: ExecutionStatusItem[];
@@ -41,20 +41,21 @@ export class LiveExecutionScenario {
     const statusItems = visibleStatusItems(store);
     const events = store.listExecutionEvents(blob.id);
     const phase = this.phase(blob, liveExecutions, receipts);
+    const primaryExecutions = executions.filter((execution) => execution.blobId === blobId);
     return {
       id: scenarioId,
       frames: [{
-        name: "Live agent sessions",
-        description: "Play runs a deterministic agent harness through the real Store and Runner. Reset recreates the temporary database.",
+        name: "Execution sessions: task movement",
+        description: "Play one real Store/Runner transition and watch the task stay or advance on its pipeline.",
         source: "scenario",
         steps: this.runtime.steps.map((step) => ({ id: step.id, label: titleCase(step.id) })),
         blobs: visibleBlobs(store, phase),
-        receipts: store.listReceipts().map(viewReceipt),
+        receipts: receipts.map(viewReceipt),
         assertions: assertions(phase, executions, statusItems, receipts),
         visual: {
           kind: "live-execution",
           phase,
-          executionOverviewHtml: executionOverviewMarkup(executions, statusItems),
+          executionOverviewHtml: liveExecutionMarkup(primaryExecutions, true),
           executions,
           statusItems,
           timeline: events.map((event) => ({
@@ -62,7 +63,7 @@ export class LiveExecutionScenario {
             label: timelineLabel(event.name, event.attributes),
             at: event.createdAt,
           })),
-          playEnabled: phase === "ready" || phase === "retry",
+          playEnabled: ["ready", "retry", "advanced"].includes(phase),
         },
       }],
     };
@@ -76,10 +77,9 @@ export class LiveExecutionScenario {
       this.runtime.store.requestStop(queuedBlobId);
     }
     this.runtime.store.requestStep(blob.id);
+    this.runtime.store.requestStep(queuedBlobId);
     this.abort = new AbortController();
     this.active = this.run(this.abort.signal);
-    await waitUntil(() => listLiveExecutions(this.runtime.store)[0]?.sessionId !== null);
-    this.runtime.store.requestStep(queuedBlobId);
     return this.snapshot();
   }
 
@@ -98,6 +98,7 @@ export class LiveExecutionScenario {
 
   private async run(signal: AbortSignal): Promise<void> {
     try {
+      await pause(400, signal);
       await this.runtime.runner.runOnce(signal);
     } catch (error) {
       this.error = error instanceof Error ? error.message : String(error);
@@ -121,7 +122,8 @@ export class LiveExecutionScenario {
     if (this.error || receipts.at(-1)?.status === "failed") return "failed";
     if (executions.length) return "running";
     if (receipts.at(-1)?.status === "retry") return "retry";
-    if (receipts.at(-1)?.status === "advance" || blob.state === "complete") return "complete";
+    if (blob.state === "complete") return "complete";
+    if (receipts.at(-1)?.status === "advance") return "advanced";
     if (blob.runRequested) return "queued";
     return "ready";
   }
@@ -335,19 +337,8 @@ function visibleBlobs(
   store: ConveyorStore,
   phase: LiveExecutionFrame["visual"]["phase"],
 ): LiveExecutionFrame["blobs"] {
-  return [blobId, queuedBlobId, reviewBlobId, staleBlobId].map((id) => {
-    const blob = store.getBlob(id)!;
-    const state = id === blobId
-      ? phase
-      : id === queuedBlobId && blob.runRequested
-        ? "queued"
-        : id === reviewBlobId
-          ? "waiting"
-          : id === staleBlobId
-            ? "running"
-          : "ready";
-    return { id: blob.id, title: blob.title, state, stepId: blob.state };
-  });
+  const blob = store.getBlob(blobId)!;
+  return [{ id: blob.id, title: blob.title, state: phase, stepId: blob.state }];
 }
 
 function visibleStatusItems(store: ConveyorStore): ExecutionStatusItem[] {
@@ -393,14 +384,6 @@ function timelineLabel(
 
 function titleCase(value: string): string {
   return value.split(".").at(-1)!.replace(/\b\w/gu, (letter) => letter.toUpperCase());
-}
-
-async function waitUntil(condition: () => boolean): Promise<void> {
-  for (let index = 0; index < 50; index += 1) {
-    if (condition()) return;
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-  throw new Error("Live execution did not become visible.");
 }
 
 function pause(milliseconds: number, signal: AbortSignal): Promise<void> {
@@ -449,9 +432,9 @@ import { ConveyorStore } from "../../src/Store.ts";
 import { FactorioDatabase } from "../../src/Database.ts";
 import { discoverPipeline, snapshotDefinition } from "../../src/Pipeline.ts";
 import {
-  executionOverviewMarkup,
   listExecutionSessions,
   listLiveExecutions,
+  liveExecutionMarkup,
 } from "../../src/LiveExecutions.ts";
 import { execFileSync } from "node:child_process";
 import { cpSync, mkdtempSync, rmSync } from "node:fs";
