@@ -6,7 +6,7 @@ export class CursorActionScenario {
   private readonly missingRoot = join(this.root, "missing-workspace");
   private readonly calls: CursorCall[] = [];
   private readonly launcher: CursorWorkspaceLauncher;
-  private lastResult = "Ready to open a workspace.";
+  private lastResult = "Default opener: Cursor. Click a task name to open its menu.";
 
   constructor() {
     mkdirSync(this.assignedRoot);
@@ -41,7 +41,7 @@ export class CursorActionScenario {
 
   reset(): Scenario {
     this.calls.length = 0;
-    this.lastResult = "Ready to open a workspace.";
+    this.lastResult = "Default opener: Cursor. Click a task name to open its menu.";
     return this.snapshot();
   }
 
@@ -52,15 +52,18 @@ export class CursorActionScenario {
   private frame(): WorkbenchFrame {
     const rows = this.blobs().map((blob) => this.row(blob));
     return {
-      name: "Open workspace in Cursor",
-      description: "Real action state + safe fake launcher · Play or use the actual row action · Reset",
+      name: "Configured task opener menu",
+      description: "Click task name · Open through default Cursor · unavailable state · Reset",
       source: "scenario", steps: [], blobs: [], receipts: [],
       assertions: this.assertions(rows),
       evidenceCards: [{
         label: "Captured argv",
         value: this.calls.map((call) => `${call.executable}\n${JSON.stringify(call.args)}`).join("\n") || "No launch yet",
       }],
-      visual: { kind: "cursor-action", rows, lastResult: this.lastResult, calls: this.calls.length },
+      visual: {
+        kind: "cursor-action", rows, lastResult: this.lastResult, calls: this.calls.length,
+        menuHtml: workspaceOpenMenuMarkup(), openerLabel: "Cursor",
+      },
     };
   }
 
@@ -68,7 +71,7 @@ export class CursorActionScenario {
     const action = this.launcher.inspect(blob);
     return {
       id: blob.id, title: blob.title, root: action.root, workspaceKind: action.workspaceKind,
-      action, actionHtml: cursorActionMarkup(blob.id, action),
+      action, triggerHtml: blobNameMenuTriggerMarkup(blob.id, blob.title),
     };
   }
 
@@ -97,6 +100,8 @@ export type CursorActionVisual = {
   rows: CursorScenarioRow[];
   lastResult: string;
   calls: number;
+  menuHtml: string;
+  openerLabel: string;
 };
 type CursorScenarioRow = {
   id: string;
@@ -104,7 +109,7 @@ type CursorScenarioRow = {
   root: string;
   workspaceKind: string;
   action: CursorActionState;
-  actionHtml: string;
+  triggerHtml: string;
 };
 type ScenarioBlob = { id: string; title: string; cwd: string; executionWorkspaceRoot: string };
 type CursorCall = { executable: string; args: string[] };
@@ -126,7 +131,7 @@ const scenarioId = "cursor-action";
 
 import type { CursorActionState } from "../../src/CursorAction.ts";
 import { CursorLaunchError, CursorWorkspaceLauncher } from "../../src/CursorAction.ts";
-import { cursorActionMarkup } from "../../src/CursorActionView.ts";
+import { blobNameMenuTriggerMarkup, workspaceOpenMenuMarkup } from "../../src/ViewerComponents.ts";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

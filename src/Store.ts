@@ -43,6 +43,19 @@ export class ConveyorStore {
     return row?.value === "true";
   }
 
+  opener(): string {
+    const row = this.database.connection.prepare(settingSelect).get("opener") as { value?: string } | undefined;
+    return row?.value ?? "cursor";
+  }
+
+  setOpener(opener: string): string {
+    if (opener !== "cursor") throw new Error(`Unsupported opener: ${opener}.`);
+    return this.database.transaction(() => {
+      this.database.connection.prepare(settingUpsert).run("opener", opener, this.now());
+      return this.opener();
+    });
+  }
+
   setDebugMode(enabled: boolean): boolean {
     return this.database.transaction(() => {
       this.database.connection.prepare(settingUpsert).run("debugMode", String(enabled), this.now());

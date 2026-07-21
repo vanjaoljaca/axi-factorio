@@ -99,6 +99,14 @@ test("Debug mode persists and stops continuous progression at the next boundary"
   fixture.database.close();
 });
 
+test("configured opener defaults to Cursor and persists only supported choices", () => {
+  const fixture = createStoreFixture();
+  assert.equal(fixture.store.opener(), "cursor");
+  assert.equal(fixture.store.setOpener("cursor"), "cursor");
+  assert.throws(() => fixture.store.setOpener("shell"), /Unsupported opener/u);
+  fixture.database.close();
+});
+
 test("execution workspace binding keeps app identity and pipeline while widening only the sandbox root", () => {
   const fixture = createStoreFixture(["plan.define"]);
   const worktree = join(fixture.root, "worktree");

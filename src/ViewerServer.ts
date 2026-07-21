@@ -18,8 +18,7 @@ type ViewBlob = {
   running: boolean;
   status: "ready" | "queued" | "held" | "running" | "waiting" | "blocked" | "failed" | "complete";
   execution: ViewExecutionControl;
-  cursor: CursorActionState;
-  cursorActionHtml: string;
+  open: CursorActionState;
   completedStepIds: string[];
   importedStepIds: string[];
   steps: ViewStep[];
@@ -54,13 +53,14 @@ export function createViewSnapshot(
     const store = new ConveyorStore(database);
     const receipts = store.listReceipts();
     const debugMode = store.debugMode();
+    const opener = store.opener();
     const projects = groupProjects(store.listProjects(), store.listBlobs(), receipts, cursorLauncher, debugMode);
     const steps = sharedSteps(projects);
     const executionSessions = listExecutionSessions(store).slice(0, 12);
     const executionStatusItems = listExecutionStatusItems(store);
     return {
       name: "Factorio Dashboard",
-      settings: { debugMode },
+      settings: { debugMode, opener: { id: opener, label: openerLabel(opener) } },
       stats: { tasks: projects.reduce((sum, project) => sum + project.blobs.length, 0), projects: projects.length },
       groups: stepGroups(steps),
       steps,
@@ -93,6 +93,9 @@ export function createViewerServer(
         if (url.pathname === "/api/settings/debug-mode") {
           return await debugModeRequest(request, response, databasePath);
         }
+        if (url.pathname === "/api/settings/opener") {
+          return await openerRequest(request, response, databasePath);
+        }
         return await controlRequest(request, response, databasePath, url.pathname, cursorLauncher);
       }
       if (request.method === "GET" && url.pathname === "/") return html(response, viewerHtml);
@@ -102,6 +105,22 @@ export function createViewerServer(
       json(response, { error: error instanceof Error ? error.message : String(error) }, status);
     }
   });
+}
+
+async function openerRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  databasePath: string,
+): Promise<void> {
+  const body = await readBody(request);
+  const opener = text(body.opener);
+  const database = new FactorioDatabase(databasePath);
+  try {
+    const selected = new ConveyorStore(database).setOpener(opener);
+    json(response, { ok: true, settings: { opener: { id: selected, label: openerLabel(selected) } } });
+  } finally {
+    database.close();
+  }
 }
 
 async function debugModeRequest(
@@ -153,10 +172,12 @@ async function controlRequest(
     const store = new ConveyorStore(database);
     const id = decodeURIComponent(match[1]);
     const action = match[2];
-    if (action === "open-cursor") {
+    if (action === "open" || action === "open-cursor") {
       if (!isLoopbackAddress(request.socket.remoteAddress)) {
         return json(response, { error: "Opening Cursor is available only from this Mac." }, 403);
       }
+      const opener = store.opener();
+      if (opener !== "cursor") throw new Error(`Configured opener ${opener} is unavailable.`);
       return json(response, await cursorLauncher.open(requireBlob(store, id)));
     }
     if (["play", "step", "stop"].includes(action)) {
@@ -395,7 +416,7 @@ function viewBlob(
 ): ViewBlob {
   const relevant = receipts.filter((receipt) => receipt.blobId === blob.id && !receipt.invalidatedAt);
   const latest = relevant.at(-1);
-  const cursor = cursorLauncher.inspect(blob);
+  const open = cursorLauncher.inspect(blob);
   return {
     id: blob.id,
     title: blob.title,
@@ -406,8 +427,7 @@ function viewBlob(
     running: latest?.status === "running",
     status: viewStatus(blob, latest),
     execution: viewExecution(blob, latest, debugMode),
-    cursor,
-    cursorActionHtml: cursorActionMarkup(blob.id, cursor),
+    open,
     completedStepIds: relevant.filter((receipt) => receipt.status === "advance").map((receipt) => receipt.stepId),
     importedStepIds: relevant.filter((receipt) =>
       receipt.status === "advance" && receipt.executionKind === "imported").map((receipt) => receipt.stepId),
@@ -560,6 +580,10 @@ function titleCase(value: string): string {
   }).join(" ");
 }
 
+function openerLabel(opener: string): string {
+  return opener === "cursor" ? "Cursor" : titleCase(opener);
+}
+
 function argument(name: string): string | undefined {
   const index = process.argv.indexOf(name);
   return index < 0 ? undefined : process.argv[index + 1];
@@ -588,6 +612,7 @@ button,input{font:inherit;color:inherit}.app{min-height:100vh;display:grid;grid-
 ${liveExecutionStyles}
 @media(max-width:760px){.app{grid-template-columns:76px minmax(0,1fr)}.rail{width:76px;padding-inline:7px}.brand{margin-inline:4px}.nav-item{justify-content:center;padding:0;font-size:9px}.agent{display:none}.identity{min-width:auto}.identity strong{font-size:11px}.content{padding-inline:12px}.topbar{padding-inline:12px}.search{width:min(240px,45vw)}}
 @media(max-width:520px){.app{display:block}.rail{position:static;width:100%;height:48px;border-right:0;border-bottom:1px solid var(--line);display:flex;flex-direction:row;align-items:center;padding:6px 10px}.brand{margin:0 14px 0 0}.nav{display:flex}.nav-item{height:30px;padding:0 8px}.nav-item:not(.active){display:none}.main{display:block}.topbar{height:auto;min-height:92px;flex-wrap:wrap;padding-block:12px}.identity{width:calc(100% - 72px)}.search{order:3;width:100%;margin:0}.content{padding-top:10px}.matrix-head{grid-template-columns:220px repeat(var(--steps),minmax(66px,1fr))}.taskrow{grid-template-columns:220px repeat(var(--steps),minmax(66px,1fr))}.task-title{padding-left:14px}.task-status{display:none}}
+.project-head-row{height:37px;display:grid;grid-template-columns:280px repeat(var(--steps),minmax(72px,1fr));align-items:center;position:relative;background:#fff}.project-identity{position:sticky;left:0;z-index:2;height:37px;display:flex;align-items:center;padding:0 34px 0 24px;background:inherit;font-weight:700;font-size:10px;min-width:0}.project-identity>span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.project-identity .pipeline-issue{margin-left:8px;border:1px solid #e5c89f;border-radius:999px;background:#fff8ed;color:#986016;padding:2px 7px;font-size:8px;font-weight:700;white-space:nowrap}.project-disclosure{position:absolute;right:7px;top:6px;z-index:5;width:24px;height:24px;border:0;border-radius:5px;background:transparent;color:#68726c;display:grid;place-items:center;cursor:pointer;font-size:17px;line-height:1}.project-disclosure:hover{background:var(--neutral-soft)}.project-disclosure:focus-visible{outline:2px solid #85938a;outline-offset:1px}.project.collapsed .taskrows{display:none}.project-head-track{height:37px;position:relative}.project-head-track:before{content:"";position:absolute;left:0;right:0;top:19px;height:1px;background:var(--line-strong)}.project-head-track.first:before{left:50%}.project-head-track.last:before{right:50%}.task-name-button{display:block;max-width:100%;color:inherit}.task-name-button:focus-visible{outline:2px solid #85938a;outline-offset:2px;border-radius:2px}.blob-menu{position:fixed;z-index:1000;min-width:148px;padding:4px;border:1px solid var(--line-strong);border-radius:7px;background:#fff;box-shadow:0 10px 28px #18201b24}.blob-menu[hidden]{display:none}.blob-menu button{width:100%;height:31px;border:0;border-radius:4px;background:transparent;padding:0 10px;text-align:left;cursor:pointer;font-size:10px}.blob-menu button:hover,.blob-menu button:focus-visible{background:var(--neutral-soft);outline:0}.blob-menu button:disabled{color:#a9b0ac;cursor:not-allowed}.blob-menu small{display:block;padding:5px 10px;color:var(--muted);font-size:8px;max-width:220px}.opener-select{height:30px;min-width:130px;border:1px solid var(--line-strong);border-radius:5px;background:#fff;padding:0 28px 0 9px}@media(max-width:520px){.project-head-row{grid-template-columns:220px repeat(var(--steps),minmax(66px,1fr))}.project-identity{padding-left:14px}.blob-menu{max-width:calc(100vw - 16px)}}
 </style></head><body><div class="app">
 <aside class="rail" aria-label="Primary navigation"><div class="brand">axi-factorio</div><nav class="nav">
 <button class="nav-item active" data-page="overview">Overview</button><button class="nav-item" data-page="projects">Projects</button><button class="nav-item" data-page="runs">Runs</button><button class="nav-item" data-page="alerts">Alerts</button><button class="nav-item" data-page="settings">Settings</button>
@@ -601,8 +626,10 @@ ${liveExecutionStyles}
 <div id="action-status" class="action-status" role="status"></div><div id="error" role="status"></div>
 <section class="learning" id="learning" hidden aria-label="Task learning inspector"></section>
 </section></main></div>
+${workspaceOpenMenuMarkup()}
 <script>
-const byId=id=>document.getElementById(id);let snapshot=null,learning=null,selectedAttemptId=null,blobPreview=null,promptPreview=null,currentPage='overview';const collapsedProjects=new Set();
+${viewerComponentScript}
+const byId=id=>document.getElementById(id);let snapshot=null,learning=null,selectedAttemptId=null,blobPreview=null,promptPreview=null,currentPage='overview',menuTrigger=null,menuBlobId=null;const collapsedProjects=new Set();
 async function load(){try{const response=await fetch('/api/view');if(!response.ok)throw new Error('Could not refresh the workspace.');snapshot=await response.json();render();byId('error').innerHTML=''}catch(error){byId('error').innerHTML='<div class="error">'+escapeHtml(error.message)+'</div>'}}
 function render(){if(!snapshot)return;document.querySelectorAll('[data-page]').forEach(button=>button.classList.toggle('active',button.dataset.page===currentPage));byId('page-title').textContent=pageTitle();byId('search').hidden=!['overview','projects'].includes(currentPage);byId('footer').hidden=currentPage!=='overview';byId('workspace').classList.toggle('plain',currentPage!=='overview');if(currentPage==='overview')return renderOverview();if(currentPage==='projects')return renderProjects();if(currentPage==='runs')return renderRuns();if(currentPage==='alerts')return renderAlerts();renderSettings()}
 function pageTitle(){return {overview:'All Projects',projects:'Projects',runs:'Runs',alerts:'Alerts',settings:'Settings'}[currentPage]}
@@ -611,12 +638,12 @@ function renderOverview(){const projects=filteredProjects();const query=byId('se
 function renderProjects(){const projects=filteredProjects();byId('workspace').innerHTML='<div class="page-list">'+(projects.map(project=>'<article class="page-card"><div class="page-card-head"><strong>'+escapeHtml(project.name)+'</strong><span>'+project.blobs.length+' '+plural(project.blobs.length,'task')+'</span></div><p>Pipeline '+escapeHtml(project.resolvedPipeline||project.defaultPipeline)+(project.pipelineIssue?' · '+escapeHtml(project.pipelineIssue.summary):'')+'</p><p><code>'+escapeHtml(project.root)+'</code></p></article>').join('')||'<div class="empty"><b>No projects found</b>Try another search.</div>')+'</div>'}
 function renderRuns(){byId('workspace').innerHTML=snapshot.executionOverviewHtml||'<div class="empty"><b>No runs yet</b>Execution history will appear here.</div>'}
 function renderAlerts(){const alerts=[];for(const project of snapshot.projects){if(project.pipelineIssue)alerts.push({kind:'failure',title:project.name+' · Pipeline unavailable',detail:project.pipelineIssue.detail});for(const blob of project.blobs){if(blob.status==='failed')alerts.push({kind:'failure',title:blob.title+' · Failed',detail:'Current step: '+blob.stepId});else if(blob.status==='blocked'||blob.status==='waiting')alerts.push({kind:'attention',title:blob.title+' · '+statusLabel(blob.status),detail:project.name+' · '+blob.stepId})}}byId('workspace').innerHTML=alerts.length?'<div class="page-list">'+alerts.map(alert=>'<article class="page-card alert-card '+alert.kind+'"><div class="page-card-head"><strong>'+escapeHtml(alert.title)+'</strong></div><p>'+escapeHtml(alert.detail)+'</p></article>').join('')+'</div>':'<div class="empty"><b>No alerts</b>Failures and work needing attention will appear here.</div>'}
-function renderSettings(){const enabled=snapshot.settings.debugMode;byId('workspace').innerHTML='<article class="page-card settings-card"><div class="setting-row"><div class="setting-copy"><strong>Debug mode</strong><p>Pause automatic progression and expose manual Step, Play, and Stop controls for pipeline validation.</p></div><label class="switch"><input id="debug-mode" type="checkbox" '+(enabled?'checked':'')+' aria-label="Debug mode"><span></span></label></div>'+(enabled?'<div class="debug-notice">Debug mode is on. Continuous play is disabled; use Step to advance one transition at a time.</div>':'')+'</article>'}
+function renderSettings(){const enabled=snapshot.settings.debugMode,opener=snapshot.settings.opener;byId('workspace').innerHTML='<section class="page-list"><article class="page-card settings-card"><div class="setting-row"><div class="setting-copy"><strong>Default opener</strong><p>Choose the local app used by Open on a task.</p></div><select class="opener-select" id="opener" aria-label="Default opener"><option value="cursor" '+(opener.id==='cursor'?'selected':'')+'>Cursor</option></select></div></article><article class="page-card settings-card"><div class="setting-row"><div class="setting-copy"><strong>Debug mode</strong><p>Pause automatic progression and expose manual Step, Play, and Stop controls for pipeline validation.</p></div><label class="switch"><input id="debug-mode" type="checkbox" '+(enabled?'checked':'')+' aria-label="Debug mode"><span></span></label></div>'+(enabled?'<div class="debug-notice">Debug mode is on. Continuous play is disabled; use Step to advance one transition at a time.</div>':'')+'</article></section>'}
 function matches(blob,project,query){return !query||project.name.toLowerCase().includes(query)||blob.title.toLowerCase().includes(query)||blob.id.toLowerCase().includes(query)}
 function matrix(projects){const steps=snapshot.steps;return '<div class="matrix" style="--steps:'+Math.max(steps.length,1)+'"><div class="matrix-head" style="--steps:'+Math.max(steps.length,1)+'"><div class="corner"></div>'+snapshot.groups.map(group=>'<div class="band" style="grid-column:span '+group.count+'">'+escapeHtml(group.label)+'</div>').join('')+steps.map(step=>'<div class="step">'+escapeHtml(step.label)+'</div>').join('')+'</div>'+projects.map(projectCard).join('')+'</div>'}
-function projectCard(project){const collapsed=collapsedProjects.has(project.id);const issue=project.pipelineIssue?'<span class="pipeline-issue" title="'+escapeAttr(project.pipelineIssue.detail)+'">'+escapeHtml(project.pipelineIssue.summary)+'</span>':'';const rows=project.blobs.length?project.blobs.map(taskRow).join(''):'<div class="empty-project">'+(project.pipelineIssue?'This project is isolated until its pipeline path is restored.':'No tasks in this project.')+'</div>';return '<section class="project '+(collapsed?'collapsed':'')+'" data-project="'+escapeHtml(project.id)+'"><button class="project-head" aria-expanded="'+String(!collapsed)+'" aria-label="'+(collapsed?'Expand ':'Collapse ')+escapeAttr(project.name)+'"><span>'+escapeHtml(project.name)+'</span><span class="count">'+project.blobs.length+'</span>'+issue+'<span class="toggle">'+(collapsed?'Expand':'Collapse')+'</span></button><div class="project-summary taskrow" style="--steps:'+Math.max(snapshot.steps.length,1)+'"><div class="task-title aggregate-title">Project progress</div>'+snapshot.steps.map((step,index)=>aggregateCell(project,step,index)).join('')+'</div><div class="taskrows">'+rows+'</div></section>'}
-function taskRow(blob){const cells=snapshot.steps.map((step,index)=>beadCell(blob,step,index)).join('');const label=statusLabel(blob.status);return '<div class="taskrow" style="--steps:'+Math.max(snapshot.steps.length,1)+'"><div class="task-title" title="'+escapeAttr(blob.title)+'"><button class="task-name-button" data-inspect="'+escapeAttr(blob.id)+'">'+escapeHtml(blob.title)+'</button>'+(label?'<small class="task-status '+blob.status+'">'+label+'</small>':'')+runControls(blob)+'</div>'+cells+'</div>'}
-function runControls(blob){const debug=snapshot.settings.debugMode?controlButton(blob,'step',stepIcon())+controlButton(blob,'play',playIcon())+controlButton(blob,'stop',stopIcon()):'';return '<span class="run-controls" aria-label="Task actions">'+debug+blob.cursorActionHtml+'</span>'}
+function projectCard(project){const collapsed=collapsedProjects.has(project.id);const issue=project.pipelineIssue?'<span class="pipeline-issue" title="'+escapeAttr(project.pipelineIssue.detail)+'">'+escapeHtml(project.pipelineIssue.summary)+'</span>':'';const rows=project.blobs.length?project.blobs.map(taskRow).join(''):'<div class="empty-project">'+(project.pipelineIssue?'This project is isolated until its pipeline path is restored.':'No tasks in this project.')+'</div>';const track=snapshot.steps.map((step,index)=>collapsed?aggregateCell(project,step,index):'<div class="project-head-track '+(index===0?'first ':'')+(index===snapshot.steps.length-1?'last':'')+'"></div>').join('');return '<section class="project '+(collapsed?'collapsed':'')+'" data-project="'+escapeHtml(project.id)+'"><div class="project-head-row" style="--steps:'+Math.max(snapshot.steps.length,1)+'"><div class="project-identity"><span>'+escapeHtml(project.name)+'</span>'+issue+'</div>'+track+disclosureMarkup(project.id,project.name,collapsed)+'</div><div class="taskrows">'+rows+'</div></section>'}
+function taskRow(blob){const cells=snapshot.steps.map((step,index)=>beadCell(blob,step,index)).join('');const label=statusLabel(blob.status);return '<div class="taskrow" style="--steps:'+Math.max(snapshot.steps.length,1)+'"><div class="task-title" title="'+escapeAttr(blob.title)+'">'+blobNameMenuTriggerMarkup(blob.id,blob.title)+(label?'<small class="task-status '+blob.status+'">'+label+'</small>':'')+runControls(blob)+'</div>'+cells+'</div>'}
+function runControls(blob){if(!snapshot.settings.debugMode)return '';const debug=controlButton(blob,'step',stepIcon())+controlButton(blob,'play',playIcon())+controlButton(blob,'stop',stopIcon());return '<span class="run-controls" aria-label="Debug task actions">'+debug+'</span>'}
 function controlButton(blob,action,icon){const control=blob.execution[action];const mode=action==='play'||action==='step';const selected=mode&&blob.execution.mode===(action==='play'?'continuous':'step');const active=selected||(action==='stop'&&blob.execution.requested);const label=action==='play'?'Play continuously':action==='step'?'Run one transition':'Stop';const explanation=escapeHtml(control.explanation);return '<span class="control-tip" data-tip="'+explanation+'" '+(control.enabled?'':'tabindex="0" aria-label="'+explanation+'"')+'><button class="run-control '+action+(mode?' mode':'')+(active?' active':'')+'" data-action="'+action+'" data-blob="'+escapeHtml(blob.id)+'" aria-label="'+label+'" aria-pressed="'+active+'" title="'+explanation+'" '+(control.enabled?'':'disabled')+'>'+icon+'</button></span>'}
 function playIcon(){return '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1.3v9.4L10 6z"/></svg>'}function stepIcon(){return '<svg viewBox="0 0 14 12" aria-hidden="true"><path d="M1 1.3v9.4L9 6zM11 1h2v10h-2z"/></svg>'}function stopIcon(){return '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 2h8v8H2z"/></svg>'}
 function beadCell(blob,step,index){const known=blob.steps.some(candidate=>candidate.id===step.id);const done=blob.stepId==='complete'||blob.completedStepIds.includes(step.id);const current=blob.stepId===step.id;const imported=done&&blob.importedStepIds.includes(step.id);const classes=['bead',done?'done':'',imported?'imported':'',current?'current':'',current?blob.status:'',!known?'unavailable':''].filter(Boolean).join(' ');const tooltip=beadTooltip(blob,step,done,current,imported,known);return '<div class="track-cell '+(index===0?'first ':'')+(index===snapshot.steps.length-1?'last':'')+'"><i class="'+classes+'" title="'+escapeAttr(tooltip)+'" aria-label="'+escapeAttr(tooltip)+'"></i></div>'}
@@ -624,7 +651,7 @@ function beadTooltip(blob,step,done,current,imported,known){if(!known)return ste
 function aggregateCell(project,step,index){const tasks=project.blobs.filter(blob=>blob.steps.some(candidate=>candidate.id===step.id));const completed=tasks.filter(blob=>blob.stepId==='complete'||blob.completedStepIds.includes(step.id)).length;const percent=tasks.length?Math.round(completed/tasks.length*100):0;const tooltip=tasks.length?step.label+' — '+percent+'% complete ('+completed+' of '+tasks.length+' tasks)':step.label+' — no tasks use this state';return '<div class="track-cell '+(index===0?'first ':'')+(index===snapshot.steps.length-1?'last':'')+'"><i class="aggregate-bead '+(tasks.length?'':'unavailable')+'" style="--target:'+percent+'%" title="'+escapeAttr(tooltip)+'" aria-label="'+escapeAttr(tooltip)+'"></i></div>'}
 function statusLabel(status){return {queued:'Queued',held:'',running:'Running',waiting:'Awaiting review',blocked:'Needs attention',failed:'Failed'}[status]||''}
 function plural(count,word){return count===1?word:word+'s'}function escapeHtml(value){const node=document.createElement('span');node.textContent=String(value);return node.innerHTML}function escapeAttr(value){return escapeHtml(value).replaceAll('"','&quot;')}
-async function control(action,blobId){try{const before=learning?.blob.id===blobId?learning.attempts.length:null;const response=await fetch('/api/blobs/'+encodeURIComponent(blobId)+'/'+action,{method:'POST'});const result=await response.json();if(!response.ok)throw new Error(result.error||'The request failed.');if(action==='open-cursor'){showActionStatus('Opened '+result.root+'.','success');return await load()}await load();if(before!==null)await waitForLearning(blobId,before)}catch(error){if(action==='open-cursor')showActionStatus(error.message,'failure');else showLearningError(error);await load()}}
+async function control(action,blobId){try{const before=learning?.blob.id===blobId?learning.attempts.length:null;const response=await fetch('/api/blobs/'+encodeURIComponent(blobId)+'/'+action,{method:'POST'});const result=await response.json();if(!response.ok)throw new Error(result.error||'The request failed.');if(action==='open'){showActionStatus('Opened '+result.root+'.','success');return await load()}await load();if(before!==null)await waitForLearning(blobId,before)}catch(error){if(action==='open')showActionStatus(error.message,'failure');else showLearningError(error);await load()}}
 function showActionStatus(message,state){const target=byId('action-status');target.className='action-status '+state;target.textContent=message}
 async function waitForLearning(blobId,before){for(let index=0;index<24;index+=1){await openLearning(blobId);const latest=learning.attempts.at(-1);if((learning.attempts.length>before||!learning.blob.runRequested)&&latest?.receipt.status!=='running'){if(learning.attempts.length>before){selectedAttemptId=latest.receipt.id;renderLearning()}await load();return}await new Promise(resolve=>setTimeout(resolve,100))}}
 async function openLearning(blobId){const response=await fetch('/api/blobs/'+encodeURIComponent(blobId)+'/learning');const result=await response.json();if(!response.ok)throw new Error(result.error||'Could not inspect this task.');learning=result;if(!selectedAttemptId||!learning.attempts.some(item=>item.receipt.id===selectedAttemptId))selectedAttemptId=learning.attempts.at(-1)?.receipt.id||null;blobPreview=null;promptPreview=null;renderLearning()}
@@ -641,11 +668,16 @@ function short(value){return value?String(value).slice(0,10)+'…':'not reported
 async function learningPost(action,payload={}){const response=await fetch('/api/blobs/'+encodeURIComponent(learning.blob.id)+'/'+action,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});const result=await response.json();if(!response.ok)throw new Error(result.error||'The learning action failed.');return result}
 async function learningAction(action){try{if(action==='close'){learning=null;return renderLearning()}if(action==='step'){await control('step',learning.blob.id);return}if(action==='rewind'){const selected=learning.attempts.find(item=>item.receipt.id===selectedAttemptId);const before=learning.attempts.length;await learningPost('rewind-step',{stepId:selected.receipt.stepId});selectedAttemptId=null;await waitForLearning(learning.blob.id,before);return}if(action==='retry'){const before=learning.attempts.length;await learningPost('retry');await waitForLearning(learning.blob.id,before);return}if(action==='preview-blob'){blobPreview=await learningPost('blob/preview',{title:byId('blob-title').value,body:byId('blob-body').value});return renderLearning()}if(action==='save-blob'){await learningPost('blob/save',{title:blobPreview.after.title,body:blobPreview.after.body,expectedRevision:blobPreview.expectedRevision});await openLearning(learning.blob.id);return}if(action==='preview-prompt'){promptPreview=await learningPost('prompt/preview',{stepId:byId('prompt-step').value,kind:byId('prompt-kind').value,content:byId('prompt-content').value});return renderLearning()}if(action==='save-prompt'){await learningPost('prompt/save',{stepId:promptPreview.stepId,kind:promptPreview.kind,content:promptPreview.after,expectedContentHash:promptPreview.expectedContentHash});await openLearning(learning.blob.id);return}if(action==='cancel-edit'){blobPreview=null;promptPreview=null;return renderLearning()}if(action==='reset-endpoint'){await learningPost('reset-endpoint',{reason:'Local endpoint reset from Viewer.'});await openLearning(learning.blob.id);return}if(action==='feedback'){const before=learning.attempts.length;await learningPost('feedback',{text:byId('human-text').value,evidence:['viewer:human-feedback']});await waitForLearning(learning.blob.id,before);return}if(action==='approve'){const before=learning.attempts.length;await learningPost('approve',{text:byId('human-text').value,evidence:['viewer:exact-head-approval']});await waitForLearning(learning.blob.id,before)}}catch(error){showLearningError(error)}}
 function showLearningError(error){const target=byId('learning-error')||byId('error');if(target)target.innerHTML='<div class="error">'+escapeHtml(error.message)+'</div>'}
-byId('refresh').onclick=async()=>{await load();if(learning)await openLearning(learning.blob.id)};byId('search').oninput=render;document.addEventListener('keydown',event=>{if(event.key==='/'&&document.activeElement!==byId('search')){event.preventDefault();byId('search').focus()}});
+byId('refresh').onclick=async()=>{closeBlobMenu(false);await load();if(learning)await openLearning(learning.blob.id)};byId('search').oninput=render;document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!byId('blob-menu').hidden){event.preventDefault();return closeBlobMenu(true)}if(event.key==='/'&&document.activeElement!==byId('search')){event.preventDefault();byId('search').focus()}});
 document.querySelector('.nav').onclick=event=>{const target=event.target.closest('[data-page]');if(!target)return;currentPage=target.dataset.page;learning=null;renderLearning();render()};
-byId('workspace').onclick=event=>{const inspect=event.target.closest('[data-inspect]');if(inspect)return void openLearning(inspect.dataset.inspect).catch(showLearningError);const action=event.target.closest('[data-action]');if(action){action.disabled=true;return void control(action.dataset.action,action.dataset.blob)}const head=event.target.closest('.project-head');if(!head)return;const id=head.closest('.project').dataset.project;if(collapsedProjects.has(id))collapsedProjects.delete(id);else collapsedProjects.add(id);renderOverview()};
-byId('workspace').onchange=event=>{if(event.target.id!=='debug-mode')return;void updateDebugMode(event.target.checked)};
+byId('workspace').onclick=event=>{const menu=event.target.closest('[data-blob-menu]');if(menu){event.stopPropagation();return openBlobMenu(menu)}const action=event.target.closest('[data-action]');if(action){action.disabled=true;return void control(action.dataset.action,action.dataset.blob)}const disclosure=event.target.closest('[data-project-toggle]');if(!disclosure)return;const id=disclosure.dataset.projectToggle;if(collapsedProjects.has(id))collapsedProjects.delete(id);else collapsedProjects.add(id);renderOverview()};
+byId('workspace').onchange=event=>{if(event.target.id==='debug-mode')return void updateDebugMode(event.target.checked);if(event.target.id==='opener')return void updateOpener(event.target.value)};
+byId('blob-menu').onclick=event=>{const item=event.target.closest('[data-menu-action]');if(!item||item.disabled)return;const blobId=menuBlobId;closeBlobMenu(false);void control(item.dataset.menuAction,blobId)};
+document.addEventListener('click',event=>{if(byId('blob-menu').hidden||event.target.closest('#blob-menu')||event.target.closest('[data-blob-menu]'))return;closeBlobMenu(true)});
+function openBlobMenu(trigger){const blob=snapshot.projects.flatMap(project=>project.blobs).find(item=>item.id===trigger.dataset.blobMenu);if(!blob)return;closeBlobMenu(false);menuTrigger=trigger;menuBlobId=blob.id;trigger.setAttribute('aria-expanded','true');const menu=byId('blob-menu');menu.innerHTML='<button role="menuitem" data-menu-action="open" '+(blob.open.enabled?'':'disabled')+'>Open</button>'+(blob.open.enabled?'':'<small>'+escapeHtml(blob.open.explanation)+'</small>');menu.hidden=false;const box=trigger.getBoundingClientRect(),menuBox=menu.getBoundingClientRect(),left=Math.max(8,Math.min(box.left,innerWidth-menuBox.width-8));const below=box.bottom+5,top=below+menuBox.height<=innerHeight-8?below:Math.max(8,box.top-menuBox.height-5);menu.style.left=left+'px';menu.style.top=top+'px';menu.querySelector('[role="menuitem"]').focus()}
+function closeBlobMenu(returnFocus){const trigger=menuTrigger,menu=byId('blob-menu');menu.hidden=true;menu.innerHTML='';if(trigger)trigger.setAttribute('aria-expanded','false');menuTrigger=null;menuBlobId=null;if(returnFocus&&trigger?.isConnected)queueMicrotask(()=>trigger.focus({preventScroll:true}))}
 async function updateDebugMode(enabled){try{const response=await fetch('/api/settings/debug-mode',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({enabled})});const result=await response.json();if(!response.ok)throw new Error(result.error||'Could not update Debug mode.');await load();showActionStatus(enabled?'Debug mode enabled. Automatic progression is paused.':'Debug mode disabled.','success')}catch(error){showActionStatus(error.message,'failure');await load()}}
+async function updateOpener(opener){try{const response=await fetch('/api/settings/opener',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({opener})});const result=await response.json();if(!response.ok)throw new Error(result.error||'Could not update the opener.');await load();showActionStatus('Default opener set to '+result.settings.opener.label+'.','success')}catch(error){showActionStatus(error.message,'failure');await load()}}
 byId('learning').onclick=event=>{const attempt=event.target.closest('[data-attempt]');if(attempt){selectedAttemptId=attempt.dataset.attempt;blobPreview=null;promptPreview=null;return renderLearning()}const action=event.target.closest('[data-learning-action]');if(action)return void learningAction(action.dataset.learningAction)};
 byId('learning').onchange=event=>{if(event.target.id!=='prompt-kind')return;const step=selectedStep();byId('prompt-content').value=event.target.value==='entry'?step.entry:step.exit;promptPreview=null};
 load();setInterval(load,2000);
@@ -675,7 +707,7 @@ import { discoverPipeline, requireStep, snapshotDefinition } from "./Pipeline.ts
 import { previewBlobEdit, previewPromptEdit, savePromptEdit } from "./Learning.ts";
 import { BlobExecutionError, ConveyorStore } from "./Store.ts";
 import { CursorWorkspaceLauncher } from "./CursorAction.ts";
-import { cursorActionMarkup } from "./CursorActionView.ts";
+import { viewerComponentScript, workspaceOpenMenuMarkup } from "./ViewerComponents.ts";
 import {
   executionOverviewMarkup,
   listExecutionSessions,

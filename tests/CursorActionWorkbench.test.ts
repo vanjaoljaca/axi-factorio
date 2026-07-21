@@ -1,4 +1,4 @@
-test("Workbench visibly operates healthy, failed, project-root, and unavailable Cursor states", async () => {
+test("Workbench visibly operates the configured opener title menu and unavailable state", async () => {
   const scenario = new CursorActionScenario();
   try {
     const ready = scenario.snapshot().frames[0].visual;
@@ -6,8 +6,10 @@ test("Workbench visibly operates healthy, failed, project-root, and unavailable 
       ["assigned-workspace", true], ["project-root", true],
       ["project-root", true], ["project-root", false],
     ]);
-    assert.match(ready.rows[0].actionHtml, /data-action="open-cursor"/u);
-    assert.match(ready.rows[3].actionHtml, /disabled/u);
+    assert.match(ready.rows[0].triggerHtml, /data-blob-menu="assigned"/u);
+    assert.match(ready.menuHtml, /role="menu"/u);
+    assert.equal(ready.openerLabel, "Cursor");
+    assert.equal(ready.rows[3].action.enabled, false);
 
     const opened = (await scenario.play()).frames[0].visual;
     assert.equal(opened.calls, 1);

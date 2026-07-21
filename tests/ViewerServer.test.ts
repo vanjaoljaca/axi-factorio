@@ -139,13 +139,12 @@ test("viewer exposes the effective execution workspace through the shared Cursor
   const snapshot = createViewSnapshot(databasePath, launcher) as ViewSnapshot;
   const blobs = snapshot.projects.flatMap((project) => project.blobs);
 
-  assert.deepEqual(blobs.find((blob) => blob.id === "assigned")?.cursor, {
+  assert.deepEqual(blobs.find((blob) => blob.id === "assigned")?.open, {
     enabled: true, root: expectedAssignedRoot, workspaceKind: "assigned-workspace",
     label: "Open in Cursor", explanation: "Open the assigned execution workspace in Cursor.",
   });
-  assert.equal(blobs.find((blob) => blob.id === "project")?.cursor.workspaceKind, "project-root");
-  assert.equal(blobs.find((blob) => blob.id === "stale")?.cursor.enabled, false);
-  assert.match(blobs.find((blob) => blob.id === "stale")?.cursorActionHtml ?? "", /disabled/u);
+  assert.equal(blobs.find((blob) => blob.id === "project")?.open.workspaceKind, "project-root");
+  assert.equal(blobs.find((blob) => blob.id === "stale")?.open.enabled, false);
 });
 
 test("viewer exposes persisted running and completed execution telemetry", async () => {
@@ -216,10 +215,16 @@ test("Viewer Debug setting is durable, manual, and exposed through Settings", as
       body: JSON.stringify({ enabled: true }),
     }).then(readJson);
     const snapshot = await fetch(`${endpoint}/api/view`).then(readJson) as ViewSnapshot;
+    const opener = await fetch(`${endpoint}/api/settings/opener`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ opener: "cursor" }),
+    }).then(readJson);
     const play = await fetch(`${endpoint}/api/blobs/debug-controlled/play`, { method: "POST" });
 
     assert.equal(enabled.settings.debugMode, true);
     assert.equal(snapshot.settings.debugMode, true);
+    assert.deepEqual(opener.settings.opener, { id: "cursor", label: "Cursor" });
     assert.equal(snapshot.projects[0].blobs[0].execution.play.enabled, false);
     assert.equal(play.status, 409);
   } finally {
@@ -239,10 +244,14 @@ test("Viewer ships clickable Overview, Projects, Runs, Alerts, and Settings page
       assert.match(body, new RegExp(`data-page="${page}"`, "u"));
     }
     assert.match(body, /id="debug-mode"/u);
-    assert.match(body, /snapshot\.settings\.debugMode\?controlButton/u);
-    assert.match(body, /Project progress|aggregateCell/u);
+    assert.match(body, /if\(!snapshot\.settings\.debugMode\)return ''/u);
+    assert.match(body, /aggregateCell/u);
     assert.match(body, /collapsedProjects/u);
-    assert.match(body, /collapsed\?'Expand':'Collapse'/u);
+    assert.match(body, /data-project-toggle/u);
+    assert.doesNotMatch(body, /Project progress|data-action="open-cursor"/u);
+    assert.match(body, /id="blob-menu"/u);
+    assert.match(body, /Default opener/u);
+    assert.match(body, />Cursor</u);
     assert.match(body, /held:''/u);
     assert.match(body, /Inventory — held before its first run\./u);
   } finally {
@@ -270,7 +279,7 @@ test("production Viewer source cannot import internal Workbench modules", () => 
   assert.doesNotMatch(source, /WorkbenchServer|test\/harness|MockHarnessLab|LiveExecutionScenario/);
 });
 
-test("viewer Cursor API launches locally with the exact effective workspace argv", async () => {
+test("viewer configured Open API launches locally with the exact effective workspace argv", async () => {
   const fixture = createPipeline(["g1.first"]);
   const assignedRoot = join(fixture.root, "workspace with spaces --literal");
   const appRoot = join(assignedRoot, "apps", "example");
@@ -289,7 +298,7 @@ test("viewer Cursor API launches locally with the exact effective workspace argv
   const server = createViewerServer(databasePath, launcher);
   const endpoint = await listen(server);
 
-  const result = await postJson(endpoint, "cursor", "open-cursor", {});
+  const result = await postJson(endpoint, "cursor", "open", {});
   await close(server);
 
   assert.deepEqual(result, { blobId: "cursor", root: expectedAssignedRoot, opened: true });
@@ -488,7 +497,7 @@ function blobInput(fixture: PipelineFixture, title: string): BlobInput {
 
 type ViewSnapshot = {
   stats: { projects: number; tasks: number };
-  settings: { debugMode: boolean };
+  settings: { debugMode: boolean; opener: { id: string; label: string } };
   executionOverviewHtml: string;
   executionSessions: Array<{
     blobId: string;
@@ -513,14 +522,13 @@ type ViewSnapshot = {
       status: string;
       importedStepIds: string[];
       execution: { play: { enabled: boolean; explanation: string } };
-      cursor: {
+      open: {
         enabled: boolean;
         root: string;
         workspaceKind: "assigned-workspace" | "project-root";
         label: string;
         explanation: string;
       };
-      cursorActionHtml: string;
     }>;
   }>;
 };
