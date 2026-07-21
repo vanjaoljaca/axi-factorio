@@ -376,7 +376,7 @@ async function runService(
 async function configuredRunner(store: ConveyorStore, parsed: ParsedArgs): Promise<ConveyorRunner> {
   const harness = await loadHarness(harnessSelector(parsed));
   const instrumentation = await loadHarnessInstrumentation(instrumentationSelector(parsed));
-  return new ConveyorRunner(store, harness, instrumentation);
+  return new ConveyorRunner(store, harness, instrumentation, {}, new ReviewServerSupervisor());
 }
 
 function harnessSelector(parsed: ParsedArgs): string {
@@ -663,7 +663,7 @@ function serviceAbortController(): AbortController {
 }
 
 function printVersion(): void {
-  process.stdout.write("axi-factorio 0.1.0-rc.23\n");
+  process.stdout.write("axi-factorio 0.1.0-rc.24\n");
 }
 
 function helpCommand(args: string[]): string | undefined {
@@ -716,7 +716,7 @@ const harnessFlags: FlagSpec = {
 };
 
 const helpText: Record<string, string> = {
-  root: `axi-factorio 0.1.0-rc.23
+  root: `axi-factorio 0.1.0-rc.24
 
 Usage: axi-factorio <command> [flags]
 Commands: project, add, adopt, relocate, bind-execution, list, status, show, receipts, play, step, stop, retry, review, feedback, approve, rewind, kick, run, service, init
@@ -774,6 +774,7 @@ import { log } from "./Logger.ts";
 import { printOutput } from "./Output.ts";
 import { discoverPipeline, nextStep, requireStep, snapshotDefinition } from "./Pipeline.ts";
 import { ConveyorRunner } from "./Runner.ts";
+import { ReviewServerSupervisor } from "./ReviewServerSupervisor.ts";
 import { ConveyorService } from "./Service.ts";
 import {
   type ServiceStatus,

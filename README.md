@@ -194,7 +194,7 @@ npm run build
 
 This recreates `release/` with:
 
-- `axi-factorio-0.1.0-rc.23.tgz`, the installable package;
+- `axi-factorio-0.1.0-rc.24.tgz`, the installable package;
 - `SHA256SUMS`, for artifact verification; and
 - `INSTALL.md`, with direct and vendored installation commands.
 
@@ -206,7 +206,7 @@ Do not use `npm link` for a consuming project. Install the exact tarball so
 Install the exact candidate in the consuming npm project:
 
 ```sh
-npm install --save-exact /path/to/axi-factorio-0.1.0-rc.23.tgz
+npm install --save-exact /path/to/axi-factorio-0.1.0-rc.24.tgz
 ```
 
 From the consuming project root, the defaults are:
@@ -374,7 +374,7 @@ harness adds only the Git-owned state required to commit through repeatable
 folders. The assigned workspace must equal Git's reported work root; non-Git
 workspaces retain their previous behavior.
 
-Opening an rc.4 through rc.22 database with rc.23 migrates projects, receipt
+Opening an rc.4 through rc.23 database with rc.24 migrates projects, receipt
 provenance, durable execution-control columns, blob revisions, and immutable
 attempt evidence automatically. Existing blobs receive an
 `executionWorkspaceRoot` equal to their current app root, preserving prior
@@ -409,6 +409,16 @@ argument to Cursor without shell interpolation. Missing folders or a missing
 Cursor installation disable the action with an explanation; launch failures
 remain visible in the Viewer.
 
+An execution workspace can opt into a Factorio-owned local review server by
+declaring a non-empty `scripts.workbench` command in its root `package.json`.
+After the agent entry finishes, the runner requires a clean committed Git head,
+allocates a loopback-only port, and starts the fixed argv `npm run workbench`
+from that exact workspace—outside the agent sandbox. Factorio verifies HTTP
+health, supplies the URL, workspace, and exact head to exit evaluation, then
+terminates the owned process tree on completion, failure, cancellation, or
+service stop. The agent sandbox is not widened, shell interpolation is never
+used, and a dirty workspace fails before launch.
+
 The execution-session panel shows in-flight and recent completed receipts.
 Every receipt retains queued, started, last-progress, finished, and elapsed
 time; current operation; external harness session; attempt number; model and
@@ -420,7 +430,7 @@ running receipt with no persisted progress for five minutes is labeled
 alone, carries the health meaning.
 
 Future multi-pipeline integration is deliberately parked in [ROADMAP.md](ROADMAP.md)
-under **pipeline merger**. rc.23 does not implement it.
+under **pipeline merger**. rc.24 does not implement it.
 
 Explicitly move it back to a step:
 

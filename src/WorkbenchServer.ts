@@ -10,7 +10,7 @@ type ViewSnapshot = {
   receipts: ViewReceipt[];
   assertions: { label: string; passed: boolean }[];
   evidenceCards?: { label: string; value: string }[];
-  visual?: LiveExecutionVisual | ViewerResilienceVisual | CursorActionVisual;
+  visual?: LiveExecutionVisual | ViewerResilienceVisual | CursorActionVisual | ReviewServerVisual;
 };
 type Scenario = { id: string; frames: ViewSnapshot[] };
 type LiveExecutionVisual = {
@@ -43,12 +43,20 @@ type CursorActionVisual = {
   lastResult: string;
   calls: number;
 };
+type ReviewServerVisual = {
+  kind: "review-server";
+  phase: "ready" | "committed" | "healthy" | "exit-received-url" | "stopped";
+  workspace: string;
+  head: string;
+  server: { url: string; cwd: string; gitHead: string; pid: number; command: string; args: string[]; alive: boolean } | null;
+};
 
 const port = workbenchPort(process.argv);
 const databasePath = resolve(argument("--db") ?? "pipelines/axi-factorio.db");
 const mockLab = new MockHarnessLab();
 const liveExecutionScenario = new LiveExecutionScenario();
 const cursorActionScenario = new CursorActionScenario();
+const reviewServerScenario = new ReviewServerScenario();
 const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? "/", `http://127.0.0.1:${port}`);
   try {
@@ -101,6 +109,12 @@ const server = createServer(async (request, response) => {
     if (url.pathname.startsWith("/api/cursor-action/open/") && request.method === "POST") {
       return json(response, await cursorActionScenario.open(decodeURIComponent(url.pathname.split("/").at(-1) ?? "")));
     }
+    if (url.pathname === "/api/review-server/play" && request.method === "POST") {
+      return json(response, await reviewServerScenario.play());
+    }
+    if (url.pathname === "/api/review-server/reset" && request.method === "POST") {
+      return json(response, reviewServerScenario.reset());
+    }
     if (url.pathname.startsWith("/api/scenarios/")) return json(response, await scenario(url));
     if (url.pathname === "/") return html(response, workbenchHtml);
     response.writeHead(404).end("Not found");
@@ -116,6 +130,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, () => {
     mockLab.dispose();
     cursorActionScenario.dispose();
+    reviewServerScenario.dispose();
     void liveExecutionScenario.dispose().finally(() => server.close(() => process.exit(0)));
   });
 }
@@ -158,6 +173,10 @@ function scenarioIndex(): object[] {
       id: "cursor-action", name: "Open workspace in Cursor",
       description: "Assigned workspace + project root + unavailable path · real action component",
     },
+    {
+      id: "review-server-supervisor", name: "Factorio-owned local review server",
+      description: "Agent commit → safe npm argv → healthy exact-head URL → owned stop",
+    },
   ];
 }
 
@@ -194,6 +213,7 @@ async function scenario(url: URL): Promise<Scenario> {
     return runViewerResilienceScenario();
   }
   if (id === "cursor-action") return cursorActionScenario.snapshot();
+  if (id === "review-server-supervisor") return reviewServerScenario.snapshot() as unknown as Scenario;
   throw new Error(`Unknown scenario: ${id}`);
 }
 
@@ -331,6 +351,7 @@ ${liveExecutionStyles}
 .bead.current.retry{border-style:double;border-color:var(--attention);box-shadow:0 0 0 2px var(--attention-soft)}
 .resilience-projects{display:grid;gap:0;border-bottom:1px solid var(--line)}.resilience-project{min-height:44px;display:grid;grid-template-columns:minmax(180px,1fr) 150px minmax(220px,1.4fr);align-items:center;padding:7px 12px;border-bottom:1px solid var(--line);font-size:9px}.resilience-project:last-child{border-bottom:0}.resilience-project>div b{display:block;font-size:10px}.resilience-project>div span,.resilience-project small{color:var(--muted)}.resilience-project strong{justify-self:start;border:1px solid var(--line);border-radius:999px;padding:3px 8px;font-size:8px}.resilience-project.unavailable{background:#fffaf3}.resilience-project.unavailable strong{border-color:#e5c89f;background:#fff8ed;color:#986016}
 .cursor-action-visual{background:#fff}.cursor-action-controls{display:flex;align-items:center;gap:6px;padding:10px 12px;border-bottom:1px solid var(--line)}.cursor-action-controls button{height:30px;border:1px solid var(--line-strong);border-radius:5px;background:#fff;padding:0 11px;cursor:pointer}.cursor-action-controls .play{background:var(--ink);border-color:var(--ink);color:#fff}.cursor-action-controls span{margin-left:auto;color:var(--muted);font-size:9px}.cursor-action-row{min-height:54px;display:grid;grid-template-columns:minmax(180px,.8fr) minmax(240px,1.4fr) auto;align-items:center;gap:12px;padding:8px 12px;border-bottom:1px solid var(--line)}.cursor-action-row b{font-size:10px}.cursor-action-row small{display:block;color:var(--muted);font-size:8px}.cursor-action-row code{color:var(--muted);font:9px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}.cursor-action-row .run-control.cursor{width:auto;min-width:106px;padding:0 9px;display:flex;gap:6px}.cursor-action-row .run-control.cursor svg{fill:none;stroke:currentColor;stroke-width:1.6}.cursor-action-result{padding:9px 12px;background:#f7f9f8;color:#52605a;font-size:9px}.cursor-action-result.failure{background:var(--danger-soft);color:var(--danger)}
+.review-server-visual{background:#fff}.review-controls{display:flex;gap:6px;align-items:center;padding:10px 12px;border-bottom:1px solid var(--line)}.review-controls button{height:30px;border:1px solid var(--line-strong);border-radius:5px;background:#fff;padding:0 12px;cursor:pointer}.review-controls .play{background:var(--ink);color:#fff}.review-controls span{margin-left:auto;color:var(--muted);font-size:9px}.review-flow{display:grid;grid-template-columns:repeat(5,1fr);padding:16px 24px;border-bottom:1px solid var(--line)}.review-phase{position:relative;text-align:center;padding-top:22px;color:var(--muted);font-size:9px}.review-phase:before{content:"";position:absolute;left:0;right:0;top:8px;height:1px;background:var(--line-strong)}.review-phase:first-child:before{left:50%}.review-phase:last-child:before{right:50%}.review-phase i{position:absolute;left:50%;top:3px;width:11px;height:11px;margin-left:-5px;border:2px solid var(--quiet);border-radius:50%;background:#fff}.review-phase.done{color:var(--ink);font-weight:700}.review-phase.done i{border-color:var(--ink);background:var(--ink);box-shadow:inset 0 0 0 3px #fff}.review-facts{display:grid;grid-template-columns:1.2fr 1fr .8fr .8fr;border-bottom:1px solid var(--line)}.review-fact{padding:10px 12px;border-right:1px solid var(--line);min-width:0}.review-fact:last-child{border-right:0}.review-fact small{display:block;color:var(--muted);font-size:8px}.review-fact b,.review-fact code{display:block;overflow-wrap:anywhere;font-size:9px;line-height:1.35}.review-fact code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.review-server-visual .matrix{border-top:0}
 .live-scenario{padding:0}.live-scenario-controls{margin:0;padding:12px}.live-conveyor{border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:#fff}.live-details{padding:12px}.live-details .live-panel{margin-bottom:8px}
 </style></head><body><div class="app"><header class="topbar"><div class="identity"><strong>Factorio Workbench</strong><span class="online">Internal</span></div><div class="modes" role="tablist" aria-label="Workbench views"><button class="mode active" role="tab" aria-selected="true" data-source="lab">Harness Lab</button><button class="mode" role="tab" aria-selected="false" data-source="scenario">Scenario</button><button class="mode" role="tab" aria-selected="false" data-source="tests">Tests</button><button class="mode" role="tab" aria-selected="false" data-source="database">Database</button></div><div class="actions"><button class="control" id="previous" hidden>Previous</button><button class="control" id="next" hidden>Next</button><button class="control" id="refresh">Refresh</button><button class="control primary" id="run">Run scenario</button></div></header>
 <main class="content"><div class="toolbar"><div class="scenario-copy"><strong id="title">Loading scenario</strong><span id="description"></span></div><select class="picker" id="scenario-picker" aria-label="Choose scenario" hidden></select><select class="picker" id="test-picker" aria-label="Choose test" hidden></select><span class="frame" id="frame"></span></div><div class="workspace" id="workspace"><div class="empty">Loading scenario…</div></div><div class="footer"><div class="legend"><span><i class="key complete"></i>Completed</span><span><i class="key imported"></i>Imported</span><span><i class="key inventory"></i>Inventory</span><span><i class="key current"></i>Current</span><span><i class="key waiting"></i>Awaiting review / needs attention</span><span><i class="key"></i>Pending</span><span><i class="key failed"></i>Failed</span></div><span class="total" id="total"></span></div><details class="inspector"><summary><span>Inspect evidence</span><small id="result"></small></summary><div class="evidence"><section class="panel"><div class="panel-head"><span id="event-label">Receipt stream</span><span>append only</span></div><div id="events"></div></section><section class="panel"><div class="panel-head"><span>Assertions</span><span id="assertion-count"></span></div><div id="checks"></div></section></div></details><div id="error" role="status"></div></main></div>
@@ -341,14 +362,17 @@ async function init(){[scenarios,tests]=await Promise.all([fetch("/api/scenarios
 function renderPickers(){byId("scenario-picker").innerHTML=scenarios.map(item=>'<option value="'+safe(item.id)+'">'+safe(item.name)+'</option>').join("");byId("test-picker").innerHTML=tests.map(item=>'<option value="'+safe(item.id)+'">'+safe(item.category)+' · '+safe(item.name)+'</option>').join("")}
 async function load(){clearInterval(timer);const version=++loadVersion;if(source==="tests"){testRun=null;frames=[];renderTest();return}if(source==="lab"){lab=await fetch("/api/mock-lab").then(r=>r.json());if(version===loadVersion)renderLab();return}const data=source==="database"?await fetch("/api/database").then(r=>r.json()):await fetch("/api/scenarios/"+selected).then(r=>r.json());if(version!==loadVersion)return;frames=data.frames||[data];frame=frames.length-1;renderScenario()}
 function groups(steps){const result=[];for(const step of steps){const id=step.id.split(".")[0]||"pipeline",last=result.at(-1);if(last?.id===id)last.count++;else result.push({id,label:id,count:1})}return result}
-function renderScenario(){const snapshot=frames[frame];if(!snapshot)return;const interactive=["live-execution","cursor-action"].includes(snapshot.visual?.kind);byId("title").textContent=snapshot.name;byId("description").textContent=snapshot.description;byId("frame").textContent=interactive?"Live temporary state":source==="scenario"?"Frame "+(frame+1)+" / "+frames.length:"Live database";byId("run").hidden=source!=="scenario"||interactive;byId("run").textContent="Run scenario";showFrameControls(source==="scenario"&&!interactive);byId("workspace").innerHTML=scenarioVisual(snapshot);renderEvidence(snapshot);byId("total").textContent=snapshot.blobs.length+" blob"+(snapshot.blobs.length===1?"":"s")+" · "+snapshot.receipts.length+" receipts";if(snapshot.visual?.kind==="live-execution")wireLiveExecution(snapshot.visual);if(snapshot.visual?.kind==="cursor-action")wireCursorAction()}
-function scenarioVisual(snapshot){if(snapshot.visual?.kind==="live-execution")return liveExecutionVisual(snapshot);if(snapshot.visual?.kind==="cursor-action")return cursorActionVisual(snapshot);if(snapshot.visual?.kind==="viewer-resilience")return viewerResilienceVisual(snapshot)+matrix(snapshot)+scenarioEvidence(snapshot);return matrix(snapshot)+scenarioEvidence(snapshot)}
+function renderScenario(){const snapshot=frames[frame];if(!snapshot)return;const interactive=["live-execution","cursor-action","review-server"].includes(snapshot.visual?.kind);byId("title").textContent=snapshot.name;byId("description").textContent=snapshot.description;byId("frame").textContent=interactive?"Live temporary state":source==="scenario"?"Frame "+(frame+1)+" / "+frames.length:"Live database";byId("run").hidden=source!=="scenario"||interactive;byId("run").textContent="Run scenario";showFrameControls(source==="scenario"&&!interactive);byId("workspace").innerHTML=scenarioVisual(snapshot);renderEvidence(snapshot);byId("total").textContent=snapshot.blobs.length+" blob"+(snapshot.blobs.length===1?"":"s")+" · "+snapshot.receipts.length+" receipts";if(snapshot.visual?.kind==="live-execution")wireLiveExecution(snapshot.visual);if(snapshot.visual?.kind==="cursor-action")wireCursorAction();if(snapshot.visual?.kind==="review-server")wireReviewServer()}
+function scenarioVisual(snapshot){if(snapshot.visual?.kind==="live-execution")return liveExecutionVisual(snapshot);if(snapshot.visual?.kind==="cursor-action")return cursorActionVisual(snapshot);if(snapshot.visual?.kind==="review-server")return reviewServerVisual(snapshot);if(snapshot.visual?.kind==="viewer-resilience")return viewerResilienceVisual(snapshot)+matrix(snapshot)+scenarioEvidence(snapshot);return matrix(snapshot)+scenarioEvidence(snapshot)}
 function viewerResilienceVisual(snapshot){return '<section class="resilience-projects" aria-label="Viewer project health">'+snapshot.visual.projects.map(project=>'<div class="resilience-project '+(project.issue?'unavailable':'healthy')+'"><div><b>'+safe(project.name)+'</b><span>'+project.taskCount+' task'+(project.taskCount===1?'':'s')+'</span></div>'+(project.issue?'<strong title="'+safe(project.issue.detail)+'">'+safe(project.issue.summary)+'</strong><small>This project is isolated until its pipeline path is restored.</small>':'<strong>Pipeline '+safe(project.pipeline||'available')+'</strong><small>Healthy project remains usable.</small>')+'</div>').join('')+'</section>'}
 function cursorActionVisual(snapshot){const data=snapshot.visual;const resultClass=data.lastResult.startsWith('Failed:')?' failure':'';return '<section class="cursor-action-visual"><div class="cursor-action-controls"><button class="play" data-cursor-scenario="play">Play assigned workspace</button><button data-cursor-scenario="reset">Reset</button><span>'+data.calls+' launch attempt'+(data.calls===1?'':'s')+'</span></div>'+data.rows.map(row=>'<div class="cursor-action-row"><div><b>'+safe(row.title)+'</b><small>'+safe(row.workspaceKind)+'</small></div><code>'+safe(row.root)+'</code>'+row.actionHtml+'</div>').join('')+'<div class="cursor-action-result'+resultClass+'">'+safe(data.lastResult)+'</div>'+scenarioEvidence(snapshot)+'</section>'}
 function wireCursorAction(){document.querySelectorAll('[data-cursor-scenario]').forEach(button=>button.onclick=()=>cursorScenarioAction(button.dataset.cursorScenario));document.querySelectorAll('.cursor-action-visual [data-action="open-cursor"]').forEach(button=>button.onclick=()=>cursorScenarioOpen(button.dataset.blob))}
 async function cursorScenarioAction(action){const response=await fetch('/api/cursor-action/'+action,{method:'POST'});if(!response.ok)return showScenarioError(await response.json());frames=(await response.json()).frames;frame=0;renderScenario()}
 async function cursorScenarioOpen(blobId){const response=await fetch('/api/cursor-action/open/'+encodeURIComponent(blobId),{method:'POST'});if(!response.ok)return showScenarioError(await response.json());frames=(await response.json()).frames;frame=0;renderScenario()}
 function showScenarioError(result){byId('error').textContent=result.error||'Scenario action failed.'}
+function reviewServerVisual(snapshot){const data=snapshot.visual,order=['ready','committed','healthy','exit-received-url','stopped'],labels=['Ready','Agent committed','Server healthy','Exit received URL','Supervisor stopped'],position=order.indexOf(data.phase),server=data.server;return '<section class="review-server-visual"><div class="review-controls"><button class="play" data-review-action="play">Play</button><button data-review-action="reset">Reset</button><span>'+safe(data.phase)+'</span></div><div class="review-flow">'+labels.map((label,index)=>'<div class="review-phase '+(index<=position?'done':'')+'"><i></i>'+label+'</div>').join('')+'</div><div class="review-facts"><div class="review-fact"><small>Assigned workspace</small><code>'+safe(data.workspace)+'</code></div><div class="review-fact"><small>Exact Git head</small><code>'+safe(data.head)+'</code></div><div class="review-fact"><small>Safe argv</small><code>'+safe(server?server.command+' '+server.args.join(' '):'npm run workbench')+'</code></div><div class="review-fact"><small>Health / ownership</small><b>'+(server?safe(server.url)+' · '+(server.alive?'owned':'stopped'):'Not started')+'</b></div></div>'+matrix(snapshot)+scenarioEvidence(snapshot)+'</section>'}
+function wireReviewServer(){document.querySelectorAll('[data-review-action]').forEach(button=>button.onclick=()=>reviewServerAction(button.dataset.reviewAction))}
+async function reviewServerAction(action){byId('error').textContent='';const response=await fetch('/api/review-server/'+action,{method:'POST'});if(!response.ok)return showScenarioError(await response.json());frames=(await response.json()).frames;frame=0;renderScenario();if(action==='play')startReplay(renderScenario)}
 function scenarioEvidence(snapshot){const visual=snapshot.visual?.kind==="live-execution"?liveExecutionVisual(snapshot.visual):"",cards=snapshot.evidenceCards?.length?'<details class="scenario-debug"><summary>Exact evidence · argv, paths and JSON</summary><div class="evidence-grid">'+snapshot.evidenceCards.map(card=>evidenceCard(card.label,"",card.value,card.label.includes("argv"))).join("")+"</div></details>":"";return visual+cards}
 function liveExecutionVisual(snapshot){const data=snapshot.visual,log=data.timeline.slice(-5).map(item=>'<span>#'+item.id+" · "+safe(item.label)+'</span>').join("");return '<section class="live-scenario"><div class="live-scenario-controls"><button class="play" data-live-action="play" '+(data.playEnabled?"":"disabled")+'>Play</button><button data-live-action="reset">Reset</button><span>'+safe(data.phase)+'</span></div><div class="live-conveyor">'+matrix(snapshot)+'</div><div class="live-details">'+data.executionOverviewHtml+'<div class="activity-log">'+(log||"<span>Play to run one transition through the real runner.</span>")+"</div></div></section>"}
 function wireLiveExecution(data){document.querySelectorAll("[data-live-action]").forEach(button=>button.onclick=()=>liveExecutionAction(button.dataset.liveAction));if(data.phase==="queued"||data.phase==="running")timer=setTimeout(load,250)}
@@ -473,4 +497,5 @@ import { workbenchPort } from "./WorkbenchPort.ts";
 import { MockHarnessLab, type LabAction } from "../test/harness/MockHarnessLab.ts";
 import { LiveExecutionScenario } from "../test/harness/LiveExecutionScenario.ts";
 import { CursorActionScenario } from "../test/harness/CursorActionScenario.ts";
+import { ReviewServerScenario } from "../test/harness/ReviewServerScenario.ts";
 import { liveExecutionStyles } from "./LiveExecutions.ts";

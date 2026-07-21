@@ -49,6 +49,7 @@ export type HarnessEvent =
   | { type: "status"; status: string; message?: string }
   | { type: "external-run"; externalRunId: string }
   | { type: "artifact"; artifactRef: string }
+  | { type: "review-server"; status: "healthy" | "stopped"; url: string; cwd: string; gitHead: string }
   | {
     type: "metrics";
     inputTokens?: number;
@@ -59,6 +60,7 @@ export type HarnessEvent =
 
 export type HarnessObserver = {
   event(event: HarnessEvent): void;
+  startReviewServer?(): Promise<ReviewServerSession | null>;
 };
 
 export function assertAgentHarness(value: unknown): AgentHarness {
@@ -82,3 +84,4 @@ import type {
   HumanInput,
   StepDefinition,
 } from "./Types.ts";
+import type { ReviewServerSession } from "./ReviewServerSupervisor.ts";

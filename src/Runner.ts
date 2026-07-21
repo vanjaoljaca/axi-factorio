@@ -4,18 +4,21 @@ export class ConveyorRunner {
   private readonly instrumentation: HarnessInstrumentation;
   private readonly reconcileEveryMs: number;
   private readonly confirmTerminalAfterMs: number;
+  private readonly reviewServers: ReviewServerSupervisor | null;
 
   constructor(
     store: ConveyorStore,
     harness: AgentHarness,
     instrumentation: HarnessInstrumentation = noHarnessInstrumentation,
     options: RunnerOptions = {},
+    reviewServers: ReviewServerSupervisor | null = null,
   ) {
     this.store = store;
     this.harness = harness;
     this.instrumentation = instrumentation;
     this.reconcileEveryMs = options.reconcileEveryMs ?? 30_000;
     this.confirmTerminalAfterMs = options.confirmTerminalAfterMs ?? 2_000;
+    this.reviewServers = reviewServers;
   }
 
   async runOnce(signal?: AbortSignal, ownerId?: string): Promise<boolean> {
@@ -59,14 +62,18 @@ export class ConveyorRunner {
   ): Promise<void> {
     let externalRunId = claim.receipt.continuationThreadId;
     let cancelPromise: Promise<void> | null = null;
+    let reviewServer: ReviewServerSession | null = null;
     const requestCancel = () => {
       if (cancelPromise) return;
       this.recordBoundary("cancel_requested", claim, { externalRunId: externalRunId ?? "" });
-      cancelPromise = this.harness.cancel({
+      const harnessCancel = this.harness.cancel({
         runId: claim.receipt.id,
         externalRunId,
         reason: signal?.reason instanceof Error ? signal.reason.message : "Dispatcher stopped.",
-      }).then(() => this.recordBoundary("cancelled", claim, {}));
+      });
+      const reviewCancel = this.reviewServers?.stop(claim.receipt.id) ?? Promise.resolve();
+      cancelPromise = Promise.all([harnessCancel, reviewCancel])
+        .then(() => this.recordBoundary("cancelled", claim, {}));
     };
     signal?.addEventListener("abort", requestCancel, { once: true });
     try {
@@ -78,6 +85,12 @@ export class ConveyorRunner {
             this.store.recordExternalRun(claim.receipt.id, externalRunId, ownerId);
           }
           this.recordBoundary("event", claim, harnessEventAttributes(event));
+        },
+        startReviewServer: async () => {
+          if (!this.reviewServers) return null;
+          reviewServer = await this.reviewServers.start(claim.receipt.id, claim.blob.executionWorkspaceRoot);
+          if (reviewServer) observer.event({ type: "review-server", status: "healthy", ...reviewServer });
+          return reviewServer;
         },
       };
       const running = claim.receipt.continuationThreadId
@@ -114,6 +127,13 @@ export class ConveyorRunner {
       throw new ReceiptRunError(claim.receipt.id, error);
     } finally {
       signal?.removeEventListener("abort", requestCancel);
+      if (reviewServer && this.reviewServers) {
+        await this.reviewServers.stop(claim.receipt.id);
+        this.recordBoundary("event", claim, {
+          eventType: "review-server", status: "stopped", url: reviewServer.url,
+          cwd: reviewServer.cwd, gitHead: reviewServer.gitHead,
+        });
+      }
     }
   }
 
@@ -252,6 +272,9 @@ function harnessInput(claim: ClaimedExecution): HarnessRunInput {
 function harnessEventAttributes(event: HarnessEvent): Record<string, string | number> {
   if (event.type === "external-run") return { eventType: event.type, externalRunId: event.externalRunId };
   if (event.type === "artifact") return { eventType: event.type, artifactRef: event.artifactRef };
+  if (event.type === "review-server") return {
+    eventType: event.type, status: event.status, url: event.url, cwd: event.cwd, gitHead: event.gitHead,
+  };
   if (event.type === "metrics") return metricAttributes(event);
   return { eventType: event.type, status: event.status, message: event.message ?? "" };
 }
@@ -324,6 +347,8 @@ import type {
   HarnessInstrumentation,
 } from "./HarnessInstrumentation.ts";
 import type { ConveyorStore } from "./Store.ts";
+import type { ReviewServerSession } from "./ReviewServerSupervisor.ts";
 import { discoverPipeline, nextStep, snapshotDefinition } from "./Pipeline.ts";
 import { noHarnessInstrumentation } from "./HarnessInstrumentation.ts";
 import { log } from "./Logger.ts";
+import { ReviewServerSupervisor } from "./ReviewServerSupervisor.ts";
