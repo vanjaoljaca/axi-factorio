@@ -54,6 +54,19 @@ function frame(snapshot: ViewerSnapshot, name: string): WorkbenchFrame {
       }] : []),
       { label: "Dispatcher ownership", value: "Named launchd service owns one dispatcher; a prior lease is waited out." },
     ],
+    visual: {
+      kind: "viewer-resilience",
+      projects: snapshot.projects.map((project) => ({
+        id: project.id,
+        name: project.name,
+        taskCount: project.blobs.length,
+        pipeline: project.resolvedPipeline,
+        issue: project.pipelineIssue && {
+          summary: project.pipelineIssue.summary,
+          detail: project.pipelineIssue.detail,
+        },
+      })),
+    },
   };
 }
 
@@ -77,6 +90,16 @@ type WorkbenchFrame = {
   receipts: [];
   assertions: Array<{ label: string; passed: boolean }>;
   evidenceCards: Array<{ label: string; value: string }>;
+  visual: {
+    kind: "viewer-resilience";
+    projects: Array<{
+      id: string;
+      name: string;
+      taskCount: number;
+      pipeline: string | null;
+      issue: { summary: string; detail: string } | null;
+    }>;
+  };
 };
 type Scenario = { id: string; frames: WorkbenchFrame[] };
 

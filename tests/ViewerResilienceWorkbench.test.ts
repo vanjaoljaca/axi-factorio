@@ -6,6 +6,10 @@ test("Workbench visibly reproduces and isolates a stale disposable project pipel
   assert.equal(before.blobs[0]?.id, "healthy-task");
   assert.equal(after.blobs[0]?.id, "healthy-task");
   assert(after.assertions.every((assertion) => assertion.passed));
+  assert.deepEqual(after.visual.projects.map((project) => [project.id, project.issue?.summary ?? null]), [
+    ["healthy", null],
+    ["stale-disposable", "Pipeline unavailable"],
+  ]);
   assert.match(
     after.evidenceCards.find((card) => card.label === "Visible project diagnosis")?.value ?? "",
     /Pipeline unavailable/u,
