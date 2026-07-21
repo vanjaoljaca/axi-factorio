@@ -44,8 +44,8 @@ test("fresh storage includes projects, blobs, receipts, and the dispatcher lease
     rows.map((row) => row.name),
     [
       "attemptEvidence", "blobRevisions", "blobs", "dispatcherLeases",
-      "executionEvents", "executionWorkspaceBindings", "humanInputs", "projects",
-      "receipts", "workspaceRelocations",
+      "executionEvents", "executionWorkspaceBindings", "humanInputs", "localEndpointLeases",
+      "projects", "receipts", "workspaceRelocations",
     ],
   );
   fixture.database.close();

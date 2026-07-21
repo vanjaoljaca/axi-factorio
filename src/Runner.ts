@@ -4,21 +4,21 @@ export class ConveyorRunner {
   private readonly instrumentation: HarnessInstrumentation;
   private readonly reconcileEveryMs: number;
   private readonly confirmTerminalAfterMs: number;
-  private readonly reviewServers: ReviewServerSupervisor | null;
+  private readonly localEndpoints: LocalEndpointSupervisor | null;
 
   constructor(
     store: ConveyorStore,
     harness: AgentHarness,
     instrumentation: HarnessInstrumentation = noHarnessInstrumentation,
     options: RunnerOptions = {},
-    reviewServers: ReviewServerSupervisor | null = null,
+    localEndpoints: LocalEndpointSupervisor | null = null,
   ) {
     this.store = store;
     this.harness = harness;
     this.instrumentation = instrumentation;
     this.reconcileEveryMs = options.reconcileEveryMs ?? 30_000;
     this.confirmTerminalAfterMs = options.confirmTerminalAfterMs ?? 2_000;
-    this.reviewServers = reviewServers;
+    this.localEndpoints = localEndpoints;
   }
 
   async runOnce(signal?: AbortSignal, ownerId?: string): Promise<boolean> {
@@ -33,6 +33,11 @@ export class ConveyorRunner {
     }
     await this.execute(blob, step, steps, signal, ownerId);
     return true;
+  }
+
+  async reconcileLocalEndpoints(): Promise<void> {
+    if (!this.localEndpoints) return;
+    for (const lease of this.store.pendingLocalEndpointLeases()) await this.reconcileLocalEndpoint(lease);
   }
 
   private async execute(
@@ -62,7 +67,8 @@ export class ConveyorRunner {
   ): Promise<void> {
     let externalRunId = claim.receipt.continuationThreadId;
     let cancelPromise: Promise<void> | null = null;
-    let reviewServer: ReviewServerSession | null = null;
+    let localEndpoint: LocalEndpointSession | null = null;
+    let terminalStatus: ReceiptStatus | null = null;
     const requestCancel = () => {
       if (cancelPromise) return;
       this.recordBoundary("cancel_requested", claim, { externalRunId: externalRunId ?? "" });
@@ -71,8 +77,9 @@ export class ConveyorRunner {
         externalRunId,
         reason: signal?.reason instanceof Error ? signal.reason.message : "Dispatcher stopped.",
       });
-      const reviewCancel = this.reviewServers?.stop(claim.receipt.id) ?? Promise.resolve();
-      cancelPromise = Promise.all([harnessCancel, reviewCancel])
+      this.store.requestLocalEndpointStop(claim.blob.id, "Receipt execution was cancelled.");
+      const endpointCancel = this.localEndpoints?.stop(claim.receipt.id, localEndpoint?.pid) ?? Promise.resolve();
+      cancelPromise = Promise.all([harnessCancel, endpointCancel])
         .then(() => this.recordBoundary("cancelled", claim, {}));
     };
     signal?.addEventListener("abort", requestCancel, { once: true });
@@ -86,11 +93,14 @@ export class ConveyorRunner {
           }
           this.recordBoundary("event", claim, harnessEventAttributes(event));
         },
-        startReviewServer: async () => {
-          if (!this.reviewServers) return null;
-          reviewServer = await this.reviewServers.start(claim.receipt.id, claim.blob.executionWorkspaceRoot);
-          if (reviewServer) observer.event({ type: "review-server", status: "healthy", ...reviewServer });
-          return reviewServer;
+        startLocalEndpoint: async () => {
+          if (!this.localEndpoints) return null;
+          localEndpoint = await this.localEndpoints.start(claim.receipt.id, claim.blob.executionWorkspaceRoot);
+          if (localEndpoint) {
+            this.store.registerLocalEndpoint(claim.receipt.id, localEndpoint);
+            observer.event({ type: "local-endpoint", status: "healthy", ...localEndpoint });
+          }
+          return localEndpoint;
         },
       };
       const running = claim.receipt.continuationThreadId
@@ -114,6 +124,7 @@ export class ConveyorRunner {
         externalRunId: result.externalRunId,
       }, nextStepId, ownerId);
       const status = this.store.listReceipts(blob.id).find((receipt) => receipt.id === claim.receipt.id)?.status;
+      terminalStatus = status ?? null;
       log("receipt_completed", { receiptId: claim.receipt.id, status, blobState: blob.state });
     } catch (error) {
       if (signal?.aborted) {
@@ -127,14 +138,52 @@ export class ConveyorRunner {
       throw new ReceiptRunError(claim.receipt.id, error);
     } finally {
       signal?.removeEventListener("abort", requestCancel);
-      if (reviewServer && this.reviewServers) {
-        await this.reviewServers.stop(claim.receipt.id);
-        this.recordBoundary("event", claim, {
-          eventType: "review-server", status: "stopped", url: reviewServer.url,
-          cwd: reviewServer.cwd, gitHead: reviewServer.gitHead,
-        });
+      if (localEndpoint && this.localEndpoints) {
+        if (terminalStatus === "blocked" && this.store.getBlob(claim.blob.id)?.humanGateStepId === claim.step.id) {
+          this.store.retainLocalEndpoint(claim.receipt.id);
+          this.recordEndpointBoundary("retained", claim, localEndpoint);
+        } else {
+          await this.stopLocalEndpoint(claim, localEndpoint, "Receipt no longer owns the local endpoint.");
+        }
       }
     }
+  }
+
+  private async reconcileLocalEndpoint(lease: LocalEndpointLease): Promise<void> {
+    if (!this.localEndpoints) return;
+    try {
+      if (lease.desiredState === "stopped") {
+        await this.localEndpoints.stop(lease.id, lease.pid);
+        this.store.markLocalEndpointStopped(lease.id, lease.terminalReason ?? "Local endpoint stopped.");
+        return;
+      }
+      const session = await this.localEndpoints.recover(lease);
+      this.store.markLocalEndpointHealthy(lease.id, session);
+    } catch (error) {
+      await this.localEndpoints.stop(lease.id, lease.pid).catch((stopError) => log(
+        "local_endpoint_failed_cleanup", { leaseId: lease.id, error: errorMessage(stopError) },
+      ));
+      this.store.markLocalEndpointFailed(lease.id, errorMessage(error));
+      log("local_endpoint_recovery_failed", { leaseId: lease.id, error: errorMessage(error) });
+    }
+  }
+
+  private async stopLocalEndpoint(
+    claim: ClaimedExecution,
+    session: LocalEndpointSession,
+    reason: string,
+  ): Promise<void> {
+    this.store.requestLocalEndpointStop(claim.blob.id, reason);
+    await this.localEndpoints!.stop(claim.receipt.id, session.pid);
+    this.store.markLocalEndpointStopped(claim.receipt.id, reason);
+    this.recordEndpointBoundary("stopped", claim, session);
+  }
+
+  private recordEndpointBoundary(status: string, claim: ClaimedExecution, session: LocalEndpointSession): void {
+    this.recordBoundary("event", claim, {
+      eventType: "local-endpoint", status, url: session.url,
+      cwd: session.cwd, gitHead: session.gitHead,
+    });
   }
 
   private async startHarness(
@@ -272,7 +321,7 @@ function harnessInput(claim: ClaimedExecution): HarnessRunInput {
 function harnessEventAttributes(event: HarnessEvent): Record<string, string | number> {
   if (event.type === "external-run") return { eventType: event.type, externalRunId: event.externalRunId };
   if (event.type === "artifact") return { eventType: event.type, artifactRef: event.artifactRef };
-  if (event.type === "review-server") return {
+  if (event.type === "local-endpoint") return {
     eventType: event.type, status: event.status, url: event.url, cwd: event.cwd, gitHead: event.gitHead,
   };
   if (event.type === "metrics") return metricAttributes(event);
@@ -333,7 +382,7 @@ type RunnerOptions = {
 
 type SettledHarness = { result: HarnessResult } | { error: unknown };
 
-import type { ClaimedExecution, StepDefinition, Blob } from "./Types.ts";
+import type { ClaimedExecution, StepDefinition, Blob, ReceiptStatus, LocalEndpointLease } from "./Types.ts";
 import type {
   AgentHarness,
   HarnessEvent,
@@ -347,8 +396,8 @@ import type {
   HarnessInstrumentation,
 } from "./HarnessInstrumentation.ts";
 import type { ConveyorStore } from "./Store.ts";
-import type { ReviewServerSession } from "./ReviewServerSupervisor.ts";
+import type { LocalEndpointSession } from "./LocalEndpointSupervisor.ts";
 import { discoverPipeline, nextStep, snapshotDefinition } from "./Pipeline.ts";
 import { noHarnessInstrumentation } from "./HarnessInstrumentation.ts";
 import { log } from "./Logger.ts";
-import { ReviewServerSupervisor } from "./ReviewServerSupervisor.ts";
+import { LocalEndpointSupervisor } from "./LocalEndpointSupervisor.ts";

@@ -37,6 +37,7 @@ async function runCommand(
     case "review": return armHumanReview(args.slice(1), store, json);
     case "feedback": return addHumanFeedback(args.slice(1), store, json);
     case "approve": return approveHumanReview(args.slice(1), store, json);
+    case "reset-endpoint": return resetLocalEndpoint(args.slice(1), store, json);
     case "adopt": return adoptBlob(args.slice(1), store, json);
     case "relocate": return relocateBlob(args.slice(1), store, json);
     case "bind-execution": return bindExecutionWorkspace(args.slice(1), store, json);
@@ -279,6 +280,15 @@ function approveHumanReview(args: string[], store: ConveyorStore, json: boolean)
   printOutput({ ok: `approve ${input.blobId} -> ${input.stepId}`, humanInput: input }, json);
 }
 
+function resetLocalEndpoint(args: string[], store: ConveyorStore, json: boolean): void {
+  const parsed = parseArgs(args, { "--reason": "value" });
+  requirePositionals(parsed, 1, "reset-endpoint requires one blob ID.");
+  const leases = store.resetLocalEndpoint(
+    parsed.positionals[0], firstFlag(parsed, "--reason") ?? "Local endpoint reset from CLI.",
+  );
+  printOutput({ ok: `reset-endpoint ${parsed.positionals[0]}`, localEndpointLeases: leases }, json);
+}
+
 function adoptBlob(args: string[], store: ConveyorStore, json: boolean): void {
   const parsed = parseArgs(args, { "--source": "value", "--evidence": "value" });
   requirePositionals(parsed, 2, "adopt requires a blob ID and current step ID.");
@@ -376,7 +386,7 @@ async function runService(
 async function configuredRunner(store: ConveyorStore, parsed: ParsedArgs): Promise<ConveyorRunner> {
   const harness = await loadHarness(harnessSelector(parsed));
   const instrumentation = await loadHarnessInstrumentation(instrumentationSelector(parsed));
-  return new ConveyorRunner(store, harness, instrumentation, {}, new ReviewServerSupervisor());
+  return new ConveyorRunner(store, harness, instrumentation, {}, new LocalEndpointSupervisor());
 }
 
 function harnessSelector(parsed: ParsedArgs): string {
@@ -663,7 +673,7 @@ function serviceAbortController(): AbortController {
 }
 
 function printVersion(): void {
-  process.stdout.write("axi-factorio 0.1.0-rc.24\n");
+  process.stdout.write("axi-factorio 0.1.0-rc.25\n");
 }
 
 function helpCommand(args: string[]): string | undefined {
@@ -716,10 +726,10 @@ const harnessFlags: FlagSpec = {
 };
 
 const helpText: Record<string, string> = {
-  root: `axi-factorio 0.1.0-rc.24
+  root: `axi-factorio 0.1.0-rc.25
 
 Usage: axi-factorio <command> [flags]
-Commands: project, add, adopt, relocate, bind-execution, list, status, show, receipts, play, step, stop, retry, review, feedback, approve, rewind, kick, run, service, init
+Commands: project, add, adopt, relocate, bind-execution, list, status, show, receipts, play, step, stop, retry, review, feedback, approve, reset-endpoint, rewind, kick, run, service, init
 Globals: --db PATH, --json, --help, --version
 
 Run without arguments for the live conveyor dashboard.
@@ -743,6 +753,7 @@ Run without arguments for the live conveyor dashboard.
   review: `Usage: axi-factorio review BLOB_ID [--note TEXT]\n`,
   feedback: `Usage: axi-factorio feedback BLOB_ID "TEXT" [--evidence REF...]\n`,
   approve: `Usage: axi-factorio approve BLOB_ID --evidence REF... [--note TEXT]\n`,
+  "reset-endpoint": `Usage: axi-factorio reset-endpoint BLOB_ID [--reason TEXT]\n`,
   adopt: `Usage: axi-factorio adopt BLOB_ID CURRENT_STEP --source KIND:EXACT_ID --evidence STEP_ID=REF...\n`,
   relocate: `Usage: axi-factorio relocate BLOB_ID --root DIR --evidence REF...\n`,
   "bind-execution": `Usage: axi-factorio bind-execution BLOB_ID --root DIR --evidence REF...\n`,
@@ -774,7 +785,7 @@ import { log } from "./Logger.ts";
 import { printOutput } from "./Output.ts";
 import { discoverPipeline, nextStep, requireStep, snapshotDefinition } from "./Pipeline.ts";
 import { ConveyorRunner } from "./Runner.ts";
-import { ReviewServerSupervisor } from "./ReviewServerSupervisor.ts";
+import { LocalEndpointSupervisor } from "./LocalEndpointSupervisor.ts";
 import { ConveyorService } from "./Service.ts";
 import {
   type ServiceStatus,

@@ -58,20 +58,20 @@ async function executeCodex(
   const executionInput = { ...input, signal };
   const writableDirectories = resolveGitWritableDirectories(executionRoot(input));
   const entry = await runEntry(executionInput, onExternalRun, writableDirectories);
-  const reviewServer = await observer.startReviewServer?.() ?? null;
+  const localEndpoint = await observer.startLocalEndpoint?.() ?? null;
   observer.event({ type: "status", status: "running", message: "exit" });
-  const exitPrompt = buildExitPrompt(input, reviewServer);
+  const exitPrompt = buildExitPrompt(input, localEndpoint);
   const exit = await runCodex(
     exitArgs(executionRoot(input), entry.externalRunId, exitPrompt, writableDirectories),
     executionInput.signal,
     onExternalRun,
   );
   const result = parseExitResult(exit.finalMessage);
-  const reviewArtifacts = reviewServer
-    ? [`review-server:${reviewServer.url}`, `git-head:${reviewServer.gitHead}`]
+  const endpointArtifacts = localEndpoint
+    ? [`local-endpoint:${localEndpoint.url}`, `git-head:${localEndpoint.gitHead}`]
     : [];
   const outputArtifacts = [...new Set([
-    ...result.outputArtifacts, ...reviewArtifacts, `codex-thread:${entry.externalRunId}`,
+    ...result.outputArtifacts, ...endpointArtifacts, `codex-thread:${entry.externalRunId}`,
   ])];
   for (const artifactRef of outputArtifacts) observer.event({ type: "artifact", artifactRef });
   return {
@@ -297,14 +297,14 @@ ${JSON.stringify({
   }, null, 2)}`.trim();
 }
 
-function buildExitPrompt(input: CodexInput, reviewServer: ReviewServerSession | null): string {
-  const reviewContext = reviewServer
-    ? `\nFactorio-managed local review server: ${reviewServer.url}\nVerified workspace: ${reviewServer.cwd}\nVerified Git head: ${reviewServer.gitHead}`
+function buildExitPrompt(input: CodexInput, localEndpoint: LocalEndpointSession | null): string {
+  const endpointContext = localEndpoint
+    ? `\nFactorio-managed local endpoint: ${localEndpoint.url}\nVerified workspace: ${localEndpoint.cwd}\nVerified Git head: ${localEndpoint.gitHead}`
     : "";
   return `${input.definition.exit.trim()}\n\n${runtimeMarker}
 Evaluate blob ${input.blob.id} at step ${input.step.id}.
 Project root / app root: ${input.blob.cwd}
-Execution workspace root: ${executionRoot(input)}${reviewContext}
+Execution workspace root: ${executionRoot(input)}${endpointContext}
 Return only the schema-conforming JSON decision:
 - advance: this step passed and the item may move down the conveyor
 - retry: run this same step again
@@ -543,7 +543,7 @@ import type {
   HarnessRunInput,
   HarnessStartInput,
 } from "./Harness.ts";
-import type { ReviewServerSession } from "./ReviewServerSupervisor.ts";
+import type { LocalEndpointSession } from "./LocalEndpointSupervisor.ts";
 import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";

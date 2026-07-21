@@ -199,6 +199,26 @@ test("viewer execution API persists Play, Step, and Stop without duplicate reque
   assert.equal(stepped.blob.runRequested, true);
 });
 
+test("Overview starts with projects and never mounts execution-session diagnostics", async () => {
+  const fixture = createPipeline(["g1.first"]);
+  const databasePath = join(fixture.root, "factorio.sqlite");
+  new FactorioDatabase(databasePath).close();
+  const server = createViewerServer(databasePath);
+  const endpoint = await listen(server);
+  try {
+    const body = await fetch(endpoint).then((response) => response.text());
+    assert.doesNotMatch(body, /id="execution-overview"|Execution sessions|Working directory|Harness session/);
+    assert.match(body, /id="workspace"/);
+  } finally {
+    await close(server);
+  }
+});
+
+test("production Viewer source cannot import internal Workbench modules", () => {
+  const source = readFileSync(join(import.meta.dirname, "..", "src", "ViewerServer.ts"), "utf8");
+  assert.doesNotMatch(source, /WorkbenchServer|test\/harness|MockHarnessLab|LiveExecutionScenario/);
+});
+
 test("viewer Cursor API launches locally with the exact effective workspace argv", async () => {
   const fixture = createPipeline(["g1.first"]);
   const assignedRoot = join(fixture.root, "workspace with spaces --literal");

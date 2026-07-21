@@ -320,6 +320,63 @@ export class ConveyorStore {
     return rows.map((row) => mapHumanInput(asRecord(row)));
   }
 
+  registerLocalEndpoint(receiptId: string, input: LocalEndpointRegistration): LocalEndpointLease {
+    return this.database.transaction(() => {
+      const receipt = this.requireReceipt(receiptId);
+      const at = this.now();
+      this.database.connection.prepare(localEndpointLeaseInsert).run(
+        receipt.id, receipt.blobId, receipt.stepId, receipt.id, input.cwd, input.gitHead,
+        input.url, input.port, input.pid, input.command, JSON.stringify(input.args), at, at,
+      );
+      return this.requireLocalEndpointLease(receipt.id);
+    });
+  }
+
+  retainLocalEndpoint(receiptId: string): LocalEndpointLease {
+    this.database.connection.prepare(localEndpointLeaseRetain).run(this.now(), receiptId);
+    return this.requireLocalEndpointLease(receiptId);
+  }
+
+  requestLocalEndpointStop(blobId: string, reason: string): LocalEndpointLease[] {
+    this.database.connection.prepare(localEndpointLeaseStopByBlob).run(reason, this.now(), blobId);
+    return this.listLocalEndpointLeases(blobId);
+  }
+
+  markLocalEndpointHealthy(id: string, input: LocalEndpointRegistration): LocalEndpointLease {
+    this.database.connection.prepare(localEndpointLeaseHealthy).run(
+      input.url, input.port, input.pid, input.cwd, input.gitHead, this.now(), id,
+    );
+    return this.requireLocalEndpointLease(id);
+  }
+
+  markLocalEndpointStopped(id: string, reason: string): LocalEndpointLease {
+    const at = this.now();
+    this.database.connection.prepare(localEndpointLeaseStopped).run(reason, at, at, id);
+    return this.requireLocalEndpointLease(id);
+  }
+
+  markLocalEndpointFailed(id: string, reason: string): LocalEndpointLease {
+    this.database.connection.prepare(localEndpointLeaseFailed).run(reason, this.now(), id);
+    return this.requireLocalEndpointLease(id);
+  }
+
+  listLocalEndpointLeases(blobId?: string): LocalEndpointLease[] {
+    const rows = blobId
+      ? this.database.connection.prepare(localEndpointLeaseListByBlob).all(blobId)
+      : this.database.connection.prepare(localEndpointLeaseList).all();
+    return rows.map((row) => mapLocalEndpointLease(asRecord(row)));
+  }
+
+  pendingLocalEndpointLeases(): LocalEndpointLease[] {
+    return this.database.connection.prepare(localEndpointLeasePending).all()
+      .map((row) => mapLocalEndpointLease(asRecord(row)));
+  }
+
+  resetLocalEndpoint(blobId: string, reason = "Local endpoint reset."): LocalEndpointLease[] {
+    if (this.hasRunningReceipt(blobId)) throw new Error("Local endpoint cannot reset while a receipt is running.");
+    return this.requestLocalEndpointStop(blobId, reason);
+  }
+
   inputArtifactsFor(blobId: string): string[] {
     const blob = this.requireBlob(blobId);
     const refs = [...blob.inputArtifacts];
@@ -505,6 +562,8 @@ export class ConveyorStore {
       );
       const approvalId = kind === "approval" ? id : null;
       const runRequested = kind === "review" ? Number(blob.runRequested) : 1;
+      if (kind !== "review") this.database.connection.prepare(localEndpointLeaseStopByBlob)
+        .run(kind === "approval" ? "Human approved review." : "Human rejected with feedback.", this.now(), blob.id);
       this.database.connection.prepare(blobHumanGateUpdate).run(
         blob.state, approvalId, kind === "review" ? Number(blob.paused) : 0,
         runRequested, this.now(), blob.id,
@@ -540,6 +599,14 @@ export class ConveyorStore {
     const reason = `Service restarted before external run ${external} produced a terminal result.`;
     this.database.connection.prepare(receiptInterruptUpdate).run(reason, this.now(), receipt.id);
     this.database.connection.prepare(blobPauseAndRunUpdate).run(1, 0, this.now(), receipt.blobId);
+    this.database.connection.prepare(localEndpointLeaseStopByReceipt)
+      .run("Owning receipt was interrupted during service recovery.", this.now(), receipt.id);
+  }
+
+  private requireLocalEndpointLease(id: string): LocalEndpointLease {
+    const row = this.database.connection.prepare(localEndpointLeaseSelect).get(id);
+    if (!row) throw new Error(`Local endpoint lease ${id} was not found.`);
+    return mapLocalEndpointLease(asRecord(row));
   }
 
   private requestExecution(blobId: string, mode: ExecutionMode): BlobMutationResult {
@@ -1028,6 +1095,29 @@ const executionWorkspaceBindingInsert = `INSERT INTO executionWorkspaceBindings
 const executionWorkspaceBindingList = "SELECT * FROM executionWorkspaceBindings ORDER BY createdAt, id";
 const executionWorkspaceBindingListByBlob = `SELECT * FROM executionWorkspaceBindings
   WHERE blobId = ? ORDER BY createdAt, id`;
+const localEndpointLeaseInsert = `INSERT INTO localEndpointLeases
+  (id, blobId, stepId, receiptId, workspaceRoot, gitHead, url, port, pid, command,
+   argsJson, ownership, desiredState, observedState, createdAt, updatedAt)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'receipt', 'active', 'healthy', ?, ?)`;
+const localEndpointLeaseSelect = "SELECT * FROM localEndpointLeases WHERE id = ?";
+const localEndpointLeaseList = "SELECT * FROM localEndpointLeases ORDER BY createdAt, id";
+const localEndpointLeaseListByBlob = "SELECT * FROM localEndpointLeases WHERE blobId = ? ORDER BY createdAt, id";
+const localEndpointLeasePending = `SELECT * FROM localEndpointLeases
+  WHERE desiredState = 'active' OR observedState IN ('healthy', 'stopping') ORDER BY createdAt, id`;
+const localEndpointLeaseRetain = `UPDATE localEndpointLeases SET ownership = 'human-decision', updatedAt = ?
+  WHERE receiptId = ? AND desiredState = 'active'`;
+const localEndpointLeaseStopByBlob = `UPDATE localEndpointLeases SET desiredState = 'stopped',
+  observedState = CASE WHEN observedState = 'healthy' THEN 'stopping' ELSE observedState END,
+  terminalReason = ?, updatedAt = ? WHERE blobId = ? AND desiredState = 'active'`;
+const localEndpointLeaseStopByReceipt = `UPDATE localEndpointLeases SET desiredState = 'stopped',
+  observedState = CASE WHEN observedState = 'healthy' THEN 'stopping' ELSE observedState END,
+  terminalReason = ?, updatedAt = ? WHERE receiptId = ? AND ownership = 'receipt'`;
+const localEndpointLeaseHealthy = `UPDATE localEndpointLeases SET url = ?, port = ?, pid = ?, workspaceRoot = ?,
+  gitHead = ?, observedState = 'healthy', updatedAt = ? WHERE id = ? AND desiredState = 'active'`;
+const localEndpointLeaseStopped = `UPDATE localEndpointLeases SET desiredState = 'stopped', observedState = 'stopped',
+  terminalReason = ?, updatedAt = ?, stoppedAt = ? WHERE id = ?`;
+const localEndpointLeaseFailed = `UPDATE localEndpointLeases SET desiredState = 'stopped', observedState = 'failed',
+  terminalReason = ?, updatedAt = ? WHERE id = ?`;
 const blobWorkspaceUpdate = `UPDATE blobs SET cwd = ?,
   executionWorkspaceRoot = CASE WHEN executionWorkspaceRoot = ? THEN ? ELSE executionWorkspaceRoot END,
   updatedAt = ? WHERE id = ?`;
@@ -1114,6 +1204,20 @@ function mapExecutionWorkspaceBinding(row: Record<string, unknown>): ExecutionWo
   };
 }
 
+function mapLocalEndpointLease(row: Record<string, unknown>): LocalEndpointLease {
+  return {
+    id: String(row.id), blobId: String(row.blobId), stepId: String(row.stepId),
+    receiptId: String(row.receiptId), workspaceRoot: String(row.workspaceRoot),
+    gitHead: String(row.gitHead), url: String(row.url), port: Number(row.port), pid: Number(row.pid),
+    command: String(row.command), args: JSON.parse(String(row.argsJson)) as string[],
+    ownership: row.ownership as LocalEndpointLease["ownership"],
+    desiredState: row.desiredState as LocalEndpointLease["desiredState"],
+    observedState: row.observedState as LocalEndpointLease["observedState"],
+    terminalReason: nullableString(row.terminalReason), createdAt: String(row.createdAt),
+    updatedAt: String(row.updatedAt), stoppedAt: nullableString(row.stoppedAt),
+  };
+}
+
 import type {
   ExecutionResult,
   ClaimedExecution,
@@ -1135,9 +1239,14 @@ import type {
   BlobRevision,
   WorkspaceRelocation,
   ExecutionWorkspaceBinding,
+  LocalEndpointLease,
 } from "./Types.ts";
 import type { FactorioDatabase } from "./Database.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { discoverPipeline } from "./Pipeline.ts";
 import { dirname, isAbsolute, relative } from "node:path";
 import { realpathSync, statSync } from "node:fs";
+
+type LocalEndpointRegistration = {
+  url: string; cwd: string; gitHead: string; port: number; pid: number; command: string; args: string[];
+};

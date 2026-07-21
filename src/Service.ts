@@ -22,6 +22,7 @@ export class ConveyorService {
     await this.waitForDispatcher(signal);
     try {
       const recovered = this.store.recoverInterruptedReceipts();
+      await this.runner.reconcileLocalEndpoints();
       log("service_started", { ownerId: this.ownerId, recovered });
       await this.listen(signal);
     } finally {
@@ -35,6 +36,7 @@ export class ConveyorService {
     this.acquireDispatcher();
     try {
       this.store.recoverInterruptedReceipts();
+      await this.runner.reconcileLocalEndpoints();
       return await this.executeOnce(signal);
     } finally {
       this.store.releaseLease(this.ownerId);
@@ -60,6 +62,7 @@ export class ConveyorService {
   private async listen(signal: AbortSignal): Promise<void> {
     while (!signal.aborted) {
       this.requireLease();
+      await this.runner.reconcileLocalEndpoints();
       if (await this.executeOnce(signal, true)) continue;
       await delay(this.pollMs, signal);
     }

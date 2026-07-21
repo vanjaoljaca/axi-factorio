@@ -273,6 +273,32 @@ const schema = `
   CREATE INDEX IF NOT EXISTS executionWorkspaceBindingsByBlob
     ON executionWorkspaceBindings(blobId, createdAt);
 
+  CREATE TABLE IF NOT EXISTS localEndpointLeases (
+    id TEXT PRIMARY KEY,
+    blobId TEXT NOT NULL REFERENCES blobs(id),
+    stepId TEXT NOT NULL,
+    receiptId TEXT NOT NULL UNIQUE REFERENCES receipts(id),
+    workspaceRoot TEXT NOT NULL,
+    gitHead TEXT NOT NULL,
+    url TEXT NOT NULL,
+    port INTEGER NOT NULL,
+    pid INTEGER NOT NULL,
+    command TEXT NOT NULL,
+    argsJson TEXT NOT NULL,
+    ownership TEXT NOT NULL,
+    desiredState TEXT NOT NULL,
+    observedState TEXT NOT NULL,
+    terminalReason TEXT,
+    createdAt TEXT NOT NULL,
+    updatedAt TEXT NOT NULL,
+    stoppedAt TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS localEndpointLeasesByBlob
+    ON localEndpointLeases(blobId, createdAt);
+  CREATE INDEX IF NOT EXISTS localEndpointLeasesPending
+    ON localEndpointLeases(desiredState, observedState);
+
   CREATE TABLE IF NOT EXISTS dispatcherLeases (
     name TEXT PRIMARY KEY,
     ownerId TEXT NOT NULL,

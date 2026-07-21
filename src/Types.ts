@@ -163,6 +163,27 @@ export type ExecutionWorkspaceBinding = {
   createdAt: string;
 };
 
+export type LocalEndpointLease = {
+  id: string;
+  blobId: string;
+  stepId: string;
+  receiptId: string;
+  workspaceRoot: string;
+  gitHead: string;
+  url: string;
+  port: number;
+  pid: number;
+  command: string;
+  args: string[];
+  ownership: "receipt" | "human-decision";
+  desiredState: "active" | "stopped";
+  observedState: "healthy" | "stopping" | "stopped" | "failed";
+  terminalReason: string | null;
+  createdAt: string;
+  updatedAt: string;
+  stoppedAt: string | null;
+};
+
 export type ImportAttestation = {
   step: StepDefinition;
   definition: DefinitionSnapshot;
