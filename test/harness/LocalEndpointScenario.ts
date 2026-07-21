@@ -142,6 +142,14 @@ class EndpointHarness implements AgentHarness {
     git(input.blob.executionWorkspaceRoot, ["add", "endpoint-output.txt"]);
     git(input.blob.executionWorkspaceRoot, ["commit", "-m", "Declare local endpoint"]);
     this.onPhase("committed", null);
+    const legacy = new LocalEndpointSupervisor({ healthTimeoutMs: legacyHealthTimeoutMs });
+    try {
+      await legacy.start("legacy-timeout", input.blob.executionWorkspaceRoot);
+      throw new Error("Legacy endpoint budget unexpectedly reached health.");
+    } catch (error) {
+      if (!/health timed out/u.test(String(error))) throw error;
+      this.onPhase("startup-timeout", null);
+    }
     this.session = await observer.startLocalEndpoint?.() ?? null;
     if (!this.session) throw new Error("Fixture local endpoint was not declared.");
     this.onPhase("healthy", this.session);
@@ -169,10 +177,14 @@ function createFixture(): Fixture {
   writeFileSync(join(pipelinePath, "01.build.endpoint.entry.md"), "Produce a declared local endpoint.");
   writeFileSync(join(pipelinePath, "01.build.endpoint.exit.md"), "Verify its endpoint artifact.");
   mkdirSync(join(workspace, ".axi-factorio"), { recursive: true });
+  mkdirSync(join(workspace, "apps", "example"), { recursive: true });
   writeFileSync(join(workspace, ".axi-factorio", "local-endpoint.json"), JSON.stringify({
-    command: process.execPath, args: ["endpoint-server.ts"], healthPath: "/health",
+    command: npmCommand(), args: ["--prefix", "apps/example", "run", "workbench"], healthPath: "/healthz",
   }, null, 2));
-  writeFileSync(join(workspace, "endpoint-server.ts"), endpointServerSource);
+  writeFileSync(join(workspace, "apps", "example", "package.json"), JSON.stringify({
+    private: true, scripts: { workbench: "node endpoint-server.ts" },
+  }, null, 2));
+  writeFileSync(join(workspace, "apps", "example", "endpoint-server.ts"), endpointServerSource);
   git(workspace, ["init", "-b", "main"]);
   git(workspace, ["config", "user.email", "factorio@example.test"]);
   git(workspace, ["config", "user.name", "Factorio Fixture"]);
@@ -195,8 +207,15 @@ function frame(
     description: "Receipt ends · endpoint lease stays live · human disposition owns cleanup",
     source: "scenario", steps: [{ id: "build.endpoint", label: "Endpoint", group: "build", groupLabel: "Build" }],
     blobs: [{ id: blobId, title: "Endpoint-producing task", stepId: receipt?.status === "advance" ? "complete" : "build.endpoint", state: phaseStatus(phase), completedStepIds: receipt?.status === "advance" ? ["build.endpoint"] : [], importedStepIds: [] }],
-    receipts: receipt ? [viewReceipt(receipt)] : [], assertions: assertions(fixture, phase, session, head), evidenceCards: [],
-    visual: { kind: "local-endpoint", phase, workspace: realpathSync(fixture.workspace), head, endpoint: server, lease },
+    receipts: receipt ? [viewReceipt(receipt)] : [], assertions: assertions(fixture, phase, session, head),
+    evidenceCards: [
+      { label: "Declared argv", value: `${npmCommand()} --prefix apps/example run workbench` },
+      { label: "Startup budgets", value: `legacy ${legacyHealthTimeoutMs}ms → fixed ${defaultHealthTimeoutMs}ms` },
+    ],
+    visual: {
+      kind: "local-endpoint", phase, workspace: realpathSync(fixture.workspace), head, endpoint: server, lease,
+      command: npmCommand(), args: ["--prefix", "apps/example", "run", "workbench"],
+    },
   };
 }
 
@@ -208,7 +227,8 @@ function assertions(
 ): Assertion[] {
   return [
     { label: "Agent never binds the endpoint port", passed: true },
-    { label: "Declared argv remains literal", passed: !session || session.command === process.execPath && session.args.join(" ") === "endpoint-server.ts" },
+    { label: "Declared package-script argv remains literal", passed: !session || session.command === npmCommand() && session.args.join(" ") === "--prefix apps/example run workbench" },
+    { label: "Legacy startup timeout is reproduced", passed: phase !== "startup-timeout" || session === null },
     { label: "Supervisor uses the assigned workspace", passed: !session || session.cwd === realpathSync(fixture.workspace) },
     { label: "Health is exact-head", passed: !session || session.gitHead === head },
     { label: "Endpoint lease survives receipt completion", passed: phase !== "receipt-ended" || Boolean(session) },
@@ -289,8 +309,10 @@ export type LocalEndpointVisual = {
   head: string;
   endpoint: (LocalEndpointSession & { alive: boolean }) | null;
   lease: LocalEndpointLease | null;
+  command: string;
+  args: string[];
 };
-type EndpointPhase = "ready" | "committed" | "healthy" | "exit-received-url" | "receipt-ended"
+type EndpointPhase = "ready" | "committed" | "startup-timeout" | "healthy" | "exit-received-url" | "receipt-ended"
   | "service-restarting" | "child-lost" | "recovered" | "stable" | "churn" | "approved" | "rejected" | "stopped";
 type PhaseObserver = (phase: EndpointPhase, session: LocalEndpointSession | null) => void;
 type Fixture = { root: string; workspace: string; pipelinePath: string; databasePath: string };
@@ -299,23 +321,30 @@ type EndpointFrame = {
   name: string; description: string; source: "scenario";
   steps: Array<{ id: string; label: string; group: string; groupLabel: string }>;
   blobs: Array<Record<string, unknown>>; receipts: ViewReceipt[]; assertions: Assertion[];
-  evidenceCards: []; visual: LocalEndpointVisual;
+  evidenceCards: Array<{ label: string; value: string }>; visual: LocalEndpointVisual;
 };
 type Scenario = { id: string; frames: EndpointFrame[] };
 type ViewReceipt = { id: string; blobId: string; stepId: string; status: string; at: string; detail: string };
 
 const blobId = "local-endpoint-fixture";
 const scenarioId = "local-endpoint-supervisor";
+const legacyHealthTimeoutMs = 100;
+const defaultHealthTimeoutMs = 60_000;
 const endpointServerSource = `
 import { createServer } from "node:http";
 const port = Number(process.env.AXI_FACTORIO_ENDPOINT_PORT ?? process.env.PORT);
 const server = createServer((request, response) => {
-  if (request.url !== "/health") { response.writeHead(404).end("not found"); return; }
+  if (request.url !== "/healthz") { response.writeHead(404).end("not found"); return; }
   response.writeHead(200, { "content-type": "text/plain" });
   response.end("endpoint:healthy");
 });
-setTimeout(() => server.listen(port, "127.0.0.1", () => console.log(JSON.stringify({ event: "endpoint.ready", url: \`http://127.0.0.1:\${port}/health\` }))), 260);
+setTimeout(() => server.listen(port, "127.0.0.1", () => console.log(JSON.stringify({ event: "endpoint.ready", url: \`http://127.0.0.1:\${port}/healthz\` }))), 260);
 `;
+
+function npmCommand(): string {
+  const homebrew = "/opt/homebrew/Cellar/node/23.11.0/bin/npm";
+  return existsSync(homebrew) ? homebrew : "npm";
+}
 
 import type {
   AgentHarness, HarnessObserver, HarnessResult, HarnessResumeInput, HarnessStartInput,

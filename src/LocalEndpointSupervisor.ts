@@ -1,5 +1,18 @@
 export class LocalEndpointSupervisor {
   private readonly sessions = new Map<string, ActiveLocalEndpoint>();
+  private readonly healthTimeoutMs: number;
+
+  constructor(options: LocalEndpointSupervisorOptions = {}) {
+    this.healthTimeoutMs = options.healthTimeoutMs ?? defaultHealthTimeoutMs;
+  }
+
+  async inspectWorkspace(workspaceRoot: string, expectedHead: string): Promise<LocalEndpointWorkspace> {
+    const root = realpathSync(workspaceRoot);
+    await requireExactIdentity(root, expectedHead);
+    const declaration = readDeclaration(root);
+    if (!declaration) throw new Error("Local endpoint declaration is not available in the assigned workspace.");
+    return { root, ...declaration };
+  }
 
   async start(runId: string, workspaceRoot: string, port?: number): Promise<LocalEndpointSession | null> {
     const root = realpathSync(workspaceRoot);
@@ -41,7 +54,7 @@ export class LocalEndpointSupervisor {
     const active = launchLocalEndpoint(runId, cwd, gitHead, port, declaration);
     this.sessions.set(runId, active);
     try {
-      await requireHealthy(active);
+      await requireHealthy(active, this.healthTimeoutMs);
       log("local_endpoint_healthy", active.session);
       return active.session;
     } catch (error) {
@@ -124,8 +137,8 @@ function launchLocalEndpoint(
   return active;
 }
 
-async function requireHealthy(active: ActiveLocalEndpoint): Promise<void> {
-  const deadline = Date.now() + healthTimeoutMs;
+async function requireHealthy(active: ActiveLocalEndpoint, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (active.child?.exitCode !== null) throw launchFailure(active);
     if (await isHealthy(active.session.url)) return;
@@ -205,10 +218,12 @@ export type LocalEndpointSession = {
   runId: string; url: string; cwd: string; gitHead: string; port: number; pid: number;
   command: string; args: string[];
 };
+export type LocalEndpointSupervisorOptions = { healthTimeoutMs?: number };
+export type LocalEndpointWorkspace = LocalEndpointDeclaration & { root: string };
 type LocalEndpointDeclaration = { command: string; args: string[]; healthPath: string };
 type ActiveLocalEndpoint = { child: ChildProcess | null; session: LocalEndpointSession; output: string };
 
-const healthTimeoutMs = 12_000;
+const defaultHealthTimeoutMs = 60_000;
 const healthPollMs = 100;
 const healthRequestMs = 500;
 const terminationMs = 1_000;

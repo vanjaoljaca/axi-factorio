@@ -457,6 +457,24 @@ export class ConveyorStore {
     return this.requestLocalEndpointStop(blobId, reason);
   }
 
+  rebindLocalEndpoint(id: string, input: LocalEndpointRebind): LocalEndpointLease {
+    return this.database.transaction(() => {
+      const lease = this.requireLocalEndpointLease(id);
+      if (this.hasRunningReceipt(lease.blobId)) throw new Error("Local endpoint cannot rebind while a receipt is running.");
+      const at = this.now();
+      const url = `http://127.0.0.1:${lease.port}${input.healthPath}`;
+      this.database.connection.prepare(localEndpointLeaseRebind).run(
+        input.workspaceRoot, input.gitHead, url, input.command, JSON.stringify(input.args), at, id,
+      );
+      this.database.connection.prepare(executionEventInsert).run(
+        lease.receiptId, lease.blobId, lease.stepId, "axi_factorio.local_endpoint.rebound",
+        JSON.stringify({ oldWorkspaceRoot: lease.workspaceRoot, oldGitHead: lease.gitHead,
+          workspaceRoot: input.workspaceRoot, gitHead: input.gitHead, evidence: input.evidence }), at,
+      );
+      return this.requireLocalEndpointLease(id);
+    });
+  }
+
   inputArtifactsFor(blobId: string): string[] {
     const blob = this.requireBlob(blobId);
     const refs = [...blob.inputArtifacts];
@@ -1230,6 +1248,9 @@ const localEndpointLeaseStopped = `UPDATE localEndpointLeases SET desiredState =
   terminalReason = ?, updatedAt = ?, stoppedAt = ? WHERE id = ?`;
 const localEndpointLeaseFailed = `UPDATE localEndpointLeases SET desiredState = 'stopped', observedState = 'failed',
   terminalReason = ?, updatedAt = ? WHERE id = ?`;
+const localEndpointLeaseRebind = `UPDATE localEndpointLeases SET workspaceRoot = ?, gitHead = ?, url = ?,
+  command = ?, argsJson = ?, desiredState = 'active', observedState = 'stopped', pid = -1,
+  terminalReason = NULL, stoppedAt = NULL, updatedAt = ? WHERE id = ?`;
 const blobWorkspaceUpdate = `UPDATE blobs SET cwd = ?,
   executionWorkspaceRoot = CASE WHEN executionWorkspaceRoot = ? THEN ? ELSE executionWorkspaceRoot END,
   updatedAt = ? WHERE id = ?`;
@@ -1369,4 +1390,8 @@ import { realpathSync, statSync } from "node:fs";
 
 type LocalEndpointRegistration = {
   url: string; cwd: string; gitHead: string; port: number; pid: number; command: string; args: string[];
+};
+type LocalEndpointRebind = {
+  workspaceRoot: string; gitHead: string; command: string; args: string[];
+  healthPath: string; evidence: string[];
 };

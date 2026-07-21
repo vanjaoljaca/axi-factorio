@@ -39,6 +39,7 @@ async function runCommand(
     case "feedback": return addHumanFeedback(args.slice(1), store, json);
     case "approve": return approveHumanReview(args.slice(1), store, json);
     case "reset-endpoint": return resetLocalEndpoint(args.slice(1), store, json);
+    case "rebind-endpoint": return rebindLocalEndpoint(args.slice(1), store, json);
     case "adopt": return adoptBlob(args.slice(1), store, json);
     case "relocate": return relocateBlob(args.slice(1), store, json);
     case "bind-execution": return bindExecutionWorkspace(args.slice(1), store, json);
@@ -321,6 +322,21 @@ function resetLocalEndpoint(args: string[], store: ConveyorStore, json: boolean)
     parsed.positionals[0], firstFlag(parsed, "--reason") ?? "Local endpoint reset from CLI.",
   );
   printOutput({ ok: `reset-endpoint ${parsed.positionals[0]}`, localEndpointLeases: leases }, json);
+}
+
+async function rebindLocalEndpoint(args: string[], store: ConveyorStore, json: boolean): Promise<void> {
+  const parsed = parseArgs(args, { "--workspace": "value", "--git-head": "value", "--evidence": "value" });
+  requirePositionals(parsed, 1, "rebind-endpoint requires one lease ID.");
+  const evidence = parsed.flags["--evidence"] ?? [];
+  if (evidence.length === 0) throw usage("rebind-endpoint requires at least one --evidence value.");
+  const workspace = await new LocalEndpointSupervisor().inspectWorkspace(
+    requireFlag(parsed, "--workspace"), requireFlag(parsed, "--git-head"),
+  );
+  const lease = store.rebindLocalEndpoint(parsed.positionals[0], {
+    workspaceRoot: workspace.root, gitHead: requireFlag(parsed, "--git-head"),
+    command: workspace.command, args: workspace.args, healthPath: workspace.healthPath, evidence,
+  });
+  printOutput({ ok: `rebind-endpoint ${lease.id} -> ${lease.gitHead}`, localEndpointLease: lease }, json);
 }
 
 function adoptBlob(args: string[], store: ConveyorStore, json: boolean): void {
@@ -769,7 +785,7 @@ function serviceAbortController(): AbortController {
 }
 
 function printVersion(): void {
-  process.stdout.write("axi-factorio 0.1.0-rc.40\n");
+  process.stdout.write("axi-factorio 0.1.0-rc.41\n");
 }
 
 function helpCommand(args: string[]): string | undefined {
@@ -840,10 +856,10 @@ const receiptFields = [
 ];
 
 const helpText: Record<string, string> = {
-  root: `axi-factorio 0.1.0-rc.40
+  root: `axi-factorio 0.1.0-rc.41
 
 Usage: axi-factorio <command> [flags]
-Commands: project, add, adopt, relocate, bind-execution, list, status, show, receipts, play, step, stop, retry, review, feedback, approve, reset-endpoint, rewind, kick, run, service, setup, init
+Commands: project, add, adopt, relocate, bind-execution, list, status, show, receipts, play, step, stop, retry, review, feedback, approve, reset-endpoint, rebind-endpoint, rewind, kick, run, service, setup, init
 Globals: --db PATH, --json, --help, -v, --version
 
 Examples:
@@ -901,6 +917,9 @@ Examples:
   ]),
   "reset-endpoint": commandHelp("axi-factorio reset-endpoint BLOB_ID [--reason TEXT]", ["--reason TEXT (default: Local endpoint reset from CLI.)"], [
     "axi-factorio reset-endpoint <id>", "axi-factorio reset-endpoint <id> --reason \"<reason>\"",
+  ]),
+  "rebind-endpoint": commandHelp("axi-factorio rebind-endpoint LEASE_ID --workspace DIR --git-head SHA --evidence REF...", ["--workspace DIR (required)", "--git-head SHA (required exact clean head)", "--evidence REF (required, repeatable)"], [
+    "axi-factorio rebind-endpoint <lease-id> --workspace <dir> --git-head <sha> --evidence <ref>",
   ]),
   adopt: commandHelp("axi-factorio adopt BLOB_ID CURRENT_STEP --source KIND:EXACT_ID --evidence STEP_ID=REF...", ["--source IDENTITY (required)", "--evidence STEP_ID=REF (required per prior step)"], [
     "axi-factorio adopt <id> <step-id> --source git-sha:<sha> --evidence <prior-step>=<ref>",

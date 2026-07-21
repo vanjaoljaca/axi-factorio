@@ -51,6 +51,38 @@ test("fresh storage includes projects, blobs, receipts, and the dispatcher lease
   fixture.database.close();
 });
 
+test("local endpoint rebind preserves one lease and appends exact provenance", () => {
+  const fixture = createStoreFixture();
+  const blob = fixture.store.createBlob("endpoint-rebind", blobInput(fixture)).blob;
+  fixture.store.requestStep(blob.id);
+  const step = discoverPipeline(fixture.pipelinePath)[0];
+  const receipt = fixture.store.beginReceipt({
+    blobId: blob.id, step, definition: snapshotDefinition(step, fixture.pipelinePath),
+    adapter: "fake", inputArtifacts: [],
+  }).receipt;
+  fixture.store.registerLocalEndpoint(receipt.id, {
+    cwd: fixture.root, gitHead: "old-head", url: "http://127.0.0.1:5517/health",
+    port: 5517, pid: 123, command: "node", args: ["old.js"],
+  });
+  fixture.store.completeReceipt(receipt.id, {
+    status: "blocked", reason: "awaiting decision", outputArtifacts: [], externalRunId: "fake-1",
+  }, null);
+
+  const rebound = fixture.store.rebindLocalEndpoint(receipt.id, {
+    workspaceRoot: fixture.root, gitHead: "new-head", command: "npm",
+    args: ["run", "preview"], healthPath: "/healthz", evidence: ["verified:clean-head"],
+  });
+  const event = fixture.store.listExecutionEvents(blob.id).at(-1)!;
+
+  assert.equal(rebound.id, receipt.id);
+  assert.equal(rebound.gitHead, "new-head");
+  assert.equal(rebound.url, "http://127.0.0.1:5517/healthz");
+  assert.equal(rebound.desiredState, "active");
+  assert.equal(event.name, "axi_factorio.local_endpoint.rebound");
+  assert.deepEqual(event.attributes.evidence, ["verified:clean-head"]);
+  fixture.database.close();
+});
+
 test("project removal previews scope, rejects running work, and retains evidence", () => {
   const fixture = createStoreFixture();
   const blob = fixture.store.createBlob("remove-me", blobInput(fixture)).blob;

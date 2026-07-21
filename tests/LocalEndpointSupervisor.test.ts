@@ -6,10 +6,10 @@ test("a delayed decision keeps its exact-head endpoint alive after the receipt e
     const final = result.frames.at(-1)!;
     const healthy = result.frames.find((item) => item.visual.phase === "healthy")!;
 
-    assert.deepEqual(phases, ["ready", "committed", "healthy", "exit-received-url", "receipt-ended"]);
+    assert.deepEqual(phases, ["ready", "committed", "startup-timeout", "healthy", "exit-received-url", "receipt-ended"]);
     assert.equal(final.receipts[0].status, "blocked");
     assert.equal(final.visual.endpoint?.alive, true);
-    assert.deepEqual(final.visual.endpoint?.args, ["endpoint-server.ts"]);
+    assert.deepEqual(final.visual.endpoint?.args, ["--prefix", "apps/example", "run", "workbench"]);
     assert.equal(final.visual.endpoint?.cwd, final.visual.workspace);
     assert.equal(final.assertions.every((item) => item.passed), true);
     assert.equal((await fetch(healthy.visual.endpoint!.url)).status, 200);

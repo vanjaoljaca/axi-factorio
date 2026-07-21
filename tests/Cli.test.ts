@@ -83,7 +83,7 @@ test("every public command exposes concise help without opening runtime state", 
   const fixture = createCliFixture();
   const commands = [
     "project", "add", "adopt", "relocate", "bind-execution", "list", "status", "show", "receipts",
-    "play", "step", "stop", "retry", "review", "feedback", "approve", "reset-endpoint", "rewind",
+    "play", "step", "stop", "retry", "review", "feedback", "approve", "reset-endpoint", "rebind-endpoint", "rewind",
     "kick", "run", "evaluate", "service", "setup", "init",
   ];
   for (const command of commands) {
