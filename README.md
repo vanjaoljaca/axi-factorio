@@ -194,7 +194,7 @@ npm run build
 
 This recreates `release/` with:
 
-- `axi-factorio-0.1.0-rc.26.tgz`, the installable package;
+- `axi-factorio-0.1.0-rc.27.tgz`, the installable package;
 - `SHA256SUMS`, for artifact verification; and
 - `INSTALL.md`, with direct and vendored installation commands.
 
@@ -206,7 +206,7 @@ Do not use `npm link` for a consuming project. Install the exact tarball so
 Install the exact candidate in the consuming npm project:
 
 ```sh
-npm install --save-exact /path/to/axi-factorio-0.1.0-rc.26.tgz
+npm install --save-exact /path/to/axi-factorio-0.1.0-rc.27.tgz
 ```
 
 From the consuming project root, the defaults are:
@@ -270,7 +270,10 @@ safe boundary and expose Step, Play, and Stop controls. While Debug mode is on,
 continuous Play is disabled and each Step authorizes exactly one transition.
 Overview remains the pipeline board; Projects summarizes configured roots and
 pipelines, Runs contains execution diagnostics, and Alerts collects failures
-and work requiring attention.
+and work requiring attention. Zero-receipt held work is described as Inventory
+only in the state-marker tooltip. Collapsing a project replaces its task rows
+with one aggregate pipeline; each ring shows the percentage of that project's
+tasks with a valid successful receipt for the corresponding step.
 
 Process one requested transition or keep the conveyor service moving:
 

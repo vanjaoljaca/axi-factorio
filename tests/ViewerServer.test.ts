@@ -240,6 +240,11 @@ test("Viewer ships clickable Overview, Projects, Runs, Alerts, and Settings page
     }
     assert.match(body, /id="debug-mode"/u);
     assert.match(body, /snapshot\.settings\.debugMode\?controlButton/u);
+    assert.match(body, /Project progress|aggregateCell/u);
+    assert.match(body, /collapsedProjects/u);
+    assert.match(body, /collapsed\?'Expand':'Collapse'/u);
+    assert.match(body, /held:''/u);
+    assert.match(body, /Inventory — held before its first run\./u);
   } finally {
     await close(server);
   }
