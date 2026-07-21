@@ -199,6 +199,52 @@ test("viewer execution API persists Play, Step, and Stop without duplicate reque
   assert.equal(stepped.blob.runRequested, true);
 });
 
+test("Viewer Debug setting is durable, manual, and exposed through Settings", async () => {
+  const fixture = createPipeline(["g1.first", "g2.second"]);
+  const databasePath = join(fixture.root, "factorio.sqlite");
+  const database = new FactorioDatabase(databasePath);
+  const store = new ConveyorStore(database);
+  store.createBlob("debug-controlled", blobInput(fixture, "Debug controlled item"));
+  store.requestContinuous("debug-controlled");
+  database.close();
+  const server = createViewerServer(databasePath);
+  const endpoint = await listen(server);
+  try {
+    const enabled = await fetch(`${endpoint}/api/settings/debug-mode`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ enabled: true }),
+    }).then(readJson);
+    const snapshot = await fetch(`${endpoint}/api/view`).then(readJson) as ViewSnapshot;
+    const play = await fetch(`${endpoint}/api/blobs/debug-controlled/play`, { method: "POST" });
+
+    assert.equal(enabled.settings.debugMode, true);
+    assert.equal(snapshot.settings.debugMode, true);
+    assert.equal(snapshot.projects[0].blobs[0].execution.play.enabled, false);
+    assert.equal(play.status, 409);
+  } finally {
+    await close(server);
+  }
+});
+
+test("Viewer ships clickable Overview, Projects, Runs, Alerts, and Settings pages", async () => {
+  const fixture = createPipeline(["g1.first"]);
+  const databasePath = join(fixture.root, "factorio.sqlite");
+  new FactorioDatabase(databasePath).close();
+  const server = createViewerServer(databasePath);
+  const endpoint = await listen(server);
+  try {
+    const body = await fetch(endpoint).then((response) => response.text());
+    for (const page of ["overview", "projects", "runs", "alerts", "settings"]) {
+      assert.match(body, new RegExp(`data-page="${page}"`, "u"));
+    }
+    assert.match(body, /id="debug-mode"/u);
+    assert.match(body, /snapshot\.settings\.debugMode\?controlButton/u);
+  } finally {
+    await close(server);
+  }
+});
+
 test("Overview starts with projects and never mounts execution-session diagnostics", async () => {
   const fixture = createPipeline(["g1.first"]);
   const databasePath = join(fixture.root, "factorio.sqlite");
@@ -437,6 +483,7 @@ function blobInput(fixture: PipelineFixture, title: string): BlobInput {
 
 type ViewSnapshot = {
   stats: { projects: number; tasks: number };
+  settings: { debugMode: boolean };
   executionOverviewHtml: string;
   executionSessions: Array<{
     blobId: string;

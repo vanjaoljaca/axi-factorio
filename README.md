@@ -194,7 +194,7 @@ npm run build
 
 This recreates `release/` with:
 
-- `axi-factorio-0.1.0-rc.25.tgz`, the installable package;
+- `axi-factorio-0.1.0-rc.26.tgz`, the installable package;
 - `SHA256SUMS`, for artifact verification; and
 - `INSTALL.md`, with direct and vendored installation commands.
 
@@ -206,7 +206,7 @@ Do not use `npm link` for a consuming project. Install the exact tarball so
 Install the exact candidate in the consuming npm project:
 
 ```sh
-npm install --save-exact /path/to/axi-factorio-0.1.0-rc.25.tgz
+npm install --save-exact /path/to/axi-factorio-0.1.0-rc.26.tgz
 ```
 
 From the consuming project root, the defaults are:
@@ -263,6 +263,14 @@ already running, that receipt is allowed to finish and no following transition
 is claimed. Mode and run-request state survive service and machine restarts.
 Repeated identical requests are idempotent, and the dispatcher lease prevents
 duplicate concurrent claims.
+
+The Viewer hides manual execution controls during normal operation. Open
+Settings and enable Debug mode to stop queued continuous runs at their next
+safe boundary and expose Step, Play, and Stop controls. While Debug mode is on,
+continuous Play is disabled and each Step authorizes exactly one transition.
+Overview remains the pipeline board; Projects summarizes configured roots and
+pipelines, Runs contains execution diagnostics, and Alerts collects failures
+and work requiring attention.
 
 Process one requested transition or keep the conveyor service moving:
 

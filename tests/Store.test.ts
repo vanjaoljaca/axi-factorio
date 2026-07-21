@@ -45,9 +45,25 @@ test("fresh storage includes projects, blobs, receipts, and the dispatcher lease
     [
       "attemptEvidence", "blobRevisions", "blobs", "dispatcherLeases",
       "executionEvents", "executionWorkspaceBindings", "humanInputs", "localEndpointLeases",
-      "projects", "receipts", "workspaceRelocations",
+      "projects", "receipts", "settings", "workspaceRelocations",
     ],
   );
+  fixture.database.close();
+});
+
+test("Debug mode persists and stops continuous progression at the next boundary", () => {
+  const fixture = createStoreFixture();
+  fixture.store.createBlob("debug-item", blobInput(fixture));
+  fixture.store.requestContinuous("debug-item");
+
+  assert.equal(fixture.store.setDebugMode(true), true);
+  assert.equal(fixture.store.debugMode(), true);
+  assert.equal(fixture.store.getBlob("debug-item")?.runRequested, false);
+  assert.equal(fixture.store.getBlob("debug-item")?.executionMode, "step");
+  assert.throws(() => fixture.store.requestContinuous("debug-item"), /disabled while Debug mode is on/);
+
+  assert.equal(fixture.store.setDebugMode(false), false);
+  assert.equal(fixture.store.debugMode(), false);
   fixture.database.close();
 });
 

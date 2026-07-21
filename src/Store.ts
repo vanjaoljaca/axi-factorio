@@ -27,6 +27,19 @@ export class ConveyorStore {
     return this.database.connection.prepare(projectList).all().map((row) => mapProject(asRecord(row)));
   }
 
+  debugMode(): boolean {
+    const row = this.database.connection.prepare(settingSelect).get("debugMode") as { value?: string } | undefined;
+    return row?.value === "true";
+  }
+
+  setDebugMode(enabled: boolean): boolean {
+    return this.database.transaction(() => {
+      this.database.connection.prepare(settingUpsert).run("debugMode", String(enabled), this.now());
+      if (enabled) this.database.connection.prepare(blobsEnterDebugMode).run(this.now());
+      return this.debugMode();
+    });
+  }
+
   createBlob(id: string, input: BlobInput): BlobMutationResult {
     return this.database.transaction(() => {
       const existing = this.getBlob(id);
@@ -611,6 +624,9 @@ export class ConveyorStore {
 
   private requestExecution(blobId: string, mode: ExecutionMode): BlobMutationResult {
     return this.database.transaction(() => {
+      if (mode === "continuous" && this.debugMode()) {
+        throw new BlobExecutionError("Continuous play is disabled while Debug mode is on.");
+      }
       const blob = this.requireBlob(blobId);
       if (blob.runRequested && blob.executionMode === mode) return { blob, already: true };
       const blocker = this.executionBlocker(blob);
@@ -1004,6 +1020,11 @@ const blobNext = `SELECT * FROM blobs WHERE state != 'complete' AND paused = 0 A
 const blobPauseAndRunUpdate = "UPDATE blobs SET paused = ?, runRequested = ?, updatedAt = ? WHERE id = ?";
 const blobRunUpdate = "UPDATE blobs SET executionMode = ?, runRequested = 1, updatedAt = ? WHERE id = ?";
 const blobStopUpdate = "UPDATE blobs SET runRequested = 0, updatedAt = ? WHERE id = ?";
+const blobsEnterDebugMode = `UPDATE blobs SET executionMode = 'step', runRequested = 0, updatedAt = ?
+  WHERE executionMode != 'step' OR runRequested != 0`;
+const settingSelect = "SELECT value FROM settings WHERE key = ?";
+const settingUpsert = `INSERT INTO settings (key, value, updatedAt) VALUES (?, ?, ?)
+  ON CONFLICT(key) DO UPDATE SET value = excluded.value, updatedAt = excluded.updatedAt`;
 const blobCompleteUpdate = `UPDATE blobs SET state = 'complete', paused = 0,
   runRequested = 0,
   forcedStepId = NULL, humanGateStepId = NULL, humanGateApprovalInputId = NULL,

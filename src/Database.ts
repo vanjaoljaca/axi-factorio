@@ -151,6 +151,12 @@ const schema = `
 
   CREATE INDEX IF NOT EXISTS blobsRunnable ON blobs(state, updatedAt, createdAt);
 
+  CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updatedAt TEXT NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS receipts (
     id TEXT PRIMARY KEY,
     blobId TEXT NOT NULL REFERENCES blobs(id),
