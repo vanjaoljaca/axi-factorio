@@ -159,6 +159,23 @@ export class ConveyorStore {
     });
   }
 
+  replaceExternalRunForRecovery(
+    receiptId: string,
+    expectedExternalRunId: string,
+    externalRunId: string,
+    ownerId?: string,
+  ): void {
+    this.database.transaction(() => {
+      this.requireActiveLease(ownerId);
+      const receipt = this.requireReceipt(receiptId);
+      if (receipt.status !== "running" || receipt.externalRunId !== expectedExternalRunId) {
+        throw new Error("Receipt external run is not eligible for recovery replacement.");
+      }
+      if (externalRunId === expectedExternalRunId) throw new Error("Recovery replacement must use a fresh external run ID.");
+      this.database.connection.prepare(receiptExternalRunUpdate).run(externalRunId, receiptId);
+    });
+  }
+
   completeReceipt(
     receiptId: string,
     result: ExecutionResult,

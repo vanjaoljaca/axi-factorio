@@ -4,15 +4,15 @@ export async function runEmptyLaunchRecoveryScenario(): Promise<EmptyLaunchRecov
   const runner = new ConveyorRunner(fixture.store, harness, undefined, runnerOptions);
   try {
     fixture.store.createBlob(blobId, {
-      title: "Empty provider launch recovers in place",
-      body: "Keep one receipt and one external task while replacing an empty aborted invocation.",
+      title: "Empty provider launch recovers in one receipt",
+      body: "Keep one receipt while replacing an empty, unresumable provider task.",
       cwd: dirname(fixture.pipelinePath), pipelinePath: fixture.pipelinePath, inputArtifacts: [],
     });
     fixture.store.requestStep(blobId);
     const before = frame("Empty launch interrupted", [], harness);
     await runner.runOnce();
     const receipts = fixture.store.listReceipts(blobId);
-    return { id: scenarioId, frames: [before, frame("Same receipt recovered", receipts, harness)], receipts, harness };
+    return { id: scenarioId, frames: [before, frame("Fresh subattempt recovered", receipts, harness)], receipts, harness };
   } finally {
     fixture.dispose();
   }
@@ -21,29 +21,28 @@ export async function runEmptyLaunchRecoveryScenario(): Promise<EmptyLaunchRecov
 class EmptyLaunchHarness implements AgentHarness {
   readonly name = "empty-launch-provider";
   starts = 0;
-  resumes = 0;
   cancels = 0;
   private reject: ((error: Error) => void) | null = null;
 
   async start(_input: HarnessStartInput, observer: HarnessObserver): Promise<HarnessResult> {
     this.starts += 1;
-    observer.event({ type: "external-run", externalRunId });
+    const taskId = this.starts === 1 ? abortedExternalRunId : recoveredExternalRunId;
+    observer.event({ type: "external-run", externalRunId: taskId });
+    if (this.starts > 1) return {
+      decision: "advance", reason: "Recovered with a fresh provider task inside the same receipt.",
+      outputArtifacts: ["proof:within-receipt-recovery"], externalRunId: taskId,
+    };
     return new Promise((_resolve, reject) => this.reject = reject);
   }
 
-  async resume(input: HarnessResumeInput, observer: HarnessObserver): Promise<HarnessResult> {
-    this.resumes += 1;
-    observer.event({ type: "external-run", externalRunId: input.externalRunId });
-    return {
-      decision: "advance", reason: "Recovered with a new turn on the same provider task.",
-      outputArtifacts: ["proof:within-receipt-recovery"], externalRunId: input.externalRunId,
-    };
+  async resume(_input: HarnessResumeInput, _observer: HarnessObserver): Promise<HarnessResult> {
+    throw new Error("An empty provider task must not be resumed.");
   }
 
   async reconcile(): Promise<HarnessExternalState> {
     return {
       status: "interrupted", reason: "Initial provider turn aborted before agent activity.",
-      recovery: "resume",
+      recovery: "restart",
     } as HarnessExternalState;
   }
 
@@ -58,20 +57,19 @@ function frame(label: string, receipts: Receipt[], harness: EmptyLaunchHarness):
   const recovered = receipts.length === 1;
   return {
     name: "Empty provider launch recovery",
-    description: "Play both frames: the bead and receipt stay fixed while an empty aborted invocation becomes a new turn on the same task.",
+    description: "Play both frames: the bead and receipt stay fixed while an empty provider task is replaced by one fresh subattempt.",
     source: "scenario",
     steps: [{ id: "g1.first", label: "First" }, { id: "g2.second", label: "Second" }],
     blobs: [{
-      id: blobId, title: "Empty provider launch recovers in place",
+      id: blobId, title: "Empty provider launch recovers in one receipt",
       state: recovered ? "advanced" : "running", stepId: recovered ? "g2.second" : "g1.first",
     }],
     receipts: receipts.map(viewReceipt),
     assertions: [
       { label: "Exactly one receipt", passed: !recovered || receipts.length === 1 },
-      { label: "One fresh start invocation", passed: !recovered || harness.starts === 1 },
-      { label: "One within-receipt resume", passed: !recovered || harness.resumes === 1 },
+      { label: "Two provider start subattempts", passed: !recovered || harness.starts === 2 },
       { label: "Empty invocation cancelled once", passed: !recovered || harness.cancels === 1 },
-      { label: "External task identity is unchanged", passed: !recovered || receipts[0]?.externalRunId === externalRunId },
+      { label: "Fresh task replaces unresumable task", passed: !recovered || receipts[0]?.externalRunId === recoveredExternalRunId },
     ],
   };
 }
@@ -86,7 +84,8 @@ function viewReceipt(receipt: Receipt): WorkbenchReceipt {
 
 const scenarioId = "empty-launch-recovery";
 const blobId = "empty-launch-blob";
-const externalRunId = "provider:fresh-task";
+const abortedExternalRunId = "provider:empty-task";
+const recoveredExternalRunId = "provider:recovered-task";
 const runnerOptions = { reconcileEveryMs: 2, confirmTerminalAfterMs: 2 };
 
 export type EmptyLaunchRecoveryResult = {

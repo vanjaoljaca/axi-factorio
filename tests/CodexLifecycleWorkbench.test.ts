@@ -3,7 +3,7 @@ test("Workbench keeps a fresh active Codex turn alive through reconciliation", a
 
   assert.equal(scenario.controlState, "running");
   assert.equal(scenario.staleState, "interrupted");
-  assert.equal(scenario.staleRecovery, "resume");
+  assert.equal(scenario.staleRecovery, "restart");
   assert.equal(scenario.observedReceipt.status, "advance");
   assert(scenario.frames.at(-1)?.assertions.every((assertion) => assertion.passed));
 });

@@ -2,8 +2,8 @@ test("workbench catalog lists every test with an explicit visual representation"
   const catalog = listVisualTests();
   const names = catalog.map((item) => item.name);
 
-  assert.equal(catalog.length, 138);
-  assert.equal(new Set(catalog.map((item) => item.category)).size, 33);
+  assert.equal(catalog.length, 141);
+  assert.equal(new Set(catalog.map((item) => item.category)).size, 35);
   assert(names.includes("default harness pushes a blob through the actual conveyor"));
   assert(catalog.every((item) => item.visualLabel && item.visualDescription));
   assert.equal(catalog.find((item) => item.category === "Cli")?.visualKind, "terminal-proof");

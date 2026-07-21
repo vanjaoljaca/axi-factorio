@@ -95,7 +95,7 @@ test("terminal external state fails safely and retry starts a fresh run", async 
   fixture.database.close();
 });
 
-test("empty-launch recovery is capped at one within-receipt resume", async () => {
+test("empty-launch recovery is capped at one within-receipt restart", async () => {
   const harness = new RepeatedEmptyLaunchHarness();
   const fixture = createExecutionFixture(["g1.first"], [], harness, {
     reconcileEveryMs: 2, confirmTerminalAfterMs: 2,
@@ -108,8 +108,8 @@ test("empty-launch recovery is capped at one within-receipt resume", async () =>
   const receipts = fixture.store.listReceipts("blob-1");
   assert.equal(receipts.length, 1);
   assert.equal(receipts[0].status, "failed");
-  assert.equal(harness.starts, 1);
-  assert.equal(harness.resumes, 1);
+  assert.equal(harness.starts, 2);
+  assert.equal(harness.resumes, 0);
   assert.equal(harness.cancels, 2);
   fixture.database.close();
 });
@@ -285,7 +285,7 @@ class RepeatedEmptyLaunchHarness extends OutcomeHarness {
 
   override async start(_input: HarnessStartInput, observer: HarnessObserver): Promise<HarnessResult> {
     this.starts += 1;
-    observer.event({ type: "external-run", externalRunId: "external:empty" });
+    observer.event({ type: "external-run", externalRunId: `external:empty:${this.starts}` });
     return new Promise((_resolve, reject) => this.reject = reject);
   }
 
@@ -296,7 +296,7 @@ class RepeatedEmptyLaunchHarness extends OutcomeHarness {
   }
 
   override async reconcile(): Promise<HarnessExternalState> {
-    return { status: "interrupted", reason: "empty provider turn", recovery: "resume" };
+    return { status: "interrupted", reason: "empty provider turn", recovery: "restart" };
   }
 
   override async cancel(): Promise<void> {

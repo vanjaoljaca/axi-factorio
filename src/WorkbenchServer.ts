@@ -183,7 +183,7 @@ function scenarioIndex(): object[] {
     },
     {
       id: "empty-launch-recovery", category: "Harness", name: "Empty provider launch recovery",
-      description: "one receipt · same external task · cancelled empty invocation · new turn",
+      description: "one receipt · cancelled empty task · fresh provider subattempt",
     },
     {
       id: "codex-mcp-isolation", category: "Harness", name: "Pinned Codex MCP isolation",

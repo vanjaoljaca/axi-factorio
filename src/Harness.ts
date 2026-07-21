@@ -39,7 +39,7 @@ export type HarnessExternalState =
   | {
     status: "interrupted" | "failed" | "missing";
     reason: string;
-    recovery?: "resume";
+    recovery?: "resume" | "restart";
   };
 
 export type HarnessResult = {

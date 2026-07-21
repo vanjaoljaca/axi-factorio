@@ -439,7 +439,7 @@ function codexThreadState(thread: CodexThread, externalRunId: string): HarnessEx
     return {
       status: "interrupted",
       reason: `Codex external task ${externalRunId} turn ${latest.id} was interrupted${unloaded}.`,
-      recovery: hasNoAgentActivity(latest) ? "resume" : undefined,
+      recovery: hasNoAgentActivity(latest) ? "restart" : undefined,
     };
   }
   return {

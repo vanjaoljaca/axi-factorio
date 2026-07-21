@@ -66,6 +66,7 @@ export class ConveyorRunner {
     ownerId?: string,
   ): Promise<void> {
     let externalRunId = claim.receipt.continuationThreadId;
+    let replacingExternalRunId: string | null = null;
     let cancelPromise: Promise<void> | null = null;
     let localEndpoint: LocalEndpointSession | null = null;
     let terminalStatus: ReceiptStatus | null = null;
@@ -88,8 +89,15 @@ export class ConveyorRunner {
       const observer = {
         event: (event: HarnessEvent) => {
           if (event.type === "external-run") {
+            if (replacingExternalRunId && event.externalRunId !== replacingExternalRunId) {
+              this.store.replaceExternalRunForRecovery(
+                claim.receipt.id, replacingExternalRunId, event.externalRunId, ownerId,
+              );
+              replacingExternalRunId = null;
+            } else {
+              this.store.recordExternalRun(claim.receipt.id, event.externalRunId, ownerId);
+            }
             externalRunId = event.externalRunId;
-            this.store.recordExternalRun(claim.receipt.id, externalRunId, ownerId);
           }
           this.recordBoundary("event", claim, harnessEventAttributes(event));
         },
@@ -115,8 +123,19 @@ export class ConveyorRunner {
         } catch (error) {
           if (!(error instanceof RecoverableHarnessLaunchError) || recoveries || !externalRunId) throw error;
           recoveries += 1;
-          this.recordBoundary("recovery", claim, { externalRunId, subattempt: recoveries + 1 });
-          running = this.resumeHarness(input, externalRunId, observer, claim);
+          const previousExternalRunId = externalRunId;
+          this.recordBoundary("recovery", claim, {
+            externalRunId: previousExternalRunId,
+            strategy: error.strategy,
+            subattempt: recoveries + 1,
+          });
+          if (error.strategy === "restart") {
+            replacingExternalRunId = previousExternalRunId;
+            externalRunId = null;
+            running = this.startHarness(input, observer, claim);
+          } else {
+            running = this.resumeHarness(input, previousExternalRunId, observer, claim);
+          }
         }
       }
       if (result.externalRunId) {
@@ -251,8 +270,8 @@ export class ConveyorRunner {
     const confirmed = await this.readExternalState(claim, externalRunId);
     if (!confirmed || confirmed.status !== first.status) return;
     await this.cancelReconciledRun(claim, externalRunId, confirmed.reason);
-    if (confirmed.status === "interrupted" && confirmed.recovery === "resume") {
-      throw new RecoverableHarnessLaunchError(externalRunId, confirmed.reason);
+    if (confirmed.status === "interrupted" && confirmed.recovery) {
+      throw new RecoverableHarnessLaunchError(externalRunId, confirmed.reason, confirmed.recovery);
     }
     throw new Error(`External run ${externalRunId} ${confirmed.status}: ${confirmed.reason}`);
   }
@@ -393,10 +412,12 @@ export class ReceiptRunError extends Error {
 
 class RecoverableHarnessLaunchError extends Error {
   readonly externalRunId: string;
+  readonly strategy: "resume" | "restart";
 
-  constructor(externalRunId: string, reason: string) {
+  constructor(externalRunId: string, reason: string, strategy: "resume" | "restart") {
     super(reason);
     this.externalRunId = externalRunId;
+    this.strategy = strategy;
   }
 }
 
