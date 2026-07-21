@@ -16,6 +16,7 @@ export class LocalEndpointSupervisor {
     await requireExactIdentity(root, lease.gitHead);
     if (processAlive(lease.pid) && await isHealthy(lease.url)) return this.adopt(lease, root);
     if (processAlive(lease.pid)) await terminatePid(lease.pid);
+    this.sessions.delete(lease.id);
     const session = await this.start(lease.id, root, lease.port);
     if (!session) throw new Error("Local endpoint declaration is no longer available.");
     return session;

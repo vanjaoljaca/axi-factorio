@@ -15,9 +15,40 @@ export function disclosureMarkup(projectId: string, name: string, collapsed: boo
   </button>`;
 }
 
+export type AggregateMarkerUpdate = {
+  signature: string;
+  composition: string;
+  label: string;
+  total: number;
+};
+
+export type AggregateMarker = {
+  dataset: Record<string, string | undefined>;
+  classList: { toggle(name: string, enabled: boolean): void };
+  style: { setProperty(name: string, value: string): void };
+  title: string;
+  setAttribute(name: string, value: string): void;
+};
+
+export function updateAggregateMarker(marker: AggregateMarker, update: AggregateMarkerUpdate): boolean {
+  if (marker.dataset.aggregateState === update.signature) return false;
+  marker.dataset.aggregateState = update.signature;
+  marker.classList.toggle("unavailable", update.total === 0);
+  marker.style.setProperty("--composition", update.composition);
+  marker.title = update.label;
+  marker.setAttribute("aria-label", update.label);
+  return true;
+}
+
+export function projectHasActiveWork(project: { blobs: Array<{ status: string }> }): boolean {
+  return project.blobs.some((blob) => blob.status !== "complete");
+}
+
 export const viewerComponentScript = String.raw`
 function blobNameMenuTriggerMarkup(blobId,title){return '<button class="task-name-button" data-blob-menu="'+componentEscape(blobId)+'" aria-haspopup="menu" aria-expanded="false">'+componentEscape(title)+'</button>'}
 function disclosureMarkup(projectId,name,collapsed){const action=collapsed?'Expand':'Collapse';return '<button class="project-disclosure" data-project-toggle="'+componentEscape(projectId)+'" aria-label="'+action+' project '+componentEscape(name)+'" title="'+action+' project"><span aria-hidden="true">'+(collapsed?'‹':'⌄')+'</span></button>'}
+function updateAggregateMarker(marker,update){if(marker.dataset.aggregateState===update.signature)return false;marker.dataset.aggregateState=update.signature;marker.classList.toggle('unavailable',!update.total);marker.style.setProperty('--composition',update.composition);marker.title=update.label;marker.setAttribute('aria-label',update.label);return true}
+function projectHasActiveWork(project){return project.blobs.some(blob=>blob.status!=='complete')}
 function componentEscape(value){return String(value).replace(/[&<>"']/g,character=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[character]))}
 `;
 

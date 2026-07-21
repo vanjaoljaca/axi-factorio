@@ -31,6 +31,23 @@ test("service restart recovers the same durable local endpoint lease", async () 
   }
 });
 
+test("poll reconciliation relaunches a retained endpoint after its child exits", async () => {
+  const scenario = new LocalEndpointScenario();
+  try {
+    const before = (await scenario.play()).frames.at(-1)!.visual.endpoint!;
+    const result = await scenario.recoverLostChild();
+    const after = result.frames.at(-1)!.visual.endpoint!;
+
+    assert.equal(result.frames.at(-2)!.visual.phase, "child-lost");
+    assert.notEqual(after.pid, before.pid);
+    assert.equal(after.url, before.url);
+    assert.equal(after.gitHead, before.gitHead);
+    assert.equal((await fetch(after.url)).status, 200);
+  } finally {
+    await scenario.dispose();
+  }
+});
+
 test("approve durably terminates the owned local endpoint without an orphan", async () => {
   await assertDisposition("approve");
 });

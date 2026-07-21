@@ -45,6 +45,19 @@ export class LocalEndpointScenario {
     return this.snapshot();
   }
 
+  async recoverLostChild(): Promise<Scenario> {
+    const before = this.currentSession();
+    if (!before) throw new Error("Play the retained endpoint before simulating process loss.");
+    process.kill(-before.pid, "SIGTERM");
+    await waitUntilUnavailable(before.url);
+    this.capture("child-lost", { ...before });
+    await this.runner!.reconcileLocalEndpoints();
+    const after = this.currentSession();
+    if (!after || !await endpointHealthy(after.url)) throw new Error("Retained endpoint was not recovered.");
+    this.capture("recovered", after);
+    return this.snapshot();
+  }
+
   async reset(): Promise<Scenario> {
     await this.cleanup("Local endpoint scenario reset.");
     disposeFixture(this.fixture);
@@ -190,8 +203,21 @@ function assertions(
 function phaseStatus(phase: EndpointPhase): "ready" | "running" | "waiting" | "complete" {
   if (phase === "ready") return "ready";
   if (phase === "stopped") return "complete";
-  if (["receipt-ended", "service-restarting", "recovered", "approved", "rejected"].includes(phase)) return "waiting";
+  if (["receipt-ended", "service-restarting", "child-lost", "recovered", "approved", "rejected"].includes(phase)) return "waiting";
   return "running";
+}
+
+async function waitUntilUnavailable(url: string): Promise<void> {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    if (!await endpointHealthy(url)) return;
+    await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+  }
+  throw new Error("Fixture endpoint did not stop.");
+}
+
+async function endpointHealthy(url: string): Promise<boolean> {
+  try { return (await fetch(url, { signal: AbortSignal.timeout(300) })).ok; }
+  catch { return false; }
 }
 
 function readReceipts(databasePath: string): Receipt[] {
@@ -239,7 +265,7 @@ export type LocalEndpointVisual = {
   lease: LocalEndpointLease | null;
 };
 type EndpointPhase = "ready" | "committed" | "healthy" | "exit-received-url" | "receipt-ended"
-  | "service-restarting" | "recovered" | "approved" | "rejected" | "stopped";
+  | "service-restarting" | "child-lost" | "recovered" | "approved" | "rejected" | "stopped";
 type PhaseObserver = (phase: EndpointPhase, session: LocalEndpointSession | null) => void;
 type Fixture = { root: string; workspace: string; pipelinePath: string; databasePath: string };
 type Assertion = { label: string; passed: boolean };
