@@ -130,6 +130,21 @@ test("a provider task completing during terminal confirmation is not restarted",
   fixture.database.close();
 });
 
+test("provider progress invalidates a stale terminal observation", async () => {
+  const harness = new ProgressDuringConfirmationHarness();
+  const fixture = createExecutionFixture(["g1.first"], [], harness, {
+    reconcileEveryMs: 2, confirmTerminalAfterMs: 20,
+  });
+  fixture.store.createBlob("blob-1", blobInput(fixture));
+  fixture.store.requestStep("blob-1");
+
+  await fixture.runner.runOnce();
+
+  assert.equal(fixture.store.listReceipts("blob-1")[0].status, "advance");
+  assert.equal(harness.cancels, 0);
+  fixture.database.close();
+});
+
 test("duplicate starts are idempotent and Stop prevents the next claim", async () => {
   const adapter = new ControlledAdapter();
   const fixture = createExecutionFixture(["g1.first", "g2.second"], [], adapter);
@@ -338,6 +353,29 @@ class ConfirmationRaceHarness extends OutcomeHarness {
 
   override async reconcile(): Promise<HarnessExternalState> {
     return { status: "interrupted", reason: "provider state has not caught up", recovery: "restart" };
+  }
+
+  override async cancel(): Promise<void> {
+    this.cancels += 1;
+  }
+}
+
+class ProgressDuringConfirmationHarness extends OutcomeHarness {
+  cancels = 0;
+
+  override async start(_input: HarnessStartInput, observer: HarnessObserver): Promise<HarnessResult> {
+    observer.event({ type: "external-run", externalRunId: "external:phase-change" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    observer.event({ type: "status", status: "running", message: "exit" });
+    await new Promise((resolve) => setTimeout(resolve, 18));
+    return {
+      decision: "advance", reason: "fresh phase activity superseded stale provider state",
+      outputArtifacts: [], externalRunId: "external:phase-change",
+    };
+  }
+
+  override async reconcile(): Promise<HarnessExternalState> {
+    return { status: "interrupted", reason: "stale prior phase", recovery: "restart" };
   }
 
   override async cancel(): Promise<void> {

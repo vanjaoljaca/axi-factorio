@@ -67,6 +67,7 @@ export class ConveyorRunner {
   ): Promise<void> {
     let externalRunId = claim.receipt.continuationThreadId;
     let replacingExternalRunId: string | null = null;
+    let harnessActivity = 0;
     let cancelPromise: Promise<void> | null = null;
     let localEndpoint: LocalEndpointSession | null = null;
     let terminalStatus: ReceiptStatus | null = null;
@@ -88,6 +89,7 @@ export class ConveyorRunner {
       const input = harnessInput(claim);
       const observer = {
         event: (event: HarnessEvent) => {
+          harnessActivity += 1;
           if (event.type === "external-run") {
             if (replacingExternalRunId && event.externalRunId !== replacingExternalRunId) {
               this.store.replaceExternalRunForRecovery(
@@ -118,7 +120,7 @@ export class ConveyorRunner {
       let recoveries = 0;
       while (true) {
         try {
-          result = await this.awaitHarness(running, claim, () => externalRunId);
+          result = await this.awaitHarness(running, claim, () => externalRunId, () => harnessActivity);
           break;
         } catch (error) {
           if (!(error instanceof RecoverableHarnessLaunchError) || recoveries || !externalRunId) throw error;
@@ -247,6 +249,7 @@ export class ConveyorRunner {
     running: Promise<HarnessResult>,
     claim: ClaimedExecution,
     externalRunId: () => string | null,
+    activity: () => number,
   ): Promise<HarnessResult> {
     if (!this.harness.reconcile) return running;
     const settled = settle(running);
@@ -254,7 +257,7 @@ export class ConveyorRunner {
       const outcome = await Promise.race([settled, delay(this.reconcileEveryMs)]);
       if (outcome) return unwrap(outcome);
       const runId = externalRunId();
-      if (runId) await this.reconcileHarness(settled, claim, runId);
+      if (runId) await this.reconcileHarness(settled, claim, runId, activity);
     }
   }
 
@@ -262,11 +265,14 @@ export class ConveyorRunner {
     settled: Promise<SettledHarness>,
     claim: ClaimedExecution,
     externalRunId: string,
+    activity: () => number,
   ): Promise<void> {
+    const observedActivity = activity();
     const first = await this.readExternalState(claim, externalRunId);
     if (!first || first.status === "running") return;
     const outcome = await Promise.race([settled, delay(this.confirmTerminalAfterMs)]);
     if (outcome) return void unwrap(outcome);
+    if (activity() !== observedActivity) return;
     const confirmed = await this.readExternalState(claim, externalRunId);
     if (!confirmed || confirmed.status !== first.status) return;
     await this.cancelReconciledRun(claim, externalRunId, confirmed.reason);
