@@ -10,7 +10,7 @@ type ViewSnapshot = {
   receipts: ViewReceipt[];
   assertions: { label: string; passed: boolean }[];
   evidenceCards?: { label: string; value: string }[];
-  visual?: LiveExecutionVisual | ViewerResilienceVisual | CursorActionVisual | LocalEndpointVisual | OverviewBoundaryVisual | ProjectRemovalVisual | AggregatePollingVisual | ActiveProjectsVisual;
+  visual?: LiveExecutionVisual | ViewerResilienceVisual | CursorActionVisual | LocalEndpointVisual | OverviewBoundaryVisual | ProjectRemovalVisual | AggregatePollingVisual | ActiveProjectsVisual | AxiValidationVisual;
 };
 type Scenario = { id: string; frames: ViewSnapshot[] };
 type LiveExecutionVisual = {
@@ -72,6 +72,7 @@ const liveExecutionScenario = new LiveExecutionScenario();
 const cursorActionScenario = new CursorActionScenario();
 const localEndpointScenario = new LocalEndpointScenario();
 const projectRemovalScenario = new ProjectRemovalScenario();
+const axiValidationScenario = new AxiValidationScenario();
 const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? "/", `http://127.0.0.1:${port}`);
   try {
@@ -139,6 +140,12 @@ const server = createServer(async (request, response) => {
     if (url.pathname === "/api/project-removal/reset" && request.method === "POST") {
       return json(response, projectRemovalScenario.reset());
     }
+    if (url.pathname === "/api/axi-validation/play" && request.method === "POST") {
+      return json(response, axiValidationScenario.play());
+    }
+    if (url.pathname === "/api/axi-validation/reset" && request.method === "POST") {
+      return json(response, axiValidationScenario.reset());
+    }
     if (url.pathname.startsWith("/api/scenarios/")) return json(response, await scenario(url));
     if (url.pathname === "/") return html(response, workbenchHtml);
     response.writeHead(404).end("Not found");
@@ -163,60 +170,64 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 function scenarioIndex(): object[] {
   return [
     {
-      id: "happy", name: "Default happy path",
+      id: "happy", category: "Conveyor", name: "Default happy path",
       description: "Real runner · fresh SQLite · test/harness/default",
     },
     {
-      id: "codex-active-turn", name: "Active Codex reconciliation",
+      id: "codex-active-turn", category: "Harness", name: "Active Codex reconciliation",
       description: "notLoaded container · fresh active turn · production receipt path",
     },
     {
-      id: "codex-mcp-isolation", name: "Pinned Codex MCP isolation",
+      id: "codex-mcp-isolation", category: "Harness", name: "Pinned Codex MCP isolation",
       description: "0.144.6 argv contract · unrelated MCP failure · production receipt path",
     },
     {
-      id: "codex-writable-continuation", name: "Writable Codex continuation",
+      id: "codex-writable-continuation", category: "Harness", name: "Writable Codex continuation",
       description: "entry retry · same-task continuation · exit advance · durable artifact",
     },
     {
-      id: "blob-workspace-relocation", name: "Blob workspace relocation",
+      id: "blob-workspace-relocation", category: "Workspace", name: "Blob workspace relocation",
       description: "root A → deliberate rebind → next receipt only in root B",
     },
     {
-      id: "codex-execution-workspace", name: "Codex execution workspace",
+      id: "codex-execution-workspace", category: "Workspace", name: "Codex execution workspace",
       description: "app project root + assigned workspace sandbox + sibling fixture",
     },
     {
-      id: "live-execution-visibility", name: "Execution sessions: task movement",
+      id: "live-execution-visibility", category: "Execution", name: "Execution sessions: task movement",
       description: "Play · watch one task stay or advance on its real pipeline · Reset",
     },
     {
-      id: "viewer-overview-boundary", name: "Viewer Overview boundary",
+      id: "viewer-overview-boundary", category: "Viewer", name: "Viewer Overview boundary",
       description: "Before: internal diagnostics displace projects · After: pipeline is primary",
     },
     {
-      id: "viewer-resilience", name: "Viewer resilience",
+      id: "viewer-resilience", category: "Viewer", name: "Viewer resilience",
       description: "Healthy project + missing disposable pipeline + isolated diagnosis",
     },
     {
-      id: "cursor-action", name: "Configured task opener",
+      id: "cursor-action", category: "Viewer", name: "Configured task opener",
       description: "Title menu · default Cursor · assigned root + unavailable path · real action component",
     },
     {
-      id: "local-endpoint-supervisor", name: "Durable declared local endpoint",
+      id: "local-endpoint-supervisor", category: "Service", name: "Durable declared local endpoint",
       description: "Receipt ends → endpoint lease stays live → restart recovery → owned cleanup",
     },
     {
-      id: "project-removal", name: "Safe project removal",
+      id: "project-removal", category: "Store", name: "Safe project removal",
       description: "Preview exact graph · confirm with evidence · remove · Reset",
     },
     {
-      id: "aggregate-polling", name: "Stable aggregate pipeline",
+      id: "aggregate-polling", category: "Viewer", name: "Stable aggregate pipeline",
       description: "Pinned project · scrollable stages · status segments · unchanged node across polling",
     },
     {
-      id: "active-projects-fold", name: "Active projects fold",
+      id: "active-projects-fold", category: "Viewer", name: "Active projects fold",
       description: "Active by default · reveal completed and empty · one vertical page scroller",
+    },
+    {
+      id: "axi-validation", category: "AXI validation", name: "Ten AXI principles",
+      description: "Play · actual CLI checks · watch each published principle pass · Reset",
     },
   ];
 }
@@ -262,6 +273,7 @@ async function scenario(url: URL): Promise<Scenario> {
     const { runActiveProjectsScenario } = await import("../test/harness/ActiveProjectsScenario.ts");
     return runActiveProjectsScenario() as unknown as Scenario;
   }
+  if (id === "axi-validation") return axiValidationScenario.snapshot() as unknown as Scenario;
   throw new Error(`Unknown scenario: ${id}`);
 }
 
@@ -457,6 +469,7 @@ ${liveExecutionStyles}
 .removal-visual{padding:18px;background:#fff}.removal-controls{display:flex;gap:7px;align-items:center;margin-bottom:16px}.removal-controls button{height:30px;border:1px solid var(--line-strong);border-radius:5px;background:#fff;padding:0 12px;cursor:pointer}.removal-controls .remove{background:var(--ink);color:#fff}.removal-controls button:disabled{opacity:.4;cursor:default}.removal-controls span{margin-left:auto;color:var(--muted);font-size:9px}.removal-scope{display:grid;grid-template-columns:1.6fr repeat(2,.7fr) 1fr;border:1px solid var(--line)}.removal-fact{padding:12px;border-right:1px solid var(--line)}.removal-fact:last-child{border-right:0}.removal-fact small{display:block;color:var(--muted);font-size:8px}.removal-fact b{display:block;margin-top:3px;font-size:11px}.removal-result{margin-top:10px;padding:10px;border:1px solid var(--line);background:#f7f9f8;font-size:9px}@media(max-width:700px){.removal-scope{grid-template-columns:1fr 1fr}.removal-fact{border-bottom:1px solid var(--line)}}
 .cursor-action-row{grid-template-columns:minmax(180px,.8fr) minmax(240px,1.4fr)}.cursor-action-row .task-name-button{border:0;background:transparent;padding:0;text-align:left;cursor:pointer;font-weight:700;font-size:10px}.cursor-action-row .task-name-button:hover{text-decoration:underline}.blob-menu{position:fixed;z-index:1000;min-width:148px;padding:4px;border:1px solid var(--line-strong);border-radius:7px;background:#fff;box-shadow:0 10px 28px #18201b24}.blob-menu[hidden]{display:none}.blob-menu button{width:100%;height:31px;border:0;border-radius:4px;background:transparent;padding:0 10px;text-align:left;cursor:pointer;font-size:10px}.blob-menu button:hover,.blob-menu button:focus-visible{background:var(--neutral-soft);outline:0}.blob-menu button:disabled{color:#a9b0ac;cursor:not-allowed}.blob-menu small{display:block;padding:5px 10px;color:var(--muted);font-size:8px;max-width:220px}
 .aggregate-demo{background:#fff}.aggregate-demo-controls{display:flex;align-items:center;gap:7px;padding:12px;border-bottom:1px solid var(--line)}.aggregate-demo-controls button{height:30px;border:1px solid var(--line-strong);border-radius:5px;background:#fff;padding:0 12px;cursor:pointer}.aggregate-demo-controls .play{background:var(--ink);border-color:var(--ink);color:#fff}.aggregate-demo-health{margin-left:auto;display:flex;align-items:center;gap:7px;color:var(--muted);font-size:9px}.aggregate-demo-health i{width:8px;height:8px;border-radius:50%;background:var(--quiet)}.aggregate-demo-health.stable{color:#387359}.aggregate-demo-health.stable i{background:var(--green)}.aggregate-demo-frame{overflow-x:auto;max-width:100%;border-bottom:1px solid var(--line)}.aggregate-demo-row{min-width:820px;height:54px;display:grid;grid-template-columns:190px repeat(8,minmax(72px,1fr)) 38px;align-items:center}.aggregate-demo-name{position:sticky;left:0;z-index:3;align-self:stretch;display:flex;align-items:center;padding:0 16px;background:#fff;border-right:1px solid var(--line);font-weight:750}.aggregate-demo-stage{height:54px;position:relative;display:grid;place-items:center}.aggregate-demo-stage:before{content:"";position:absolute;left:0;right:0;top:27px;height:1px;background:var(--line-strong)}.aggregate-demo-stage:first-of-type:before{left:50%}.aggregate-demo-stage.last:before{right:50%}.aggregate-demo-stage span{position:absolute;top:4px;color:var(--muted);font-size:8px}.aggregate-demo .aggregate-bead{position:relative;z-index:1;width:18px;height:18px;border-radius:50%;background:var(--composition);box-shadow:0 0 0 1px #fff,0 0 0 2px #aeb7b1}.aggregate-demo .aggregate-bead:after{content:"";position:absolute;inset:5px;border-radius:50%;background:#fff}.aggregate-demo-disclosure{position:sticky;right:0;z-index:4;align-self:stretch;border:0;border-left:1px solid var(--line);background:#fff;color:#68726c;font-size:18px}.aggregate-demo-legend{display:flex;gap:16px;padding:11px 12px;color:var(--muted);font-size:9px}.aggregate-demo-legend span{display:flex;align-items:center;gap:5px}.aggregate-demo-legend i{width:8px;height:8px;border-radius:50%;background:#aeb7b1}.aggregate-demo-legend .complete{background:var(--green)}.aggregate-demo-legend .active{background:var(--ink)}.aggregate-demo-legend .attention{background:var(--attention)}.aggregate-demo-legend .failed{background:var(--danger)}
+.axi-validation{padding:18px;min-height:300px}.axi-validation-head{display:flex;align-items:center;gap:8px;margin-bottom:14px}.axi-validation-head button{height:30px;border:1px solid var(--line-strong);border-radius:5px;background:#fff;padding:0 12px;cursor:pointer}.axi-validation-head .play{background:var(--ink);border-color:var(--ink);color:#fff}.axi-validation-head button:disabled{opacity:.4;cursor:default}.axi-validation-summary{margin-left:auto;color:var(--muted);font-size:10px}.axi-progress{height:4px;background:var(--neutral-soft);margin-bottom:14px;overflow:hidden}.axi-progress i{display:block;height:100%;background:var(--ink);transition:width .2s ease}.axi-principles{display:grid;grid-template-columns:repeat(5,minmax(120px,1fr));border:1px solid var(--line);border-right:0;border-bottom:0}.axi-principle{min-height:92px;padding:12px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);background:#fff}.axi-principle.running{background:#f7f9f8}.axi-principle.failed{background:var(--danger-soft)}.axi-principle small{display:block;color:var(--muted);font-size:8px;text-transform:uppercase;letter-spacing:.05em}.axi-principle strong{display:block;margin-top:9px;font-size:10px;line-height:1.3}.axi-principle span{display:block;margin-top:10px;color:var(--muted);font-size:9px}.axi-principle.passed span{color:var(--green);font-weight:700}.axi-principle.failed span{color:var(--danger);font-weight:700}@media(max-width:900px){.axi-principles{grid-template-columns:repeat(2,minmax(120px,1fr))}}@media(max-width:520px){.axi-validation{padding:12px}.axi-principles{grid-template-columns:1fr}}
 </style></head><body><div class="app"><header class="topbar"><div class="identity"><strong>Factorio Workbench</strong><span class="online">Internal</span></div><div class="modes" role="tablist" aria-label="Workbench views"><button class="mode active" role="tab" aria-selected="true" data-source="lab">Harness Lab</button><button class="mode" role="tab" aria-selected="false" data-source="scenario">Scenario</button><button class="mode" role="tab" aria-selected="false" data-source="tests">Tests</button><button class="mode" role="tab" aria-selected="false" data-source="database">Database</button></div><div class="actions"><button class="control" id="previous" hidden>Previous</button><button class="control" id="next" hidden>Next</button><button class="control" id="refresh">Refresh</button><button class="control primary" id="run">Run scenario</button></div></header>
 <main class="content"><div class="toolbar"><div class="scenario-copy"><strong id="title">Loading scenario</strong><span id="description"></span></div><select class="picker" id="scenario-picker" aria-label="Choose scenario" hidden></select><select class="picker" id="test-picker" aria-label="Choose test" hidden></select><span class="frame" id="frame"></span></div><div class="workspace" id="workspace"><div class="empty">Loading scenario…</div></div><div class="footer"><div class="legend"><span><i class="key complete"></i>Completed</span><span><i class="key imported"></i>Imported</span><span><i class="key inventory"></i>Inventory</span><span><i class="key current"></i>Current</span><span><i class="key waiting"></i>Awaiting review / needs attention</span><span><i class="key"></i>Pending</span><span><i class="key failed"></i>Failed</span></div><span class="total" id="total"></span></div><details class="inspector"><summary><span>Inspect evidence</span><small id="result"></small></summary><div class="evidence"><section class="panel"><div class="panel-head"><span id="event-label">Receipt stream</span><span>append only</span></div><div id="events"></div></section><section class="panel"><div class="panel-head"><span>Assertions</span><span id="assertion-count"></span></div><div id="checks"></div></section></div></details><div id="error" role="status"></div></main></div>
 <script>
@@ -464,13 +477,17 @@ ${viewerComponentScript}
 let source="lab",selected="happy",selectedTest="",scenarios=[],tests=[],testRun=null,frames=[],frame=0,timer,loadVersion=0,lab=null,selectedAttemptId="";
 const byId=id=>document.getElementById(id),safe=value=>{const node=document.createElement("span");node.textContent=String(value??"");return node.innerHTML};
 async function init(){[scenarios,tests]=await Promise.all([fetch("/api/scenarios").then(r=>r.json()),fetch("/api/tests").then(r=>r.json())]);selectedTest=tests[0]?.id||"";const params=new URLSearchParams(location.search),requested=params.get('scenario');if(requested&&scenarios.some(item=>item.id===requested)){source='scenario';selected=requested;document.querySelectorAll('.mode').forEach(item=>{const active=item.dataset.source==='scenario';item.classList.toggle('active',active);item.setAttribute('aria-selected',String(active))})}renderPickers();byId('scenario-picker').value=selected;byId('scenario-picker').hidden=source!=='scenario';await load();if(params.get('autoplay')==='1'&&selected==='aggregate-polling')aggregatePollingAction('play')}
-function renderPickers(){byId("scenario-picker").innerHTML=scenarios.map(item=>'<option value="'+safe(item.id)+'">'+safe(item.name)+'</option>').join("");byId("test-picker").innerHTML=tests.map(item=>'<option value="'+safe(item.id)+'">'+safe(item.category)+' · '+safe(item.name)+'</option>').join("")}
+function renderPickers(){const groups=Object.groupBy(scenarios,item=>item.category||"Other");byId("scenario-picker").innerHTML=Object.entries(groups).map(([category,items])=>'<optgroup label="'+safe(category)+'">'+items.map(item=>'<option value="'+safe(item.id)+'">'+safe(item.name)+'</option>').join("")+'</optgroup>').join("");byId("test-picker").innerHTML=tests.map(item=>'<option value="'+safe(item.id)+'">'+safe(item.category)+' · '+safe(item.name)+'</option>').join("")}
 async function load(){clearInterval(timer);const version=++loadVersion;if(source==="tests"){testRun=null;frames=[];renderTest();return}if(source==="lab"){lab=await fetch("/api/mock-lab").then(r=>r.json());if(version===loadVersion)renderLab();return}const data=source==="database"?await fetch("/api/database").then(r=>r.json()):await fetch("/api/scenarios/"+selected).then(r=>r.json());if(version!==loadVersion)return;frames=data.frames||[data];frame=frames.length-1;renderScenario()}
 function groups(steps){const result=[];for(const step of steps){const id=step.id.split(".")[0]||"pipeline",last=result.at(-1);if(last?.id===id)last.count++;else result.push({id,label:id,count:1})}return result}
-function renderScenario(){const snapshot=frames[frame];if(!snapshot)return;const interactive=["live-execution","cursor-action","local-endpoint","project-removal","aggregate-polling","active-projects"].includes(snapshot.visual?.kind);byId("title").textContent=snapshot.name;byId("description").textContent=snapshot.description;byId("frame").textContent=interactive?"Live temporary state":source==="scenario"?"Frame "+(frame+1)+" / "+frames.length:"Live database";byId("run").hidden=source!=="scenario"||interactive;byId("run").textContent="Run scenario";showFrameControls(source==="scenario"&&!interactive);byId("workspace").innerHTML=scenarioVisual(snapshot);renderEvidence(snapshot);byId("total").textContent=snapshot.blobs.length+" blob"+(snapshot.blobs.length===1?"":"s")+" · "+snapshot.receipts.length+" receipts";if(snapshot.visual?.kind==="live-execution")wireLiveExecution(snapshot.visual);if(snapshot.visual?.kind==="cursor-action")wireCursorAction();if(snapshot.visual?.kind==="local-endpoint")wireLocalEndpoint();if(snapshot.visual?.kind==="project-removal")wireProjectRemoval();if(snapshot.visual?.kind==="aggregate-polling")wireAggregatePolling();if(snapshot.visual?.kind==="active-projects")wireActiveProjects()}
-function scenarioVisual(snapshot){if(snapshot.visual?.kind==="live-execution")return liveExecutionVisual(snapshot);if(snapshot.visual?.kind==="cursor-action")return cursorActionVisual(snapshot);if(snapshot.visual?.kind==="local-endpoint")return localEndpointVisual(snapshot);if(snapshot.visual?.kind==="project-removal")return projectRemovalVisual(snapshot);if(snapshot.visual?.kind==="aggregate-polling")return aggregatePollingVisual();if(snapshot.visual?.kind==="active-projects")return activeProjectsVisual(snapshot.visual);if(snapshot.visual?.kind==="overview-boundary")return overviewBoundaryVisual(snapshot);if(snapshot.visual?.kind==="viewer-resilience")return viewerResilienceVisual(snapshot)+matrix(snapshot)+scenarioEvidence(snapshot);return matrix(snapshot)+scenarioEvidence(snapshot)}
+function renderScenario(){const snapshot=frames[frame];if(!snapshot)return;const interactive=["live-execution","cursor-action","local-endpoint","project-removal","aggregate-polling","active-projects","axi-validation"].includes(snapshot.visual?.kind);byId("title").textContent=snapshot.name;byId("description").textContent=snapshot.description;byId("frame").textContent=interactive?"Live temporary state":source==="scenario"?"Frame "+(frame+1)+" / "+frames.length:"Live database";byId("run").hidden=source!=="scenario"||interactive;byId("run").textContent="Run scenario";showFrameControls(source==="scenario"&&!interactive);byId("workspace").innerHTML=scenarioVisual(snapshot);renderEvidence(snapshot);byId("total").textContent=snapshot.visual?.kind==="axi-validation"?"Official 10-principle contract":snapshot.blobs.length+" blob"+(snapshot.blobs.length===1?"":"s")+" · "+snapshot.receipts.length+" receipts";if(snapshot.visual?.kind==="live-execution")wireLiveExecution(snapshot.visual);if(snapshot.visual?.kind==="cursor-action")wireCursorAction();if(snapshot.visual?.kind==="local-endpoint")wireLocalEndpoint();if(snapshot.visual?.kind==="project-removal")wireProjectRemoval();if(snapshot.visual?.kind==="aggregate-polling")wireAggregatePolling();if(snapshot.visual?.kind==="active-projects")wireActiveProjects();if(snapshot.visual?.kind==="axi-validation")wireAxiValidation(snapshot.visual)}
+function scenarioVisual(snapshot){if(snapshot.visual?.kind==="axi-validation")return axiValidationVisual(snapshot.visual);if(snapshot.visual?.kind==="live-execution")return liveExecutionVisual(snapshot);if(snapshot.visual?.kind==="cursor-action")return cursorActionVisual(snapshot);if(snapshot.visual?.kind==="local-endpoint")return localEndpointVisual(snapshot);if(snapshot.visual?.kind==="project-removal")return projectRemovalVisual(snapshot);if(snapshot.visual?.kind==="aggregate-polling")return aggregatePollingVisual();if(snapshot.visual?.kind==="active-projects")return activeProjectsVisual(snapshot.visual);if(snapshot.visual?.kind==="overview-boundary")return overviewBoundaryVisual(snapshot);if(snapshot.visual?.kind==="viewer-resilience")return viewerResilienceVisual(snapshot)+matrix(snapshot)+scenarioEvidence(snapshot);return matrix(snapshot)+scenarioEvidence(snapshot)}
 function aggregatePollingVisual(){const stages=['Plan','Build','QA','Design','Review','Merge','Dev QA','Complete'];return '<section class="aggregate-demo"><div class="aggregate-demo-controls"><button class="play" data-aggregate-action="play">Play polling</button><button data-aggregate-action="reset">Reset</button><div class="aggregate-demo-health" id="aggregate-health"><i></i><span>Ready · same nodes will survive every refresh</span></div></div><div class="aggregate-demo-frame"><div class="aggregate-demo-row"><div class="aggregate-demo-name">Multilingual</div>'+stages.map((stage,index)=>'<div class="aggregate-demo-stage '+(index===stages.length-1?'last':'')+'"><span>'+stage+'</span><i class="aggregate-bead" data-aggregate-key="demo::'+index+'" data-aggregate-state="initial" style="--composition:'+demoComposition(index)+'" title="'+demoLabel(stage,index)+'" aria-label="'+demoLabel(stage,index)+'"></i></div>').join('')+'<button class="aggregate-demo-disclosure" aria-label="Expand project Multilingual" title="Expand project"><span aria-hidden="true">‹</span></button></div></div><div class="aggregate-demo-legend"><span><i class="complete"></i>Completed</span><span><i class="active"></i>Running</span><span><i class="attention"></i>Needs attention</span><span><i class="failed"></i>Failed</span><span><i></i>Unfinished / inventory</span></div></section>'}
 function activeProjectsVisual(visual){return '<section class="active-projects-demo"><div class="active-projects-controls"><button class="play" data-active-action="play">Play refreshes</button><button data-active-action="reset">Reset</button><span id="active-projects-health">Active rule: at least one nonterminal task</span></div><div class="active-projects-table" id="active-projects-table">'+visual.active.map(activeProjectRow).join('')+'<div class="active-projects-fold"><button data-active-action="toggle" aria-expanded="false"><span aria-hidden="true">⌄</span>Show all projects <small>'+visual.inactive.length+'</small></button></div><div data-inactive-projects hidden>'+visual.inactive.map(activeProjectRow).join('')+'</div></div></section>'}
+function axiValidationVisual(visual){const passed=visual.principles.filter(item=>item.status==='passed').length,done=visual.principles.filter(item=>item.status==='passed'||item.status==='failed').length;return '<section class="axi-validation"><div class="axi-validation-head"><button class="play" data-axi-action="play" '+(visual.phase==='running'?'disabled':'')+'>Play validation</button><button data-axi-action="reset" '+(visual.phase==='running'?'disabled':'')+'>Reset</button><span class="axi-validation-summary" aria-live="polite">'+safe(visual.phase==='ready'?'Ready · 10 actual CLI checks':visual.phase==='running'?done+' / 10 checked':passed+' / 10 passed')+'</span></div><div class="axi-progress" role="progressbar" aria-label="AXI principles passed" aria-valuemin="0" aria-valuemax="10" aria-valuenow="'+passed+'"><i style="width:'+passed*10+'%"></i></div><div class="axi-principles">'+visual.principles.map(axiPrinciple).join('')+'</div></section>'}
+function axiPrinciple(item){const detail=item.status==='pending'?'Waiting':item.status==='running'?'Running actual test':item.status==='passed'?'Passed · '+item.durationMs+' ms':'Failed';return '<article class="axi-principle '+safe(item.status)+'" title="'+safe(item.test)+'"><small>Principle '+item.index+'</small><strong>'+safe(item.name)+'</strong><span>'+safe(detail)+'</span></article>'}
+function wireAxiValidation(visual){document.querySelectorAll('[data-axi-action]').forEach(button=>button.onclick=()=>axiValidationAction(button.dataset.axiAction));if(visual.phase==='running')timer=setTimeout(load,150)}
+async function axiValidationAction(action){const response=await fetch('/api/axi-validation/'+action,{method:'POST'});if(!response.ok)return showScenarioError(await response.json());const data=await response.json();frames=data.frames;frame=0;renderScenario()}
 function activeProjectRow(project){const stages=['Plan','Build','Review','Done'];return '<section class="active-project-card" data-active-project="'+safe(project.id)+'"><div class="active-project-head"><b>'+safe(project.name)+'</b><span>'+project.blobs.length+' task'+(project.blobs.length===1?'':'s')+'</span><div class="active-project-track">'+stages.map((stage,index)=>'<i class="'+activeProjectStage(project,index)+'" title="'+safe(stage)+'"></i>').join('')+'</div><span class="active-project-chevron" aria-hidden="true">‹</span></div>'+project.blobs.map((blob,index)=>'<div class="active-project-task"><span>'+safe(blob.title)+'</span><div class="active-task-track">'+stages.map((stage,step)=>'<i class="'+(step<index%4?'done ':step===index%4?'current ':'')+(blob.status==='waiting'&&step===index%4?'attention':'')+'" title="'+safe(stage+' · '+blob.status)+'"></i>').join('')+'</div><small>'+safe(blob.status)+'</small></div>').join('')+(project.blobs.length?'':'<div class="active-project-empty">No tasks</div>')+'</section>'}
 function activeProjectStage(project,index){if(!project.blobs.length)return 'pending';const completed=project.blobs.filter(blob=>blob.status==='complete').length;return index===0&&completed===project.blobs.length?'done':index===0?'current':'pending'}
 let activeProjectRefreshTimer=null,activeProjectRefreshes=0;
@@ -622,5 +639,6 @@ import { LiveExecutionScenario } from "../test/harness/LiveExecutionScenario.ts"
 import { CursorActionScenario } from "../test/harness/CursorActionScenario.ts";
 import { LocalEndpointScenario } from "../test/harness/LocalEndpointScenario.ts";
 import { ProjectRemovalScenario } from "../test/harness/ProjectRemovalScenario.ts";
+import { AxiValidationScenario, type AxiValidationVisual } from "../test/harness/AxiValidationScenario.ts";
 import { executionOverviewMarkup, liveExecutionStyles } from "./LiveExecutions.ts";
 import { viewerComponentScript } from "./ViewerComponents.ts";
