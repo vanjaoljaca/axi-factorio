@@ -194,7 +194,7 @@ npm run build
 
 This recreates `release/` with:
 
-- `axi-factorio-0.1.0-rc.22.tgz`, the installable package;
+- `axi-factorio-0.1.0-rc.23.tgz`, the installable package;
 - `SHA256SUMS`, for artifact verification; and
 - `INSTALL.md`, with direct and vendored installation commands.
 
@@ -206,7 +206,7 @@ Do not use `npm link` for a consuming project. Install the exact tarball so
 Install the exact candidate in the consuming npm project:
 
 ```sh
-npm install --save-exact /path/to/axi-factorio-0.1.0-rc.22.tgz
+npm install --save-exact /path/to/axi-factorio-0.1.0-rc.23.tgz
 ```
 
 From the consuming project root, the defaults are:
@@ -374,7 +374,7 @@ harness adds only the Git-owned state required to commit through repeatable
 folders. The assigned workspace must equal Git's reported work root; non-Git
 workspaces retain their previous behavior.
 
-Opening an rc.4 through rc.21 database with rc.22 migrates projects, receipt
+Opening an rc.4 through rc.22 database with rc.23 migrates projects, receipt
 provenance, durable execution-control columns, blob revisions, and immutable
 attempt evidence automatically. Existing blobs receive an
 `executionWorkspaceRoot` equal to their current app root, preserving prior
@@ -402,6 +402,13 @@ a diff and write the actual pipeline Markdown only after explicit save.
 Rewind-and-rerun invalidates the selected step for progression while keeping
 all prior receipts available for side-by-side comparison.
 
+Each task row also has a local-only **Open in Cursor** action. It opens the
+blob's effective execution workspace—the assigned containing workspace when
+one exists, otherwise the project root. Factorio passes that exact path as one
+argument to Cursor without shell interpolation. Missing folders or a missing
+Cursor installation disable the action with an explanation; launch failures
+remain visible in the Viewer.
+
 The execution-session panel shows in-flight and recent completed receipts.
 Every receipt retains queued, started, last-progress, finished, and elapsed
 time; current operation; external harness session; attempt number; model and
@@ -413,7 +420,7 @@ running receipt with no persisted progress for five minutes is labeled
 alone, carries the health meaning.
 
 Future multi-pipeline integration is deliberately parked in [ROADMAP.md](ROADMAP.md)
-under **pipeline merger**. rc.22 does not implement it.
+under **pipeline merger**. rc.23 does not implement it.
 
 Explicitly move it back to a step:
 

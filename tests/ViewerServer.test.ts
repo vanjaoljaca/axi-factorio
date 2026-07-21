@@ -118,6 +118,36 @@ test("viewer keeps paused zero-receipt inventory neutral", () => {
   });
 });
 
+test("viewer exposes the effective execution workspace through the shared Cursor action", () => {
+  const fixture = createPipeline(["g1.first"]);
+  const assignedRoot = join(fixture.root, "assigned workspace --literal");
+  const appRoot = join(assignedRoot, "apps", "example");
+  mkdirSync(appRoot, { recursive: true });
+  const databasePath = join(fixture.root, "factorio.sqlite");
+  const database = new FactorioDatabase(databasePath);
+  const store = new ConveyorStore(database);
+  store.createBlob("assigned", { ...blobInput(fixture, "Assigned workspace"), cwd: appRoot });
+  store.bindExecutionWorkspace("assigned", assignedRoot, ["test:assigned"]);
+  store.createBlob("project", blobInput(fixture, "Project root"));
+  store.createBlob("stale", blobInput(fixture, "Stale workspace"));
+  database.connection.prepare("UPDATE blobs SET executionWorkspaceRoot = ? WHERE id = ?")
+    .run(join(fixture.root, "missing"), "stale");
+  database.close();
+  const expectedAssignedRoot = realpathSync(assignedRoot);
+  const launcher = new CursorWorkspaceLauncher("/fake/cursor", async () => undefined, (path) => path !== join(fixture.root, "missing"));
+
+  const snapshot = createViewSnapshot(databasePath, launcher) as ViewSnapshot;
+  const blobs = snapshot.projects.flatMap((project) => project.blobs);
+
+  assert.deepEqual(blobs.find((blob) => blob.id === "assigned")?.cursor, {
+    enabled: true, root: expectedAssignedRoot, workspaceKind: "assigned-workspace",
+    label: "Open in Cursor", explanation: "Open the assigned execution workspace in Cursor.",
+  });
+  assert.equal(blobs.find((blob) => blob.id === "project")?.cursor.workspaceKind, "project-root");
+  assert.equal(blobs.find((blob) => blob.id === "stale")?.cursor.enabled, false);
+  assert.match(blobs.find((blob) => blob.id === "stale")?.cursorActionHtml ?? "", /disabled/u);
+});
+
 test("viewer exposes persisted running and completed execution telemetry", async () => {
   const fixture = createPipeline(["g1.first", "g2.second"]);
   const databasePath = join(fixture.root, "factorio.sqlite");
@@ -167,6 +197,35 @@ test("viewer execution API persists Play, Step, and Stop without duplicate reque
   assert.equal(stopped.blob.runRequested, false);
   assert.equal(stepped.blob.executionMode, "step");
   assert.equal(stepped.blob.runRequested, true);
+});
+
+test("viewer Cursor API launches locally with the exact effective workspace argv", async () => {
+  const fixture = createPipeline(["g1.first"]);
+  const assignedRoot = join(fixture.root, "workspace with spaces --literal");
+  const appRoot = join(assignedRoot, "apps", "example");
+  mkdirSync(appRoot, { recursive: true });
+  const databasePath = join(fixture.root, "factorio.sqlite");
+  const database = new FactorioDatabase(databasePath);
+  const store = new ConveyorStore(database);
+  store.createBlob("cursor", { ...blobInput(fixture, "Cursor item"), cwd: appRoot });
+  store.bindExecutionWorkspace("cursor", assignedRoot, ["test:assigned"]);
+  database.close();
+  const expectedAssignedRoot = realpathSync(assignedRoot);
+  const calls: Array<{ executable: string; args: string[] }> = [];
+  const launcher = new CursorWorkspaceLauncher("/fake/cursor", async (executable, args) => {
+    calls.push({ executable, args });
+  }, () => true);
+  const server = createViewerServer(databasePath, launcher);
+  const endpoint = await listen(server);
+
+  const result = await postJson(endpoint, "cursor", "open-cursor", {});
+  await close(server);
+
+  assert.deepEqual(result, { blobId: "cursor", root: expectedAssignedRoot, opened: true });
+  assert.deepEqual(calls, [{ executable: "/fake/cursor", args: [expectedAssignedRoot] }]);
+  assert.equal(isLoopbackAddress("127.0.0.1"), true);
+  assert.equal(isLoopbackAddress("::ffff:127.0.0.1"), true);
+  assert.equal(isLoopbackAddress("192.0.2.12"), false);
 });
 
 test("viewer relocation API deliberately rebinds one blob and exposes durable provenance", async () => {
@@ -382,6 +441,14 @@ type ViewSnapshot = {
       status: string;
       importedStepIds: string[];
       execution: { play: { enabled: boolean; explanation: string } };
+      cursor: {
+        enabled: boolean;
+        root: string;
+        workspaceKind: "assigned-workspace" | "project-root";
+        label: string;
+        explanation: string;
+      };
+      cursorActionHtml: string;
     }>;
   }>;
 };
@@ -391,7 +458,8 @@ import type { PipelineFixture } from "./Fixtures.ts";
 import { createPipeline } from "./Fixtures.ts";
 import { FactorioDatabase } from "../src/Database.ts";
 import { ConveyorStore } from "../src/Store.ts";
-import { createViewerServer, createViewSnapshot } from "../src/ViewerServer.ts";
+import { createViewerServer, createViewSnapshot, isLoopbackAddress } from "../src/ViewerServer.ts";
+import { CursorWorkspaceLauncher } from "../src/CursorAction.ts";
 import { discoverPipeline, snapshotDefinition } from "../src/Pipeline.ts";
 import { ConveyorRunner } from "../src/Runner.ts";
 import { ConveyorService } from "../src/Service.ts";
