@@ -182,6 +182,10 @@ function scenarioIndex(): object[] {
       description: "same blob + same step · immutable failed receipt · new external task",
     },
     {
+      id: "empty-launch-recovery", category: "Harness", name: "Empty provider launch recovery",
+      description: "one receipt · same external task · cancelled empty invocation · new turn",
+    },
+    {
       id: "codex-mcp-isolation", category: "Harness", name: "Pinned Codex MCP isolation",
       description: "0.144.6 argv contract · unrelated MCP failure · production receipt path",
     },
@@ -247,6 +251,11 @@ async function scenario(url: URL): Promise<Scenario> {
     const { runInterruptedContinuationScenario } =
       await import("../test/harness/InterruptedContinuationScenario.ts");
     return runInterruptedContinuationScenario();
+  }
+  if (id === "empty-launch-recovery") {
+    const { runEmptyLaunchRecoveryScenario } =
+      await import("../test/harness/EmptyLaunchRecoveryScenario.ts");
+    return runEmptyLaunchRecoveryScenario();
   }
   if (id === "codex-mcp-isolation") {
     const { runCodexMcpIsolationScenario } = await import("../test/harness/CodexMcpIsolationScenario.ts");

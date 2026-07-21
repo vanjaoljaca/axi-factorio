@@ -95,6 +95,25 @@ test("terminal external state fails safely and retry starts a fresh run", async 
   fixture.database.close();
 });
 
+test("empty-launch recovery is capped at one within-receipt resume", async () => {
+  const harness = new RepeatedEmptyLaunchHarness();
+  const fixture = createExecutionFixture(["g1.first"], [], harness, {
+    reconcileEveryMs: 2, confirmTerminalAfterMs: 2,
+  });
+  fixture.store.createBlob("blob-1", blobInput(fixture));
+  fixture.store.requestStep("blob-1");
+
+  await assert.rejects(fixture.runner.runOnce(), /empty provider turn/);
+
+  const receipts = fixture.store.listReceipts("blob-1");
+  assert.equal(receipts.length, 1);
+  assert.equal(receipts[0].status, "failed");
+  assert.equal(harness.starts, 1);
+  assert.equal(harness.resumes, 1);
+  assert.equal(harness.cancels, 2);
+  fixture.database.close();
+});
+
 test("duplicate starts are idempotent and Stop prevents the next claim", async () => {
   const adapter = new ControlledAdapter();
   const fixture = createExecutionFixture(["g1.first", "g2.second"], [], adapter);
@@ -255,6 +274,35 @@ class ReconcilingHarness extends OutcomeHarness {
 
   override async cancel(): Promise<void> {
     this.reject?.(new Error("cancelled after reconciliation"));
+  }
+}
+
+class RepeatedEmptyLaunchHarness extends OutcomeHarness {
+  starts = 0;
+  resumes = 0;
+  cancels = 0;
+  private reject: ((error: Error) => void) | null = null;
+
+  override async start(_input: HarnessStartInput, observer: HarnessObserver): Promise<HarnessResult> {
+    this.starts += 1;
+    observer.event({ type: "external-run", externalRunId: "external:empty" });
+    return new Promise((_resolve, reject) => this.reject = reject);
+  }
+
+  override async resume(input: HarnessResumeInput, observer: HarnessObserver): Promise<HarnessResult> {
+    this.resumes += 1;
+    observer.event({ type: "external-run", externalRunId: input.externalRunId });
+    return new Promise((_resolve, reject) => this.reject = reject);
+  }
+
+  override async reconcile(): Promise<HarnessExternalState> {
+    return { status: "interrupted", reason: "empty provider turn", recovery: "resume" };
+  }
+
+  override async cancel(): Promise<void> {
+    this.cancels += 1;
+    this.reject?.(new Error("cancelled empty provider turn"));
+    this.reject = null;
   }
 }
 

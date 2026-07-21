@@ -45,14 +45,17 @@ class ScenarioFixture {
     const control = await this.readState(blob, step, "inProgress", Date.now());
     const stale = await this.readState(blob, step, "interrupted", Date.now() - staleActivityMs);
     const initial = this.frame("Before reconciliation", control.status, stale.status, null);
-    writeLifecycleResponse(this.responsePath, "interrupted", Date.now());
+    writeLifecycleResponse(this.responsePath, "inProgress", Date.now());
     this.base.store.requestStep(blobId);
     await this.runSafely();
     const receipt = this.base.store.listReceipts(blobId).at(-1)!;
     return {
       id: scenarioId,
       frames: [initial, this.frame("After reconciliation", control.status, stale.status, receipt)],
-      controlState: control.status, staleState: stale.status, observedReceipt: receipt,
+      controlState: control.status,
+      staleState: stale.status,
+      staleRecovery: "recovery" in stale ? stale.recovery ?? null : null,
+      observedReceipt: receipt,
     };
   }
 
@@ -207,6 +210,7 @@ export type CodexActiveTurnResult = {
   frames: WorkbenchFrame[];
   controlState: string;
   staleState: string;
+  staleRecovery: string | null;
   observedReceipt: Receipt;
 };
 type ProviderTurnStatus = "inProgress" | "interrupted";

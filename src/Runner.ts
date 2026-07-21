@@ -103,10 +103,22 @@ export class ConveyorRunner {
           return localEndpoint;
         },
       };
-      const running = claim.receipt.continuationThreadId
+      let running = claim.receipt.continuationThreadId
         ? this.resumeHarness(input, claim.receipt.continuationThreadId, observer, claim)
         : this.startHarness(input, observer, claim);
-      const result = await this.awaitHarness(running, claim, () => externalRunId);
+      let result: HarnessResult;
+      let recoveries = 0;
+      while (true) {
+        try {
+          result = await this.awaitHarness(running, claim, () => externalRunId);
+          break;
+        } catch (error) {
+          if (!(error instanceof RecoverableHarnessLaunchError) || recoveries || !externalRunId) throw error;
+          recoveries += 1;
+          this.recordBoundary("recovery", claim, { externalRunId, subattempt: recoveries + 1 });
+          running = this.resumeHarness(input, externalRunId, observer, claim);
+        }
+      }
       if (result.externalRunId) {
         externalRunId = result.externalRunId;
         this.store.recordExternalRun(claim.receipt.id, externalRunId, ownerId);
@@ -239,6 +251,9 @@ export class ConveyorRunner {
     const confirmed = await this.readExternalState(claim, externalRunId);
     if (!confirmed || confirmed.status !== first.status) return;
     await this.cancelReconciledRun(claim, externalRunId, confirmed.reason);
+    if (confirmed.status === "interrupted" && confirmed.recovery === "resume") {
+      throw new RecoverableHarnessLaunchError(externalRunId, confirmed.reason);
+    }
     throw new Error(`External run ${externalRunId} ${confirmed.status}: ${confirmed.reason}`);
   }
 
@@ -252,6 +267,7 @@ export class ConveyorRunner {
       });
       this.recordBoundary("reconcile", claim, {
         externalRunId, status: state.status, reason: "reason" in state ? state.reason : "",
+        recovery: "recovery" in state ? state.recovery ?? "" : "",
       });
       return state;
     } catch (error) {
@@ -372,6 +388,15 @@ export class ReceiptRunError extends Error {
   constructor(receiptId: string, cause: unknown) {
     super(errorMessage(cause), { cause });
     this.receiptId = receiptId;
+  }
+}
+
+class RecoverableHarnessLaunchError extends Error {
+  readonly externalRunId: string;
+
+  constructor(externalRunId: string, reason: string) {
+    super(reason);
+    this.externalRunId = externalRunId;
   }
 }
 

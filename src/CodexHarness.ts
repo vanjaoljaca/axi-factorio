@@ -439,6 +439,7 @@ function codexThreadState(thread: CodexThread, externalRunId: string): HarnessEx
     return {
       status: "interrupted",
       reason: `Codex external task ${externalRunId} turn ${latest.id} was interrupted${unloaded}.`,
+      recovery: hasNoAgentActivity(latest) ? "resume" : undefined,
     };
   }
   return {
@@ -460,7 +461,12 @@ function isFreshIncompleteTurn(thread: CodexThread, turn: CodexTurn): boolean {
     && turn.status === "interrupted"
     && turn.completedAt == null
     && turn.error == null
+    && !hasNoAgentActivity(turn)
     && isFresh(thread.updatedAt);
+}
+
+function hasNoAgentActivity(turn: CodexTurn): boolean {
+  return (turn.items ?? []).every((item) => item.type === "userMessage");
 }
 
 function isFresh(updatedAt: number): boolean {

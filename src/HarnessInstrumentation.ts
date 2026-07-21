@@ -12,6 +12,7 @@ export type HarnessBoundaryPhase =
   | "start"
   | "resume"
   | "reconcile"
+  | "recovery"
   | "event"
   | "terminal"
   | "cancel_requested"

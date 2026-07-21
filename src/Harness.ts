@@ -36,7 +36,11 @@ export type HarnessReconcileInput = {
 
 export type HarnessExternalState =
   | { status: "running" }
-  | { status: "interrupted" | "failed" | "missing"; reason: string };
+  | {
+    status: "interrupted" | "failed" | "missing";
+    reason: string;
+    recovery?: "resume";
+  };
 
 export type HarnessResult = {
   decision: HarnessDecision;
