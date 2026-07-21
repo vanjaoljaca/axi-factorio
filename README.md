@@ -194,7 +194,7 @@ npm run build
 
 This recreates `release/` with:
 
-- `axi-factorio-0.1.0-rc.21.tgz`, the installable package;
+- `axi-factorio-0.1.0-rc.22.tgz`, the installable package;
 - `SHA256SUMS`, for artifact verification; and
 - `INSTALL.md`, with direct and vendored installation commands.
 
@@ -206,7 +206,7 @@ Do not use `npm link` for a consuming project. Install the exact tarball so
 Install the exact candidate in the consuming npm project:
 
 ```sh
-npm install --save-exact /path/to/axi-factorio-0.1.0-rc.21.tgz
+npm install --save-exact /path/to/axi-factorio-0.1.0-rc.22.tgz
 ```
 
 From the consuming project root, the defaults are:
@@ -280,6 +280,13 @@ npx axi-factorio service install --harness codex
 npx axi-factorio service status
 npx axi-factorio service uninstall
 ```
+
+The named service is the sole dispatcher owner. During replacement it waits
+for an earlier lease to expire instead of entering a restart loop. Viewer
+discovery isolates projects whose pipeline folders have disappeared: the
+project is labelled `Pipeline unavailable`, healthy projects remain visible,
+and the structured `viewer.pipeline_unavailable` event records the
+`isolated_project` disposition.
 
 Inspect state and receipts:
 
@@ -367,7 +374,7 @@ harness adds only the Git-owned state required to commit through repeatable
 folders. The assigned workspace must equal Git's reported work root; non-Git
 workspaces retain their previous behavior.
 
-Opening an rc.4 through rc.20 database with rc.21 migrates projects, receipt
+Opening an rc.4 through rc.21 database with rc.22 migrates projects, receipt
 provenance, durable execution-control columns, blob revisions, and immutable
 attempt evidence automatically. Existing blobs receive an
 `executionWorkspaceRoot` equal to their current app root, preserving prior
@@ -406,7 +413,7 @@ running receipt with no persisted progress for five minutes is labeled
 alone, carries the health meaning.
 
 Future multi-pipeline integration is deliberately parked in [ROADMAP.md](ROADMAP.md)
-under **pipeline merger**. rc.21 does not implement it.
+under **pipeline merger**. rc.22 does not implement it.
 
 Explicitly move it back to a step:
 

@@ -29,6 +29,39 @@ test("zero-blob projects share one pipeline root and expose resolved identities"
   assert.deepEqual(snapshot.projects[0].steps.map((step) => step.id), ["g1.first", "g2.second"]);
 });
 
+test("viewer isolates and diagnoses one missing project pipeline without hiding healthy projects", () => {
+  const fixture = createPipeline(["g1.first"]);
+  const pipelineRoot = join(fixture.root, "pipelines");
+  const versionPath = join(pipelineRoot, "default", "v1");
+  mkdirSync(dirname(versionPath), { recursive: true });
+  renameSync(fixture.pipelinePath, versionPath);
+  const databasePath = join(fixture.root, "factorio.sqlite");
+  const database = new FactorioDatabase(databasePath);
+  const store = new ConveyorStore(database);
+  store.createProject("healthy", {
+    name: "Healthy", root: fixture.root, pipelineRoot, defaultPipeline: "default",
+  });
+  store.createProject("stale-proof", {
+    name: "Stale proof", root: fixture.root,
+    pipelineRoot: join(fixture.root, "missing"), defaultPipeline: "disposable",
+  });
+  store.createBlob("healthy-blob", {
+    title: "Healthy task", body: "", cwd: fixture.root, projectId: "healthy",
+    pipelineId: "default/v1", pipelinePath: versionPath, inputArtifacts: [],
+  });
+  database.close();
+
+  const snapshot = createViewSnapshot(databasePath) as ViewSnapshot;
+  const healthy = snapshot.projects.find((project) => project.id === "healthy");
+  const stale = snapshot.projects.find((project) => project.id === "stale-proof");
+
+  assert.equal(healthy?.blobs[0]?.id, "healthy-blob");
+  assert.equal(healthy?.pipelineIssue, null);
+  assert.equal(stale?.pipelineIssue?.status, "unavailable");
+  assert.equal(stale?.pipelineIssue?.summary, "Pipeline unavailable");
+  assert.match(stale?.pipelineIssue?.detail ?? "", /ENOENT|no vN versions/u);
+});
+
 test("viewer distinguishes imported work awaiting review from failed work", () => {
   const fixture = createPipeline(["g1.first", "g2.review", "g3.last"]);
   const databasePath = join(fixture.root, "factorio.sqlite");
@@ -338,9 +371,11 @@ type ViewSnapshot = {
     finishedAt: string | null;
   }>;
   projects: Array<{
+    id: string;
     root: string;
     pipelineRoot: string;
     resolvedPipeline: string | null;
+    pipelineIssue: { status: string; summary: string; detail: string } | null;
     steps: Array<{ id: string }>;
     blobs: Array<{
       id: string;

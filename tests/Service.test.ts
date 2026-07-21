@@ -40,6 +40,22 @@ test("one-shot run refuses a competing dispatcher", async () => {
   fixture.database.close();
 });
 
+test("long-running service waits out a prior dispatcher lease instead of flapping", async () => {
+  const fixture = createServiceFixture(new ServiceAdapter(), 80);
+  fixture.store.createBlob("blob-1", blobInput(fixture));
+  fixture.store.requestContinuous("blob-1");
+  assert.equal(fixture.store.acquireLease("previous-service", 50), true);
+  const controller = new AbortController();
+  const running = fixture.service.run(controller.signal);
+
+  await waitUntil(() => fixture.store.getBlob("blob-1")?.state === "complete");
+  controller.abort();
+  await running;
+
+  assert.equal(fixture.store.listReceipts("blob-1").length, 1);
+  fixture.database.close();
+});
+
 test("service shutdown interrupts the receipt without changing its position", async () => {
   const harness = new AbortableAdapter();
   const fixture = createServiceFixture(harness);

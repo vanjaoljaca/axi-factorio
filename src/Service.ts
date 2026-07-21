@@ -19,7 +19,7 @@ export class ConveyorService {
 
   async run(signal: AbortSignal): Promise<void> {
     signal.throwIfAborted();
-    this.acquireDispatcher();
+    await this.waitForDispatcher(signal);
     try {
       const recovered = this.store.recoverInterruptedReceipts();
       log("service_started", { ownerId: this.ownerId, recovered });
@@ -44,6 +44,16 @@ export class ConveyorService {
   private acquireDispatcher(): void {
     if (!this.store.acquireLease(this.ownerId, this.leaseMs)) {
       throw new Error("Another axi-factorio dispatcher owns the active lease.");
+    }
+  }
+
+  private async waitForDispatcher(signal: AbortSignal): Promise<void> {
+    while (!this.store.acquireLease(this.ownerId, this.leaseMs)) {
+      log("service_dispatcher_waiting", {
+        ownerId: this.ownerId, disposition: "wait_for_single_owner",
+      });
+      await delay(this.pollMs, signal);
+      signal.throwIfAborted();
     }
   }
 

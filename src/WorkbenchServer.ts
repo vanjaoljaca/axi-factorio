@@ -116,6 +116,10 @@ function scenarioIndex(): object[] {
       id: "live-execution-visibility", name: "Execution sessions: task movement",
       description: "Play · watch one task stay or advance on its real pipeline · Reset",
     },
+    {
+      id: "viewer-resilience", name: "Viewer resilience",
+      description: "Healthy project + missing disposable pipeline + isolated diagnosis",
+    },
   ];
 }
 
@@ -146,6 +150,11 @@ async function scenario(url: URL): Promise<Scenario> {
     return runCodexExecutionWorkspaceScenario();
   }
   if (id === "live-execution-visibility") return liveExecutionScenario.snapshot();
+  if (id === "viewer-resilience") {
+    const { runViewerResilienceScenario } =
+      await import("../test/harness/ViewerResilienceScenario.ts");
+    return runViewerResilienceScenario();
+  }
   throw new Error(`Unknown scenario: ${id}`);
 }
 
