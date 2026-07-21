@@ -1,9 +1,10 @@
 #!/usr/bin/env -S node --disable-warning=ExperimentalWarning
 
 async function main(args = process.argv.slice(2)): Promise<void> {
-  if (args.includes("--version") || args[0] === "version") return printVersion();
+  if (args.includes("--version") || args.includes("-v") || args[0] === "version") return printVersion();
   if (args.includes("--help") || args[0] === "help") return showCommandHelp(helpCommand(args));
   const options = parseGlobalOptions(args);
+  if (options.args[0] === "setup") return setupAxi(options.args.slice(1), options.json);
   const databaseAlreadyExisted = existsSync(options.databasePath);
   const database = new FactorioDatabase(options.databasePath);
   const store = new ConveyorStore(database);
@@ -51,17 +52,27 @@ async function runCommand(
 }
 
 function showHome(store: ConveyorStore, json: boolean): void {
-  const blobs = store.listBlobs();
+  const projects = directoryProjects(store.listProjects(), process.cwd());
+  const projectIds = new Set(projects.map((project) => project.id));
+  const blobs = store.listBlobs().filter((blob) => projectIds.has(blob.projectId));
   const active = blobs.filter((blob) => blob.state !== "complete").slice(0, 10);
   printOutput({
     bin: displayPath(process.argv[1]),
-    description: "Move blobs down Git-defined steps with SQLite receipts.",
-    projects: store.listProjects().map(projectSummary),
+    description: axiDescription,
+    count: `${active.length} of ${blobs.length} total`,
+    projects: projects.slice(0, 10).map((project) => projectSummary(project)),
     summary: stateCounts(blobs),
     blobs: active.map(blobSummary),
     done: `${blobs.filter((blob) => blob.state === "complete").length} retained`,
     help: homeHelp(blobs.length, active.length),
   }, json);
+}
+
+function setupAxi(args: string[], json: boolean): void {
+  const parsed = parseArgs(args, {});
+  requirePositionals(parsed, 1, "setup requires `hooks`.");
+  if (parsed.positionals[0] !== "hooks") throw usage("setup accepts only `hooks`.");
+  printOutput(installAxiFactorioHooks(), json);
 }
 
 function initialize(args: string[], json: boolean, already: boolean): void {
@@ -134,21 +145,22 @@ function bindExecutionWorkspace(args: string[], store: ConveyorStore, json: bool
 }
 
 function runProject(args: string[], store: ConveyorStore, json: boolean): void {
-  const parsed = parseArgs(args, {
+  const action = args[0] ?? "list";
+  const commandArgs = args[0] ? args.slice(1) : [];
+  if (action === "list") return listProjects(parseArgs(commandArgs, { "--fields": "value" }), store, json);
+  if (action === "show") return showProject(parseArgs(commandArgs, {}), store, json);
+  if (action === "add" || action === "upsert") return addProject(parseArgs(commandArgs, {
     "--root": "value", "--pipeline-root": "value", "--cwd": "value", "--pipeline": "value",
+  }), store, json, action);
+  if (action === "remove") return removeProject(parseArgs(commandArgs, {
     "--confirm": "value", "--evidence": "value",
-  });
-  const action = parsed.positionals[0] ?? "list";
-  if (action === "list") return listProjects(parsed, store, json);
-  if (action === "show") return showProject(parsed, store, json);
-  if (action === "add" || action === "upsert") return addProject(parsed, store, json, action);
-  if (action === "remove") return removeProject(parsed, store, json);
+  }), store, json);
   throw usage("project accepts list, show, add, upsert, or remove.");
 }
 
 function removeProject(parsed: ParsedArgs, store: ConveyorStore, json: boolean): void {
-  requirePositionals(parsed, 2, "project remove requires one project ID.");
-  const id = validId(parsed.positionals[1], "project");
+  requirePositionals(parsed, 1, "project remove requires one project ID.");
+  const id = validId(parsed.positionals[0], "project");
   const preview = store.previewProjectRemoval(id);
   const confirmation = firstFlag(parsed, "--confirm");
   if (!confirmation) return printOutput({
@@ -160,18 +172,21 @@ function removeProject(parsed: ParsedArgs, store: ConveyorStore, json: boolean):
 }
 
 function listProjects(parsed: ParsedArgs, store: ConveyorStore, json: boolean): void {
-  requirePositionals(parsed, parsed.positionals.length ? 1 : 0, "project list accepts no IDs.");
+  requirePositionals(parsed, 0, "project list accepts no IDs.");
   const projects = store.listProjects();
-  printOutput({ count: projects.length, projects: projects.map(projectSummary), help: projectHelp(projects.length) }, json);
+  const fields = requestedFields(parsed, projectDefaultFields, projectFields);
+  printOutput({
+    count: projects.length,
+    projects: projects.map((project) => projectSummary(project, fields)),
+    empty: projects.length ? undefined : "0 projects found in this workspace.",
+    help: projectHelp(projects.length),
+  }, json);
 }
 
 function showProject(parsed: ParsedArgs, store: ConveyorStore, json: boolean): void {
-  requirePositionals(parsed, 2, "project show requires one project ID.");
-  const project = requireProject(store, parsed.positionals[1]);
-  printOutput({
-    project: projectSummary(project),
-    help: [`Run \`axi-factorio add <id> "<title>" --project ${project.id}\`.`],
-  }, json);
+  requirePositionals(parsed, 1, "project show requires one project ID.");
+  const project = requireProject(store, parsed.positionals[0]);
+  printOutput({ project: projectDetail(project) }, json);
 }
 
 function addProject(
@@ -180,11 +195,11 @@ function addProject(
   json: boolean,
   action: "add" | "upsert",
 ): void {
-  requirePositionals(parsed, 3, "project add requires an ID and name.");
-  const id = validId(parsed.positionals[1], "project");
+  requirePositionals(parsed, 2, "project add requires an ID and name.");
+  const id = validId(parsed.positionals[0], "project");
   const root = resolve(firstFlag(parsed, "--root") ?? firstFlag(parsed, "--cwd") ?? process.cwd());
   const input = {
-    name: parsed.positionals[2],
+    name: parsed.positionals[1],
     root,
     pipelineRoot: resolve(firstFlag(parsed, "--pipeline-root") ?? join(root, "pipelines")),
     defaultPipeline: firstFlag(parsed, "--pipeline") ?? "default",
@@ -193,20 +208,22 @@ function addProject(
     ? store.upsertProject(id, input)
     : store.createProject(id, input);
   printOutput({
-    ok: `project ${action} ${id}`, already: result.already, project: projectSummary(result.project),
+    ok: `project ${action} ${id}`, already: result.already, project: projectDetail(result.project),
     help: [`Run \`axi-factorio add <id> "<title>" --project ${id}\`.`],
   }, json);
 }
 
 function listBlobs(args: string[], store: ConveyorStore, json: boolean): void {
-  const parsed = parseArgs(args, { "--state": "value", "--limit": "value" });
+  const parsed = parseArgs(args, { "--state": "value", "--limit": "value", "--fields": "value" });
   requirePositionals(parsed, 0, "list accepts no positional arguments.");
   const state = firstFlag(parsed, "--state");
   const limit = positiveInteger(firstFlag(parsed, "--limit") ?? "50", "--limit");
   const all = store.listBlobs().filter((blob) => !state || blob.state === state);
+  const fields = requestedFields(parsed, blobDefaultFields, blobFields);
   printOutput({
     count: `${Math.min(all.length, limit)} of ${all.length} total`,
-    blobs: all.slice(0, limit).map(blobSummary),
+    blobs: all.slice(0, limit).map((blob) => blobSummary(blob, fields)),
+    empty: all.length ? undefined : `0 blobs found${state ? ` in state ${state}` : " in this workspace"}.`,
     help: all.length
       ? ["Run `axi-factorio show <id>` for blob details."]
       : ["Run `axi-factorio add <id> \"<title>\"`."],
@@ -230,14 +247,16 @@ function showBlob(args: string[], store: ConveyorStore, json: boolean): void {
 }
 
 function showReceipts(args: string[], store: ConveyorStore, json: boolean): void {
-  const parsed = parseArgs(args, { "--limit": "value", "--full": "boolean" });
+  const parsed = parseArgs(args, { "--limit": "value", "--full": "boolean", "--fields": "value" });
   if (parsed.positionals.length > 1) throw usage("receipts accepts at most one blob ID.");
   const limit = positiveInteger(firstFlag(parsed, "--limit") ?? "50", "--limit");
   const all = store.listReceipts(parsed.positionals[0]);
   const full = hasFlag(parsed, "--full");
+  const fields = requestedFields(parsed, receiptDefaultFields, receiptFields);
   printOutput({
     count: `${Math.min(all.length, limit)} of ${all.length} total`,
-    receipts: all.slice(-limit).map((receipt) => receiptSummary(receipt, full)),
+    receipts: all.slice(-limit).map((receipt) => receiptSummary(receipt, full, fields)),
+    empty: all.length ? undefined : "0 receipts found for this query.",
     help: full || !all.length ? [] : ["Run `axi-factorio receipts [<id>] --full` for hashes and artifacts."],
   }, json);
 }
@@ -368,10 +387,14 @@ async function runService(
   json: boolean,
   databasePath: string,
 ): Promise<void> {
-  const parsed = parseArgs(args, {
-    "--poll-ms": "value", "--port": "value", ...harnessFlags,
-  });
-  const action = parsed.positionals[0] ?? "run";
+  const action = args[0] ?? "run";
+  const commandArgs = args[0] ? args.slice(1) : [];
+  const spec = action === "run"
+    ? { "--poll-ms": "value", "--port": "value", ...harnessFlags } as FlagSpec
+    : action === "install"
+      ? { "--port": "value", ...harnessFlags } as FlagSpec
+      : {};
+  const parsed = parseArgs(commandArgs, spec);
   if (action === "install") {
     return printService("installed", installService(
       databasePath,
@@ -380,13 +403,18 @@ async function runService(
       instrumentationSelector(parsed),
     ), json);
   }
-  if (action === "status") return printService("status", showServiceStatus(), json);
-  if (action === "uninstall") return printService("uninstalled", uninstallService(), json);
+  if (action === "status") {
+    requirePositionals(parsed, 0, "service status accepts no arguments.");
+    return printService("status", showServiceStatus(), json);
+  }
+  if (action === "uninstall") {
+    requirePositionals(parsed, 0, "service uninstall accepts no arguments.");
+    return printService("uninstalled", uninstallService(), json);
+  }
   if (action !== "run") throw usage("service accepts run, install, status, or uninstall.");
   process.title = "axi-factorio-service";
   requirePositionals(
-    parsed,
-    parsed.positionals.length ? 1 : 0,
+    parsed, 0,
     "service run accepts no additional positional arguments.",
   );
   const pollMs = positiveInteger(firstFlag(parsed, "--poll-ms") ?? "1000", "--poll-ms");
@@ -394,7 +422,8 @@ async function runService(
   const controller = serviceAbortController();
   const viewer = startServiceViewer(databasePath, servicePort(parsed), controller);
   const runner = await configuredRunner(store, parsed);
-  await Promise.all([new ConveyorService(store, runner, pollMs).run(controller.signal), viewer]);
+  const dispatcher = new ConveyorService(store, runner, pollMs).run(controller.signal);
+  await runCoupledService(controller, dispatcher, viewer);
   printOutput({ ok: "service -> stopped" }, json);
 }
 
@@ -523,18 +552,25 @@ function requireValue(value: string | undefined, message: string): string {
 
 function contentPreview(content: string, full: boolean): ContentPreview {
   if (full || content.length <= bodyLimit) return { text: content, truncated: false };
-  return { text: `${content.slice(0, bodyLimit)}…`, truncated: true };
+  return {
+    text: `${content.slice(0, bodyLimit)}… (truncated, ${content.length} chars total — use --full)`,
+    truncated: true,
+  };
 }
 
-function blobSummary(blob: Blob): Record<string, unknown> {
-  return {
+function blobSummary(blob: Blob, fields = blobDefaultFields): Record<string, unknown> {
+  return selectFields({
     id: blob.id,
     title: blob.title,
-    project: blob.projectId,
     state: blob.state,
+    project: blob.projectId,
     executionMode: blob.executionMode,
     runRequested: blob.runRequested,
-  };
+    pipeline: blob.pipelineId,
+    cwd: blob.cwd,
+    executionWorkspaceRoot: blob.executionWorkspaceRoot,
+    updatedAt: blob.updatedAt,
+  }, fields);
 }
 
 function blobDetail(blob: Blob): Record<string, unknown> {
@@ -560,15 +596,19 @@ function blobDetail(blob: Blob): Record<string, unknown> {
   };
 }
 
-function projectSummary(project: Project): Record<string, unknown> {
-  return {
+function projectSummary(project: Project, fields = projectDefaultFields): Record<string, unknown> {
+  return selectFields({
     id: project.id,
     name: project.name,
-    root: project.root,
-    pipelineRoot: project.pipelineRoot,
     defaultPipeline: project.defaultPipeline,
     ...resolvedProjectPipeline(project),
-  };
+    root: project.root,
+    pipelineRoot: project.pipelineRoot,
+  }, fields);
+}
+
+function projectDetail(project: Project): Record<string, unknown> {
+  return projectSummary(project, projectFields);
 }
 
 function resolvedProjectPipeline(project: Project): Record<string, unknown> {
@@ -590,13 +630,17 @@ function projectHelp(count: number): string[] {
     : ["Run `axi-factorio project add <id> \"<name>\"`."];
 }
 
-function receiptSummary(receipt: Receipt, full: boolean): Record<string, unknown> {
+function receiptSummary(
+  receipt: Receipt,
+  full: boolean,
+  fields = receiptDefaultFields,
+): Record<string, unknown> {
   const base: Record<string, unknown> = {
     id: receipt.id,
-    blobId: receipt.blobId,
     step: receipt.stepId,
     attempt: receipt.attempt,
     status: receipt.status,
+    blobId: receipt.blobId,
     executionKind: receipt.executionKind,
     valid: !receipt.invalidatedAt,
     startedAt: receipt.startedAt,
@@ -618,7 +662,23 @@ function receiptSummary(receipt: Receipt, full: boolean): Record<string, unknown
     error: receipt.error,
     invalidatedAt: receipt.invalidatedAt,
   });
-  return base;
+  return full ? base : selectFields(base, fields);
+}
+
+function requestedFields(parsed: ParsedArgs, defaults: string[], available: string[]): string[] {
+  const values = parsed.flags["--fields"] ?? [];
+  if (!values.length) return defaults;
+  const fields = values.flatMap((value) => value.split(",")).map((value) => value.trim()).filter(Boolean);
+  for (const field of fields) {
+    if (!available.includes(field)) {
+      throw usage(`unknown field ${field}.`, `Available fields: ${available.join(", ")}.`);
+    }
+  }
+  return [...new Set(fields)];
+}
+
+function selectFields(value: Record<string, unknown>, fields: string[]): Record<string, unknown> {
+  return Object.fromEntries(fields.map((field) => [field, value[field]]));
 }
 
 function stateCounts(blobs: Blob[]): Record<string, number> {
@@ -628,8 +688,8 @@ function stateCounts(blobs: Blob[]): Record<string, number> {
 }
 
 function homeHelp(total: number, shown: number): string[] {
-  const help = ["Run `axi-factorio add <id> \"<title>\"` to add a blob."];
-  if (total) help.unshift("Run `axi-factorio show <id>` for blob and receipt details.");
+  const help = [axiHomeHelp[2]];
+  if (total) help.unshift(axiHomeHelp[0]);
   if (total > shown) help.unshift(`Run \`axi-factorio list\` for all ${total} blobs.`);
   return help;
 }
@@ -640,7 +700,28 @@ function displayPath(path: string): string {
 }
 
 function defaultDatabasePath(): string {
-  return process.env.AXI_FACTORIO_DB ?? join(process.cwd(), "pipelines", "axi-factorio.db");
+  if (process.env.AXI_FACTORIO_DB) return process.env.AXI_FACTORIO_DB;
+  let directory = resolve(process.cwd());
+  while (true) {
+    const candidate = join(directory, "pipelines", "axi-factorio.db");
+    if (existsSync(candidate)) return candidate;
+    const parent = dirname(directory);
+    if (parent === directory) return join(resolve(process.cwd()), "pipelines", "axi-factorio.db");
+    directory = parent;
+  }
+}
+
+function directoryProjects(projects: Project[], cwd: string): Project[] {
+  const directory = canonicalPath(cwd);
+  return projects.filter((project) => pathsOverlap(directory, canonicalPath(project.root)));
+}
+
+function pathsOverlap(left: string, right: string): boolean {
+  return left === right || left.startsWith(`${right}${sep}`) || right.startsWith(`${left}${sep}`);
+}
+
+function canonicalPath(path: string): string {
+  try { return realpathSync(path); } catch { return resolve(path); }
 }
 
 function defaultProjectId(cwd: string): string {
@@ -688,13 +769,17 @@ function serviceAbortController(): AbortController {
 }
 
 function printVersion(): void {
-  process.stdout.write("axi-factorio 0.1.0-rc.32\n");
+  process.stdout.write("axi-factorio 0.1.0-rc.33\n");
 }
 
 function helpCommand(args: string[]): string | undefined {
   if (args[0] === "help") return args[1];
   const withoutHelp = args.filter((argument) => argument !== "--help");
-  return extractGlobals(withoutHelp).args[0];
+  const command = extractGlobals(withoutHelp).args;
+  if ((command[0] === "project" || command[0] === "service") && command[1]) {
+    return `${command[0]}:${command[1]}`;
+  }
+  return command[0];
 }
 
 function showCommandHelp(command?: string): void {
@@ -740,46 +825,150 @@ const harnessFlags: FlagSpec = {
   "--instrumentation": "value",
 };
 
+const blobDefaultFields = ["id", "title", "state", "project"];
+const blobFields = [
+  ...blobDefaultFields, "executionMode", "runRequested", "pipeline", "cwd",
+  "executionWorkspaceRoot", "updatedAt",
+];
+const projectDefaultFields = ["id", "name", "defaultPipeline", "resolvedPipeline"];
+const projectFields = [
+  ...projectDefaultFields, "resolvedPipelinePath", "pipelineError", "root", "pipelineRoot",
+];
+const receiptDefaultFields = ["id", "step", "status", "attempt"];
+const receiptFields = [
+  ...receiptDefaultFields, "blobId", "executionKind", "valid", "startedAt", "finishedAt",
+];
+
 const helpText: Record<string, string> = {
-  root: `axi-factorio 0.1.0-rc.32
+  root: `axi-factorio 0.1.0-rc.33
 
 Usage: axi-factorio <command> [flags]
-Commands: project, add, adopt, relocate, bind-execution, list, status, show, receipts, play, step, stop, retry, review, feedback, approve, reset-endpoint, rewind, kick, run, service, init
-Globals: --db PATH, --json, --help, --version
+Commands: project, add, adopt, relocate, bind-execution, list, status, show, receipts, play, step, stop, retry, review, feedback, approve, reset-endpoint, rewind, kick, run, service, setup, init
+Globals: --db PATH, --json, --help, -v, --version
 
-Run without arguments for the live conveyor dashboard.
+Examples:
+  axi-factorio
+  axi-factorio list --fields id,title,state,project
+  axi-factorio show <id>
 `,
-  project: `Usage: axi-factorio project [list]
-       axi-factorio project add PROJECT_ID "NAME" --root DIR --pipeline-root DIR [--pipeline NAME]
-       axi-factorio project upsert PROJECT_ID "NAME" --root DIR --pipeline-root DIR [--pipeline NAME]
-       axi-factorio project show PROJECT_ID
-       axi-factorio project remove PROJECT_ID [--confirm PROJECT_ID --evidence REF]
-`,
-  add: `Usage: axi-factorio add BLOB_ID "TITLE" [--project ID] [--pipeline NAME|NAME/vN|DIR] [--pipeline-root DIR] [--cwd DIR] [--body TEXT|--body-file PATH] [--input-ref REF...]
-       axi-factorio add --mint "TITLE" [--pipeline NAME|NAME/vN|DIR]
-`,
-  list: `Usage: axi-factorio list [--state STATE] [--limit 50]\n`,
-  status: `Usage: axi-factorio status [--state STATE] [--limit 50]\n`,
-  show: `Usage: axi-factorio show BLOB_ID [--full]\n`,
-  receipts: `Usage: axi-factorio receipts [BLOB_ID] [--limit 50] [--full]\n`,
-  play: `Usage: axi-factorio play BLOB_ID\n`,
-  step: `Usage: axi-factorio step BLOB_ID\n`,
-  stop: `Usage: axi-factorio stop BLOB_ID\n`,
-  retry: `Usage: axi-factorio retry BLOB_ID\n`,
-  review: `Usage: axi-factorio review BLOB_ID [--note TEXT]\n`,
-  feedback: `Usage: axi-factorio feedback BLOB_ID "TEXT" [--evidence REF...]\n`,
-  approve: `Usage: axi-factorio approve BLOB_ID --evidence REF... [--note TEXT]\n`,
-  "reset-endpoint": `Usage: axi-factorio reset-endpoint BLOB_ID [--reason TEXT]\n`,
-  adopt: `Usage: axi-factorio adopt BLOB_ID CURRENT_STEP --source KIND:EXACT_ID --evidence STEP_ID=REF...\n`,
-  relocate: `Usage: axi-factorio relocate BLOB_ID --root DIR --evidence REF...\n`,
-  "bind-execution": `Usage: axi-factorio bind-execution BLOB_ID --root DIR --evidence REF...\n`,
-  rewind: `Usage: axi-factorio rewind BLOB_ID STEP_ID\n`,
-  kick: `Usage: axi-factorio kick BLOB_ID STEP_ID\n`,
-  run: `Usage: axi-factorio run [--harness codex|module:SPECIFIER[#EXPORT]] [--instrumentation module:SPECIFIER[#EXPORT]]\n`,
-  evaluate: `Usage: axi-factorio evaluate [--harness codex|module:SPECIFIER[#EXPORT]] [--instrumentation module:SPECIFIER[#EXPORT]]\n`,
-  service: `Usage: axi-factorio service [run|install|status|uninstall] [--poll-ms 1000] [--port 4317] [--harness codex|module:SPECIFIER[#EXPORT]] [--instrumentation module:SPECIFIER[#EXPORT]]\n`,
-  init: `Usage: axi-factorio init\n`,
+  project: commandHelp(
+    "axi-factorio project <list|show|add|upsert|remove>",
+    ["Use `axi-factorio project <action> --help` for action-specific flags."],
+    ["axi-factorio project list", "axi-factorio project show <project-id>"],
+  ),
+  "project:list": commandHelp(
+    "axi-factorio project list [--fields FIELDS]",
+    ["--fields FIELDS  Comma-separated fields (default: id,name,defaultPipeline,resolvedPipeline)"],
+    ["axi-factorio project list", "axi-factorio project list --fields id,name,root,pipelineRoot"],
+  ),
+  "project:show": commandHelp("axi-factorio project show PROJECT_ID", [], [
+    "axi-factorio project show multilingual", "axi-factorio project show <project-id> --json",
+  ]),
+  "project:add": projectMutationHelp("add"),
+  "project:upsert": projectMutationHelp("upsert"),
+  "project:remove": commandHelp(
+    "axi-factorio project remove PROJECT_ID [--confirm PROJECT_ID --evidence REF...]",
+    ["--confirm ID  Exact project ID confirmation", "--evidence REF  Repeatable removal evidence"],
+    ["axi-factorio project remove <project-id>", "axi-factorio project remove <project-id> --confirm <project-id> --evidence <ref>"],
+  ),
+  add: commandHelp(
+    "axi-factorio add BLOB_ID \"TITLE\" [flags]",
+    ["--project ID", "--pipeline SELECTOR (default: project default)", "--cwd DIR (default: project root)", "--body TEXT | --body-file PATH", "--input-ref REF (repeatable)", "--mint"],
+    ["axi-factorio add <id> \"<title>\"", "axi-factorio add --mint \"<title>\" --project <project-id>"],
+  ),
+  list: listHelp("list"),
+  status: listHelp("status"),
+  show: commandHelp("axi-factorio show BLOB_ID [--full]", ["--full  Disable body and receipt truncation"], [
+    "axi-factorio show <id>", "axi-factorio show <id> --full",
+  ]),
+  receipts: commandHelp(
+    "axi-factorio receipts [BLOB_ID] [flags]",
+    ["--limit N (default: 50)", "--fields FIELDS (default: id,step,status,attempt)", "--full  Include all provenance fields"],
+    ["axi-factorio receipts <id>", "axi-factorio receipts <id> --full"],
+  ),
+  play: simpleBlobHelp("play", "request continuous progression"),
+  step: simpleBlobHelp("step", "request exactly one transition"),
+  stop: simpleBlobHelp("stop", "clear pending execution"),
+  retry: simpleBlobHelp("retry", "retry the current step"),
+  review: commandHelp("axi-factorio review BLOB_ID [--note TEXT]", ["--note TEXT (default: empty)"], [
+    "axi-factorio review <id>", "axi-factorio review <id> --note \"<note>\"",
+  ]),
+  feedback: commandHelp("axi-factorio feedback BLOB_ID \"TEXT\" [--evidence REF...]", ["--evidence REF (repeatable)"], [
+    "axi-factorio feedback <id> \"<feedback>\"", "axi-factorio feedback <id> \"<feedback>\" --evidence <ref>",
+  ]),
+  approve: commandHelp("axi-factorio approve BLOB_ID --evidence REF... [--note TEXT]", ["--evidence REF (required, repeatable)", "--note TEXT (default: empty)"], [
+    "axi-factorio approve <id> --evidence <ref>", "axi-factorio approve <id> --evidence <git-head-ref> --note \"<note>\"",
+  ]),
+  "reset-endpoint": commandHelp("axi-factorio reset-endpoint BLOB_ID [--reason TEXT]", ["--reason TEXT (default: Local endpoint reset from CLI.)"], [
+    "axi-factorio reset-endpoint <id>", "axi-factorio reset-endpoint <id> --reason \"<reason>\"",
+  ]),
+  adopt: commandHelp("axi-factorio adopt BLOB_ID CURRENT_STEP --source KIND:EXACT_ID --evidence STEP_ID=REF...", ["--source IDENTITY (required)", "--evidence STEP_ID=REF (required per prior step)"], [
+    "axi-factorio adopt <id> <step-id> --source git-sha:<sha> --evidence <prior-step>=<ref>",
+    "axi-factorio show <id> --full",
+  ]),
+  relocate: rootEvidenceHelp("relocate"),
+  "bind-execution": rootEvidenceHelp("bind-execution"),
+  rewind: twoIdHelp("rewind"),
+  kick: twoIdHelp("kick"),
+  run: runnerHelp("run"),
+  evaluate: runnerHelp("evaluate"),
+  service: commandHelp("axi-factorio service <run|install|status|uninstall>", ["Use `axi-factorio service <action> --help` for action-specific flags."], [
+    "axi-factorio service status", "axi-factorio service install --port 4317 --harness codex",
+  ]),
+  "service:run": commandHelp("axi-factorio service run [flags]", ["--poll-ms N (default: 1000)", "--port N (default: 4317)", "--harness SELECTOR (default: codex)", "--instrumentation SELECTOR (default: none)"], [
+    "axi-factorio service run", "axi-factorio service run --poll-ms 1000 --port 4317",
+  ]),
+  "service:install": commandHelp("axi-factorio service install [flags]", ["--port N (default: 4317)", "--harness SELECTOR (default: codex)", "--instrumentation SELECTOR (default: none)"], [
+    "axi-factorio service install", "axi-factorio service install --port 4317 --harness codex",
+  ]),
+  "service:status": commandHelp("axi-factorio service status", [], ["axi-factorio service status", "axi-factorio --json service status"]),
+  "service:uninstall": commandHelp("axi-factorio service uninstall", [], ["axi-factorio service status", "axi-factorio service uninstall"]),
+  setup: commandHelp("axi-factorio setup hooks", [], ["axi-factorio setup hooks", "axi-factorio setup hooks --json"]),
+  init: commandHelp("axi-factorio init", [], ["axi-factorio init", "axi-factorio init --db <path>"]),
 };
+
+function commandHelp(usage: string, flags: string[], examples: string[]): string {
+  const flagLines = flags.length ? flags.map((flag) => `  ${flag}`).join("\n") : "  none";
+  return `Usage: ${usage}\n\nFlags:\n${flagLines}\n\nExamples:\n${examples.map((item) => `  ${item}`).join("\n")}\n`;
+}
+
+function listHelp(command: "list" | "status"): string {
+  return commandHelp(`axi-factorio ${command} [flags]`, [
+    "--state STATE", "--limit N (default: 50)",
+    "--fields FIELDS (default: id,title,state,project)",
+  ], [`axi-factorio ${command}`, `axi-factorio ${command} --state <state> --fields id,title,state`]);
+}
+
+function projectMutationHelp(action: "add" | "upsert"): string {
+  return commandHelp(`axi-factorio project ${action} PROJECT_ID \"NAME\" [flags]`, [
+    "--root DIR (default: current directory)", "--pipeline-root DIR (default: ROOT/pipelines)",
+    "--pipeline SELECTOR (default: default)",
+  ], [`axi-factorio project ${action} <project-id> \"<name>\" --root <dir>`, `axi-factorio project show <project-id>`]);
+}
+
+function simpleBlobHelp(command: string, purpose: string): string {
+  return commandHelp(`axi-factorio ${command} BLOB_ID`, [`Purpose: ${purpose}`], [
+    `axi-factorio ${command} <id>`, "axi-factorio show <id>",
+  ]);
+}
+
+function rootEvidenceHelp(command: "relocate" | "bind-execution"): string {
+  return commandHelp(`axi-factorio ${command} BLOB_ID --root DIR [--evidence REF...]`, [
+    "--root DIR (required)", "--evidence REF (repeatable)",
+  ], [`axi-factorio ${command} <id> --root <dir> --evidence <ref>`, "axi-factorio show <id>"]);
+}
+
+function twoIdHelp(command: "rewind" | "kick"): string {
+  return commandHelp(`axi-factorio ${command} BLOB_ID STEP_ID`, [], [
+    `axi-factorio ${command} <id> <step-id>`, "axi-factorio show <id>",
+  ]);
+}
+
+function runnerHelp(command: "run" | "evaluate"): string {
+  return commandHelp(`axi-factorio ${command} [flags]`, [
+    "--harness SELECTOR (default: codex)", "--instrumentation SELECTOR (default: none)",
+  ], [`axi-factorio ${command}`, `axi-factorio ${command} --harness module:<specifier>#<export>`]);
+}
 
 main().catch((error) => {
   const message = error instanceof Error ? error.message : String(error);
@@ -803,6 +992,9 @@ import { discoverPipeline, nextStep, requireStep, snapshotDefinition } from "./P
 import { ConveyorRunner } from "./Runner.ts";
 import { LocalEndpointSupervisor } from "./LocalEndpointSupervisor.ts";
 import { ConveyorService } from "./Service.ts";
+import { runCoupledService } from "./ServiceRuntime.ts";
+import { axiDescription, axiHomeHelp } from "./AxiGuidance.ts";
+import { installAxiFactorioHooks } from "./AxiSetup.ts";
 import {
   type ServiceStatus,
   installService,
@@ -811,6 +1003,6 @@ import {
   uninstallService,
 } from "./ServiceInstall.ts";
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";

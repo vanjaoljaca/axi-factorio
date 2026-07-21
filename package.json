@@ -1,6 +1,6 @@
 {
   "name": "axi-factorio",
-  "version": "0.1.0-rc.32",
+  "version": "0.1.0-rc.33",
   "description": "A deliberately dumb SQLite conveyor for tool-driven work.",
   "license": "MIT",
   "type": "module",
@@ -9,6 +9,7 @@
   },
   "files": [
     "dist",
+    "skills",
     "AXI-CONFORMANCE.md",
     "ROADMAP.md",
     "README.md",
@@ -25,6 +26,7 @@
     "node": ">=23.6"
   },
   "dependencies": {
-    "@toon-format/toon": "2.3.1"
+    "@toon-format/toon": "2.3.1",
+    "axi-sdk-js": "0.1.8"
   }
 }

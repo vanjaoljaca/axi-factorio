@@ -4,8 +4,70 @@ test("no-argument home is content-first TOON", () => {
 
   assert.equal(result.status, 0);
   assert.match(result.stdout, /^bin: /);
-  assert.match(result.stdout, /description: Move blobs down Git-defined steps/);
+  assert.match(result.stdout, /description: Move blobs down Git-defined pipeline steps/);
   assert.match(result.stdout, /blobs: \[\]/);
+  assert.match(result.stdout, /count: 0 of 0 total/);
+});
+
+test("AXI list defaults to four fields and supports explicit field selection", () => {
+  const fixture = createCliFixture();
+  runCli(fixture, ["add", "field-blob", "Field blob", "--pipeline", fixture.pipelinePath, "--json"]);
+
+  const compact = JSON.parse(runCli(fixture, ["list", "--json"]).stdout);
+  const selected = JSON.parse(runCli(fixture, [
+    "list", "--fields", "id,state,executionMode,updatedAt", "--json",
+  ]).stdout);
+  const invalid = runCli(fixture, ["list", "--fields", "id,imaginary", "--json"]);
+
+  assert.deepEqual(Object.keys(compact.blobs[0]), ["id", "title", "state", "project"]);
+  assert.deepEqual(Object.keys(selected.blobs[0]), ["id", "state", "executionMode", "updatedAt"]);
+  assert.equal(invalid.status, 2);
+  assert.match(invalid.stdout, /unknown field imaginary/u);
+});
+
+test("AXI project subcommands validate their own flags", () => {
+  const fixture = createCliFixture();
+  const result = runCli(fixture, ["project", "list", "--root", fixture.root]);
+
+  assert.equal(result.status, 2);
+  assert.match(result.stdout, /unknown flag --root/u);
+});
+
+test("AXI home discovers the parent database and scopes ambient state to the current directory", () => {
+  const fixture = createCliFixture();
+  const databasePath = join(fixture.root, "pipelines", "axi-factorio.db");
+  const appA = join(fixture.root, "apps", "a");
+  const appB = join(fixture.root, "elsewhere", "b");
+  mkdirSync(appA, { recursive: true });
+  mkdirSync(appB, { recursive: true });
+  mkdirSync(join(fixture.root, "pipelines"), { recursive: true });
+  for (const [id, root] of [["app-a", appA], ["app-b", appB]]) {
+    const added = runCli(fixture, [
+      "project", "add", id, id, "--root", root, "--pipeline-root", fixture.root,
+      "--pipeline", fixture.pipelinePath, "--db", databasePath, "--json",
+    ]);
+    assert.equal(added.status, 0, added.stderr || added.stdout);
+  }
+
+  const result = spawnSync(process.execPath, ["--disable-warning=ExperimentalWarning", cliPath], {
+    cwd: appA, encoding: "utf8",
+  });
+  const explicit = runCli(fixture, ["project", "list", "--db", databasePath, "--json"]);
+
+  assert.equal(existsSync(databasePath), true);
+  assert.match(explicit.stdout, /app-a/u);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /app-a/u);
+  assert.doesNotMatch(result.stdout, /app-b/u);
+  assert.equal(existsSync(join(appA, "pipelines", "axi-factorio.db")), false);
+});
+
+test("AXI version accepts the standard short flag", () => {
+  const fixture = createCliFixture();
+  const result = runCli(fixture, ["-v"]);
+
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /^axi-factorio /u);
 });
 
 test("root help exposes service installation and keeps workbench internal", () => {
@@ -20,14 +82,36 @@ test("root help exposes service installation and keeps workbench internal", () =
 test("every public command exposes concise help without opening runtime state", () => {
   const fixture = createCliFixture();
   const commands = [
-    "project", "add", "adopt", "relocate", "bind-execution", "list", "status", "show", "receipts", "retry", "rewind",
-    "kick", "run", "evaluate", "service", "init",
+    "project", "add", "adopt", "relocate", "bind-execution", "list", "status", "show", "receipts",
+    "play", "step", "stop", "retry", "review", "feedback", "approve", "reset-endpoint", "rewind",
+    "kick", "run", "evaluate", "service", "setup", "init",
   ];
   for (const command of commands) {
     const result = runCli(fixture, [command, "--help"]);
     assert.equal(result.status, 0, command);
     assert.match(result.stdout, /^Usage: axi-factorio /, command);
+    assert.match(result.stdout, /Examples:/u, command);
   }
+});
+
+test("grouped AXI actions expose action-specific help with defaults and examples", () => {
+  const fixture = createCliFixture();
+  for (const args of [["project", "list", "--help"], ["service", "install", "--help"]]) {
+    const result = runCli(fixture, args);
+    assert.equal(result.status, 0);
+    assert.match(result.stdout, /default:/u);
+    assert.match(result.stdout, /Examples:/u);
+  }
+});
+
+test("AXI truncation includes the total size inline", () => {
+  const fixture = createCliFixture();
+  const body = "x".repeat(900);
+  runCli(fixture, ["add", "long-body", "Long", "--pipeline", fixture.pipelinePath, "--body", body, "--json"]);
+  const shown = JSON.parse(runCli(fixture, ["show", "long-body", "--json"]).stdout);
+
+  assert.match(shown.blob.body, /truncated, 900 chars total/u);
+  assert.match(shown.help[0], /--full/u);
 });
 
 test("projects own default pipeline selectors and blobs attach to projects", () => {

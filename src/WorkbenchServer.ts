@@ -48,7 +48,8 @@ type CursorActionVisual = {
 type LocalEndpointVisual = {
   kind: "local-endpoint";
   phase: "ready" | "committed" | "healthy" | "exit-received-url" | "receipt-ended"
-    | "service-restarting" | "recovered" | "approved" | "rejected" | "stopped";
+    | "service-restarting" | "child-lost" | "recovered" | "stable" | "churn"
+    | "approved" | "rejected" | "stopped";
   workspace: string;
   head: string;
   endpoint: { url: string; cwd: string; gitHead: string; pid: number; command: string; args: string[]; alive: boolean } | null;

@@ -20,12 +20,20 @@ export class ConveyorService {
   async run(signal: AbortSignal): Promise<void> {
     signal.throwIfAborted();
     await this.waitForDispatcher(signal);
+    const controller = linkedController(signal);
+    const heartbeat = setInterval(() => this.heartbeat(controller), this.heartbeatMs());
     try {
       const recovered = this.store.recoverInterruptedReceipts();
       await this.runner.reconcileLocalEndpoints();
+      this.throwIfLeaseLost(signal, controller.signal);
       log("service_started", { ownerId: this.ownerId, recovered });
-      await this.listen(signal);
+      await this.listen(controller.signal);
+      this.throwIfLeaseLost(signal, controller.signal);
+    } catch (error) {
+      if (!signal.aborted) throw error;
     } finally {
+      clearInterval(heartbeat);
+      controller.dispose();
       this.store.releaseLease(this.ownerId);
       log("service_stopped", { ownerId: this.ownerId });
     }
@@ -93,7 +101,7 @@ export class ConveyorService {
     } catch (error) {
       log("service_heartbeat_failed", { ownerId: this.ownerId, error: errorMessage(error) });
     }
-    controller.abort();
+    controller.abort(new Error("The axi-factorio dispatcher lease was lost."));
   }
 
   private heartbeatMs(): number {
@@ -104,6 +112,10 @@ export class ConveyorService {
     if (!this.store.renewLease(this.ownerId, this.leaseMs)) {
       throw new Error("The axi-factorio dispatcher lease was lost.");
     }
+  }
+
+  private throwIfLeaseLost(parent: AbortSignal, active: AbortSignal): void {
+    if (!parent.aborted && active.aborted) throw active.reason;
   }
 }
 

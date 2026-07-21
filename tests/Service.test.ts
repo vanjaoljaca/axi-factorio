@@ -15,16 +15,33 @@ test("service polls positioned blobs directly and processes new work", async () 
 });
 
 test("service heartbeats while an adapter runs", async () => {
-  const fixture = createServiceFixture(new SlowAdapter(), 300);
+  const fixture = createServiceFixture(new SlowAdapter(), 1_000);
   fixture.store.createBlob("blob-1", blobInput(fixture));
   fixture.store.requestContinuous("blob-1");
   const controller = new AbortController();
   const running = fixture.service.run(controller.signal);
 
   await waitUntil(() => fixture.store.listReceipts("blob-1")[0]?.status === "running");
-  await delay(500);
+  await delay(1_400);
   assert.equal(fixture.store.acquireLease("competitor", 100), false);
   await waitUntil(() => fixture.store.getBlob("blob-1")?.state === "complete");
+  controller.abort();
+  await running;
+  fixture.database.close();
+});
+
+test("service heartbeats while a slow local endpoint reconciliation is in flight", async () => {
+  const fixture = createServiceFixture(new ServiceAdapter(), 120);
+  const original = fixture.serviceRunner.reconcileLocalEndpoints.bind(fixture.serviceRunner);
+  fixture.serviceRunner.reconcileLocalEndpoints = async () => {
+    await delay(280);
+    await original();
+  };
+  const controller = new AbortController();
+  const running = fixture.service.run(controller.signal);
+
+  await delay(190);
+  assert.equal(fixture.store.acquireLease("competing-service", 100), false);
   controller.abort();
   await running;
   fixture.database.close();
@@ -41,7 +58,7 @@ test("one-shot run refuses a competing dispatcher", async () => {
 });
 
 test("long-running service waits out a prior dispatcher lease instead of flapping", async () => {
-  const fixture = createServiceFixture(new ServiceAdapter(), 80);
+  const fixture = createServiceFixture(new ServiceAdapter(), 500);
   fixture.store.createBlob("blob-1", blobInput(fixture));
   fixture.store.requestContinuous("blob-1");
   assert.equal(fixture.store.acquireLease("previous-service", 50), true);
@@ -131,7 +148,7 @@ class SlowAdapter extends ServiceAdapter {
     externalRunId: string,
     observer: HarnessObserver,
   ): Promise<HarnessResult> {
-    await delay(800);
+    await delay(2_000);
     return super.execute(input, externalRunId, observer);
   }
 }
@@ -176,6 +193,7 @@ function createServiceFixture(
     ...pipeline,
     database,
     store,
+    serviceRunner: runner,
     service: new ConveyorService(store, runner, 10, leaseMs),
   };
 }
@@ -191,7 +209,7 @@ function blobInput(fixture: PipelineFixture): BlobInput {
 }
 
 async function waitUntil(predicate: () => boolean): Promise<void> {
-  const deadline = Date.now() + 2_000;
+  const deadline = Date.now() + 5_000;
   while (!predicate()) {
     if (Date.now() >= deadline) throw new Error("Timed out waiting for service.");
     await delay(10);
@@ -205,6 +223,7 @@ function delay(milliseconds: number): Promise<void> {
 type ServiceFixture = PipelineFixture & {
   database: FactorioDatabase;
   store: ConveyorStore;
+  serviceRunner: ConveyorRunner;
   service: ConveyorService;
 };
 

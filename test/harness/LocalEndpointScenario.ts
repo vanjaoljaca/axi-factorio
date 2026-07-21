@@ -51,7 +51,12 @@ export class LocalEndpointScenario {
     process.kill(-before.pid, "SIGTERM");
     await waitUntilUnavailable(before.url);
     this.capture("child-lost", { ...before });
-    await this.runner!.reconcileLocalEndpoints();
+    const controller = new AbortController();
+    const service = new ConveyorService(this.requireActive(), this.runner!, 20, 120);
+    const running = service.run(controller.signal);
+    await waitUntilRecovered(this.requireActive(), before.pid);
+    controller.abort();
+    await running;
     const after = this.currentSession();
     if (!after || !await endpointHealthy(after.url)) throw new Error("Retained endpoint was not recovered.");
     this.capture("recovered", after);
@@ -207,6 +212,7 @@ function assertions(
     { label: "Supervisor uses the assigned workspace", passed: !session || session.cwd === realpathSync(fixture.workspace) },
     { label: "Health is exact-head", passed: !session || session.gitHead === head },
     { label: "Endpoint lease survives receipt completion", passed: phase !== "receipt-ended" || Boolean(session) },
+    { label: "Dispatcher lease survived slow endpoint recovery", passed: phase !== "recovered" || Boolean(session) },
     { label: "Disposition owns final cancellation", passed: phase !== "stopped" || session !== null },
   ];
 }
@@ -229,6 +235,15 @@ async function waitUntilUnavailable(url: string): Promise<void> {
 async function endpointHealthy(url: string): Promise<boolean> {
   try { return (await fetch(url, { signal: AbortSignal.timeout(300) })).ok; }
   catch { return false; }
+}
+
+async function waitUntilRecovered(store: ConveyorStore, previousPid: number): Promise<void> {
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const lease = store.pendingLocalEndpointLeases()[0];
+    if (lease && lease.pid !== previousPid && await endpointHealthy(lease.url)) return;
+    await new Promise((resolveWait) => setTimeout(resolveWait, 25));
+  }
+  throw new Error("Fixture endpoint was not recovered by the running service.");
 }
 
 function readReceipts(databasePath: string): Receipt[] {
@@ -294,11 +309,12 @@ const scenarioId = "local-endpoint-supervisor";
 const endpointServerSource = `
 import { createServer } from "node:http";
 const port = Number(process.env.AXI_FACTORIO_ENDPOINT_PORT ?? process.env.PORT);
-createServer((request, response) => {
+const server = createServer((request, response) => {
   if (request.url !== "/health") { response.writeHead(404).end("not found"); return; }
   response.writeHead(200, { "content-type": "text/plain" });
   response.end("endpoint:healthy");
-}).listen(port, "127.0.0.1", () => console.log(JSON.stringify({ event: "endpoint.ready", url: \`http://127.0.0.1:\${port}/health\` })));
+});
+setTimeout(() => server.listen(port, "127.0.0.1", () => console.log(JSON.stringify({ event: "endpoint.ready", url: \`http://127.0.0.1:\${port}/health\` }))), 260);
 `;
 
 import type {
@@ -310,6 +326,7 @@ import { LocalEndpointSupervisor } from "../../src/LocalEndpointSupervisor.ts";
 import { FactorioDatabase } from "../../src/Database.ts";
 import { ConveyorStore } from "../../src/Store.ts";
 import { ConveyorRunner } from "../../src/Runner.ts";
+import { ConveyorService } from "../../src/Service.ts";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

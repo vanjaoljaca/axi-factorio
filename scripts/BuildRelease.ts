@@ -7,6 +7,7 @@ const archivePath = join(releaseDirectory, archiveName);
 buildRelease();
 
 function buildRelease(): void {
+  writeAxiSkill();
   buildDistribution();
   rmSync(releaseDirectory, { recursive: true, force: true });
   mkdirSync(releaseDirectory, { recursive: true });
@@ -16,6 +17,12 @@ function buildRelease(): void {
   writeFileSync(join(releaseDirectory, "SHA256SUMS"), checksum());
   writeFileSync(join(releaseDirectory, "INSTALL.md"), installationGuide());
   log("release.built", { archivePath, version: packageMetadata.version });
+}
+
+function writeAxiSkill(): void {
+  const directory = join(root, "skills", "axi-factorio");
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(join(directory, "SKILL.md"), axiFactorioSkill());
 }
 
 function buildDistribution(): void {
@@ -133,3 +140,4 @@ import {
 import { stripTypeScriptTypes } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { axiFactorioSkill } from "../src/AxiGuidance.ts";

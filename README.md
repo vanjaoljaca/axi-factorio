@@ -199,7 +199,7 @@ npm run build
 
 This recreates `release/` with:
 
-- `axi-factorio-0.1.0-rc.32.tgz`, the installable package;
+- `axi-factorio-0.1.0-rc.33.tgz`, the installable package;
 - `SHA256SUMS`, for artifact verification; and
 - `INSTALL.md`, with direct and vendored installation commands.
 
@@ -211,7 +211,7 @@ Do not use `npm link` for a consuming project. Install the exact tarball so
 Install the exact candidate in the consuming npm project:
 
 ```sh
-npm install --save-exact /path/to/axi-factorio-0.1.0-rc.32.tgz
+npm install --save-exact /path/to/axi-factorio-0.1.0-rc.33.tgz
 ```
 
 From the consuming project root, the defaults are:
@@ -473,16 +473,36 @@ Use `--db PATH` or `AXI_FACTORIO_DB` to choose another SQLite file.
 
 ## AXI behavior
 
-The CLI implements nine of the ten published AXI principles. See
-[`AXI-CONFORMANCE.md`](AXI-CONFORMANCE.md) for the evidence and the remaining
-ambient-context gap. Its current agent-facing behavior includes:
+The CLI implements the ten published AXI principles. See
+[`AXI-CONFORMANCE.md`](AXI-CONFORMANCE.md) for the current evidence matrix.
+Its agent-facing behavior includes:
 
-- no arguments shows a content-first dashboard;
+- no arguments discovers the nearest parent database and shows a
+  directory-scoped, content-first dashboard;
 - stdout is compact TOON by default and `--json` is available everywhere;
-- long content and receipt detail require `--full`;
+- list schemas default to four fields and support explicit `--fields`;
+- long content reports its total size inline and receipt detail uses `--full`;
 - writes lead with `ok`, report `already` on no-ops, and give contextual help;
 - unknown flags fail closed; and
 - usage errors exit `2`, runtime failures exit `1`, and success/no-op exits `0`.
+
+Opt into ambient session context after installation:
+
+```sh
+axi-factorio setup hooks
+```
+
+This uses the pinned official `axi-sdk-js` hook installer for Claude Code,
+Codex, and OpenCode. It is explicit, idempotent, and repairs moved executable
+paths. Ordinary CLI commands never install hooks.
+
+The repository and npm package also ship the generated
+`skills/axi-factorio/SKILL.md`. Install it on demand with a compatible Agent
+Skills installer, for example:
+
+```sh
+npx skills add vanjaoljaca/axi-factorio --skill axi-factorio
+```
 
 ## Development
 

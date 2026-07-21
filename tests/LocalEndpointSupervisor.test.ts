@@ -43,6 +43,9 @@ test("poll reconciliation relaunches a retained endpoint after its child exits",
     assert.equal(after.url, before.url);
     assert.equal(after.gitHead, before.gitHead);
     assert.equal((await fetch(after.url)).status, 200);
+    assert.equal(result.frames.at(-1)!.assertions.find(
+      (item) => item.label === "Dispatcher lease survived slow endpoint recovery",
+    )?.passed, true);
   } finally {
     await scenario.dispose();
   }
