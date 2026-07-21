@@ -247,6 +247,8 @@ test("Viewer ships clickable Overview, Projects, Runs, Alerts, and Settings page
     assert.match(body, /if\(!snapshot\.settings\.debugMode\)return ''/u);
     assert.match(body, /aggregateCell/u);
     assert.match(body, /collapsedProjects/u);
+    assert.match(body, /collapseNewProjects\(next\.projects\)/u);
+    assert.match(body, /collapsed\?'‹':'⌄'/u);
     assert.match(body, /data-project-toggle/u);
     assert.doesNotMatch(body, /Project progress|data-action="open-cursor"/u);
     assert.match(body, /id="blob-menu"/u);

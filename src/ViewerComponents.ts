@@ -11,13 +11,13 @@ export function disclosureMarkup(projectId: string, name: string, collapsed: boo
   const action = collapsed ? "Expand" : "Collapse";
   return `<button class="project-disclosure" data-project-toggle="${escapeAttribute(projectId)}"
     aria-label="${action} project ${escapeAttribute(name)}" title="${action} project">
-    <span aria-hidden="true">${collapsed ? "›" : "⌄"}</span>
+    <span aria-hidden="true">${collapsed ? "‹" : "⌄"}</span>
   </button>`;
 }
 
 export const viewerComponentScript = String.raw`
 function blobNameMenuTriggerMarkup(blobId,title){return '<button class="task-name-button" data-blob-menu="'+componentEscape(blobId)+'" aria-haspopup="menu" aria-expanded="false">'+componentEscape(title)+'</button>'}
-function disclosureMarkup(projectId,name,collapsed){const action=collapsed?'Expand':'Collapse';return '<button class="project-disclosure" data-project-toggle="'+componentEscape(projectId)+'" aria-label="'+action+' project '+componentEscape(name)+'" title="'+action+' project"><span aria-hidden="true">'+(collapsed?'›':'⌄')+'</span></button>'}
+function disclosureMarkup(projectId,name,collapsed){const action=collapsed?'Expand':'Collapse';return '<button class="project-disclosure" data-project-toggle="'+componentEscape(projectId)+'" aria-label="'+action+' project '+componentEscape(name)+'" title="'+action+' project"><span aria-hidden="true">'+(collapsed?'‹':'⌄')+'</span></button>'}
 function componentEscape(value){return String(value).replace(/[&<>"']/g,character=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[character]))}
 `;
 
