@@ -14,6 +14,10 @@ export class LocalEndpointSupervisor {
   async recover(lease: LocalEndpointLease): Promise<LocalEndpointSession> {
     const root = realpathSync(lease.workspaceRoot);
     await requireExactIdentity(root, lease.gitHead);
+    const active = this.sessions.get(lease.id);
+    if (samePersistedSession(active, lease) && processAlive(lease.pid) && await isHealthy(lease.url)) {
+      return active.session;
+    }
     if (processAlive(lease.pid) && await isHealthy(lease.url)) return this.adopt(lease, root);
     if (processAlive(lease.pid)) await terminatePid(lease.pid);
     this.sessions.delete(lease.id);
@@ -55,6 +59,15 @@ export class LocalEndpointSupervisor {
     log("local_endpoint_recovered", session);
     return session;
   }
+}
+
+function samePersistedSession(
+  active: ActiveLocalEndpoint | undefined,
+  lease: LocalEndpointLease,
+): active is ActiveLocalEndpoint {
+  return active?.session.pid === lease.pid
+    && active.session.url === lease.url
+    && active.session.gitHead === lease.gitHead;
 }
 
 function readDeclaration(root: string): LocalEndpointDeclaration | null {

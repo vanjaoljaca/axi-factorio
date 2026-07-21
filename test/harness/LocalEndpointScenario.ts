@@ -58,6 +58,17 @@ export class LocalEndpointScenario {
     return this.snapshot();
   }
 
+  async pollStable(): Promise<Scenario> {
+    const store = this.requireActive();
+    const lease = store.pendingLocalEndpointLeases()[0];
+    if (!lease || !this.supervisor) throw new Error("Play the retained endpoint before polling ownership.");
+    const first = await this.supervisor.recover(lease);
+    let stable = true;
+    for (let poll = 0; poll < 3; poll += 1) stable &&= await this.supervisor.recover(lease) === first;
+    this.capture(stable ? "stable" : "churn", first);
+    return this.snapshot();
+  }
+
   async reset(): Promise<Scenario> {
     await this.cleanup("Local endpoint scenario reset.");
     disposeFixture(this.fixture);
@@ -203,7 +214,7 @@ function assertions(
 function phaseStatus(phase: EndpointPhase): "ready" | "running" | "waiting" | "complete" {
   if (phase === "ready") return "ready";
   if (phase === "stopped") return "complete";
-  if (["receipt-ended", "service-restarting", "child-lost", "recovered", "approved", "rejected"].includes(phase)) return "waiting";
+  if (["receipt-ended", "service-restarting", "child-lost", "recovered", "stable", "churn", "approved", "rejected"].includes(phase)) return "waiting";
   return "running";
 }
 
@@ -265,7 +276,7 @@ export type LocalEndpointVisual = {
   lease: LocalEndpointLease | null;
 };
 type EndpointPhase = "ready" | "committed" | "healthy" | "exit-received-url" | "receipt-ended"
-  | "service-restarting" | "child-lost" | "recovered" | "approved" | "rejected" | "stopped";
+  | "service-restarting" | "child-lost" | "recovered" | "stable" | "churn" | "approved" | "rejected" | "stopped";
 type PhaseObserver = (phase: EndpointPhase, session: LocalEndpointSession | null) => void;
 type Fixture = { root: string; workspace: string; pipelinePath: string; databasePath: string };
 type Assertion = { label: string; passed: boolean };

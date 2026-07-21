@@ -3,11 +3,28 @@ export function startServiceViewer(
   port: number,
   controller: AbortController,
 ): Promise<void> {
-  const child = spawn(process.execPath, [
-    viewerPath, "--db", databasePath, "--port", String(port),
-  ], { cwd: process.cwd(), stdio: "inherit" });
-  controller.signal.addEventListener("abort", () => child.kill("SIGTERM"), { once: true });
-  return childResult(child, controller);
+  const server = createViewerServer(databasePath);
+  return new Promise((resolveViewer, rejectViewer) => {
+    let settled = false;
+    const finish = (error?: Error): void => {
+      if (settled) return;
+      settled = true;
+      error ? rejectViewer(error) : resolveViewer();
+    };
+    const stop = (): void => server.close((error) => {
+      if (error && error.code !== "ERR_SERVER_NOT_RUNNING") finish(error);
+      else finish();
+    });
+    server.once("error", (error) => {
+      if (!controller.signal.aborted) controller.abort(error);
+      finish(error);
+    });
+    controller.signal.addEventListener("abort", stop, { once: true });
+    server.listen(port, "127.0.0.1", () => log("viewer.ready", {
+      databasePath, ownership: "launchd-service", pid: process.pid,
+      url: `http://127.0.0.1:${port}`,
+    }));
+  });
 }
 
 export function installService(
@@ -47,14 +64,6 @@ export function uninstallService(): ServiceStatus {
   rmSync(paths.plist, { force: true });
   log("service.uninstalled", { plist: paths.plist });
   return { label, state: "uninstalled", pid: null, url: null, harness: null };
-}
-
-function childResult(child: ChildProcess, controller: AbortController): Promise<void> {
-  return new Promise((resolve, reject) => child.once("exit", (code, signal) => {
-    if (controller.signal.aborted || signal === "SIGTERM") return resolve();
-    controller.abort(new Error(`Viewer exited with code ${code}.`));
-    reject(new Error(`Viewer exited unexpectedly with code ${code}.`));
-  }));
 }
 
 function renderPlist(
@@ -153,17 +162,16 @@ const label = "me.oljaca.axi-factorio";
 const xmlCharacters: Record<string, string> = {
   "\"": "&quot;", "&": "&amp;", "'": "&apos;", "<": "&lt;", ">": "&gt;",
 };
-const viewerPath = fileURLToPath(new URL("./ViewerServer.ts", import.meta.url));
 const cliPath = fileURLToPath(new URL("./cli.ts", import.meta.url));
 const packagePaths = [
   fileURLToPath(new URL("../package.json", import.meta.url)),
   fileURLToPath(new URL("../../package.json", import.meta.url)),
 ];
 
-import type { ChildProcess } from "node:child_process";
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { log } from "./Logger.ts";
+import { createViewerServer } from "./ViewerServer.ts";

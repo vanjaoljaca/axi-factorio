@@ -48,6 +48,23 @@ test("poll reconciliation relaunches a retained endpoint after its child exits",
   }
 });
 
+test("healthy reconciliation polls reuse one adopted endpoint session without churn", async () => {
+  const scenario = new LocalEndpointScenario();
+  try {
+    await scenario.play();
+    const result = await scenario.pollStable();
+    assert.equal(result.frames.at(-1)!.visual.phase, "stable");
+  } finally {
+    await scenario.dispose();
+  }
+});
+
+test("the launchd-owned service hosts its Viewer without a competing child process", () => {
+  const source = readFileSync(join(import.meta.dirname, "..", "src", "ServiceInstall.ts"), "utf8");
+  assert.match(source, /createViewerServer/);
+  assert.doesNotMatch(source, /spawn\(process\.execPath/);
+});
+
 test("approve durably terminates the owned local endpoint without an orphan", async () => {
   await assertDisposition("approve");
 });
