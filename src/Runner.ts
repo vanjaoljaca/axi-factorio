@@ -17,7 +17,7 @@ export class ConveyorRunner {
     this.harness = harness;
     this.instrumentation = instrumentation;
     this.reconcileEveryMs = options.reconcileEveryMs ?? 30_000;
-    this.confirmTerminalAfterMs = options.confirmTerminalAfterMs ?? 2_000;
+    this.confirmTerminalAfterMs = options.confirmTerminalAfterMs ?? 15_000;
     this.localEndpoints = localEndpoints;
   }
 

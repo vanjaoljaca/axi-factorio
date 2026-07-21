@@ -114,6 +114,22 @@ test("empty-launch recovery is capped at one within-receipt restart", async () =
   fixture.database.close();
 });
 
+test("a provider task completing during terminal confirmation is not restarted", async () => {
+  const harness = new ConfirmationRaceHarness();
+  const fixture = createExecutionFixture(["g1.first"], [], harness, {
+    reconcileEveryMs: 2, confirmTerminalAfterMs: 30,
+  });
+  fixture.store.createBlob("blob-1", blobInput(fixture));
+  fixture.store.requestStep("blob-1");
+
+  await fixture.runner.runOnce();
+
+  assert.equal(fixture.store.listReceipts("blob-1")[0].status, "advance");
+  assert.equal(harness.starts, 1);
+  assert.equal(harness.cancels, 0);
+  fixture.database.close();
+});
+
 test("duplicate starts are idempotent and Stop prevents the next claim", async () => {
   const adapter = new ControlledAdapter();
   const fixture = createExecutionFixture(["g1.first", "g2.second"], [], adapter);
@@ -303,6 +319,29 @@ class RepeatedEmptyLaunchHarness extends OutcomeHarness {
     this.cancels += 1;
     this.reject?.(new Error("cancelled empty provider turn"));
     this.reject = null;
+  }
+}
+
+class ConfirmationRaceHarness extends OutcomeHarness {
+  starts = 0;
+  cancels = 0;
+
+  override async start(_input: HarnessStartInput, observer: HarnessObserver): Promise<HarnessResult> {
+    this.starts += 1;
+    observer.event({ type: "external-run", externalRunId: "external:still-starting" });
+    await new Promise((resolve) => setTimeout(resolve, 12));
+    return {
+      decision: "advance", reason: "provider became productive during confirmation",
+      outputArtifacts: [], externalRunId: "external:still-starting",
+    };
+  }
+
+  override async reconcile(): Promise<HarnessExternalState> {
+    return { status: "interrupted", reason: "provider state has not caught up", recovery: "restart" };
+  }
+
+  override async cancel(): Promise<void> {
+    this.cancels += 1;
   }
 }
 
