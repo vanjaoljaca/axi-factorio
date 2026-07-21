@@ -45,9 +45,41 @@ test("fresh storage includes projects, blobs, receipts, and the dispatcher lease
     [
       "attemptEvidence", "blobRevisions", "blobs", "dispatcherLeases",
       "executionEvents", "executionWorkspaceBindings", "humanInputs", "localEndpointLeases",
-      "projects", "receipts", "settings", "workspaceRelocations",
+      "projectRemovals", "projects", "receipts", "settings", "workspaceRelocations",
     ],
   );
+  fixture.database.close();
+});
+
+test("project removal previews scope, rejects running work, and retains evidence", () => {
+  const fixture = createStoreFixture();
+  const blob = fixture.store.createBlob("remove-me", blobInput(fixture)).blob;
+  const step = discoverPipeline(fixture.pipelinePath)[0];
+  fixture.store.requestStep(blob.id);
+  const running = fixture.store.beginReceipt({
+    blobId: blob.id, step, definition: snapshotDefinition(step, fixture.pipelinePath),
+    adapter: "fake", inputArtifacts: [],
+  }).receipt;
+
+  assert.deepEqual(fixture.store.previewProjectRemoval("default"), {
+    projectId: "default", projectName: "Default", blobCount: 1, receiptCount: 1,
+    confirmation: "default",
+  });
+  assert.throws(
+    () => fixture.store.removeProject("default", "default", ["cleanup:test"]),
+    /running receipt/u,
+  );
+  fixture.store.failReceipt(running.id, "fixture stopped");
+  assert.throws(() => fixture.store.removeProject("default", "wrong", ["cleanup:test"]), /exactly match/u);
+  assert.throws(() => fixture.store.removeProject("default", "default", []), /requires evidence/u);
+
+  const removed = fixture.store.removeProject("default", "default", ["cleanup:test"]);
+  const audit = fixture.database.connection.prepare("SELECT * FROM projectRemovals").get() as Record<string, unknown>;
+  assert.equal(removed.receiptCount, 1);
+  assert.equal(fixture.store.getProject("default"), null);
+  assert.equal(fixture.store.getBlob(blob.id), null);
+  assert.equal(audit.projectId, "default");
+  assert.equal(audit.evidenceJson, '["cleanup:test"]');
   fixture.database.close();
 });
 

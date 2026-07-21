@@ -66,6 +66,32 @@ test("projects own default pipeline selectors and blobs attach to projects", () 
   assert.equal(shown.blob.pipeline, "default/v1");
 });
 
+test("project remove is preview-first and requires exact confirmation plus evidence", () => {
+  const fixture = createCliFixture();
+  runCli(fixture, [
+    "project", "add", "default", "Default", "--root", fixture.root,
+    "--pipeline-root", fixture.root, "--pipeline", fixture.pipelinePath, "--json",
+  ]);
+  runCli(fixture, [
+    "add", "remove-blob", "Remove blob", "--project", "default",
+    "--pipeline", fixture.pipelinePath, "--json",
+  ]);
+
+  const preview = JSON.parse(runCli(fixture, ["project", "remove", "default", "--json"]).stdout);
+  const missingEvidence = runCli(fixture, ["project", "remove", "default", "--confirm", "default", "--json"]);
+  const removed = JSON.parse(runCli(fixture, [
+    "project", "remove", "default", "--confirm", "default", "--evidence", "cleanup:test", "--json",
+  ]).stdout);
+  const listed = JSON.parse(runCli(fixture, ["project", "list", "--json"]).stdout);
+
+  assert.equal(preview.preview.blobCount, 1);
+  assert.match(preview.help[0], /--confirm default/u);
+  assert.equal(missingEvidence.status, 1);
+  assert.match(missingEvidence.stdout, /requires evidence/u);
+  assert.equal(removed.removal.projectId, "default");
+  assert.equal(listed.count, 0);
+});
+
 test("add is idempotent and supports repeated artifact refs in JSON", () => {
   const fixture = createCliFixture();
   const args = [

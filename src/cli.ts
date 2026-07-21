@@ -136,12 +136,27 @@ function bindExecutionWorkspace(args: string[], store: ConveyorStore, json: bool
 function runProject(args: string[], store: ConveyorStore, json: boolean): void {
   const parsed = parseArgs(args, {
     "--root": "value", "--pipeline-root": "value", "--cwd": "value", "--pipeline": "value",
+    "--confirm": "value", "--evidence": "value",
   });
   const action = parsed.positionals[0] ?? "list";
   if (action === "list") return listProjects(parsed, store, json);
   if (action === "show") return showProject(parsed, store, json);
   if (action === "add" || action === "upsert") return addProject(parsed, store, json, action);
-  throw usage("project accepts list, show, add, or upsert.");
+  if (action === "remove") return removeProject(parsed, store, json);
+  throw usage("project accepts list, show, add, upsert, or remove.");
+}
+
+function removeProject(parsed: ParsedArgs, store: ConveyorStore, json: boolean): void {
+  requirePositionals(parsed, 2, "project remove requires one project ID.");
+  const id = validId(parsed.positionals[1], "project");
+  const preview = store.previewProjectRemoval(id);
+  const confirmation = firstFlag(parsed, "--confirm");
+  if (!confirmation) return printOutput({
+    preview,
+    help: [`Re-run with \`--confirm ${id} --evidence <reference>\` to remove this exact project graph.`],
+  }, json);
+  const result = store.removeProject(id, confirmation, parsed.flags["--evidence"] ?? []);
+  printOutput({ ok: `project remove ${id}`, removal: result }, json);
 }
 
 function listProjects(parsed: ParsedArgs, store: ConveyorStore, json: boolean): void {
@@ -673,7 +688,7 @@ function serviceAbortController(): AbortController {
 }
 
 function printVersion(): void {
-  process.stdout.write("axi-factorio 0.1.0-rc.27\n");
+  process.stdout.write("axi-factorio 0.1.0-rc.28\n");
 }
 
 function helpCommand(args: string[]): string | undefined {
@@ -726,7 +741,7 @@ const harnessFlags: FlagSpec = {
 };
 
 const helpText: Record<string, string> = {
-  root: `axi-factorio 0.1.0-rc.27
+  root: `axi-factorio 0.1.0-rc.28
 
 Usage: axi-factorio <command> [flags]
 Commands: project, add, adopt, relocate, bind-execution, list, status, show, receipts, play, step, stop, retry, review, feedback, approve, reset-endpoint, rewind, kick, run, service, init
@@ -738,6 +753,7 @@ Run without arguments for the live conveyor dashboard.
        axi-factorio project add PROJECT_ID "NAME" --root DIR --pipeline-root DIR [--pipeline NAME]
        axi-factorio project upsert PROJECT_ID "NAME" --root DIR --pipeline-root DIR [--pipeline NAME]
        axi-factorio project show PROJECT_ID
+       axi-factorio project remove PROJECT_ID [--confirm PROJECT_ID --evidence REF]
 `,
   add: `Usage: axi-factorio add BLOB_ID "TITLE" [--project ID] [--pipeline NAME|NAME/vN|DIR] [--pipeline-root DIR] [--cwd DIR] [--body TEXT|--body-file PATH] [--input-ref REF...]
        axi-factorio add --mint "TITLE" [--pipeline NAME|NAME/vN|DIR]

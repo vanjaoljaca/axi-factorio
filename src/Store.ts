@@ -27,6 +27,17 @@ export class ConveyorStore {
     return this.database.connection.prepare(projectList).all().map((row) => mapProject(asRecord(row)));
   }
 
+  previewProjectRemoval(projectId: string): ProjectRemovalPreview {
+    const project = this.getProject(projectId);
+    if (!project) throw new Error(`Project ${projectId} was not found.`);
+    const counts = this.projectRemovalCounts(projectId);
+    return { projectId, projectName: project.name, ...counts, confirmation: projectId };
+  }
+
+  removeProject(projectId: string, confirmation: string, evidence: string[]): ProjectRemovalResult {
+    return this.database.transaction(() => this.confirmProjectRemoval(projectId, confirmation, evidence));
+  }
+
   debugMode(): boolean {
     const row = this.database.connection.prepare(settingSelect).get("debugMode") as { value?: string } | undefined;
     return row?.value === "true";
@@ -38,6 +49,32 @@ export class ConveyorStore {
       if (enabled) this.database.connection.prepare(blobsEnterDebugMode).run(this.now());
       return this.debugMode();
     });
+  }
+
+  private confirmProjectRemoval(projectId: string, confirmation: string, evidence: string[]): ProjectRemovalResult {
+    const preview = this.previewProjectRemoval(projectId);
+    if (confirmation !== projectId) throw new Error(`Project removal confirmation must exactly match ${projectId}.`);
+    if (!evidence.length || evidence.some((item) => !item.trim())) throw new Error("Project removal requires evidence.");
+    const running = this.database.connection.prepare(projectRunningReceiptCount).get(projectId) as { count: number };
+    if (running.count > 0) throw new Error(`Project ${projectId} has ${running.count} running receipt(s).`);
+    const removedAt = this.now();
+    this.deleteProjectGraph(projectId);
+    this.database.connection.prepare(projectRemovalInsert).run(
+      randomUUID(), projectId, preview.projectName, preview.blobCount, preview.receiptCount,
+      JSON.stringify(evidence), removedAt,
+    );
+    return { ...preview, evidence, removedAt };
+  }
+
+  private projectRemovalCounts(projectId: string): { blobCount: number; receiptCount: number } {
+    const row = this.database.connection.prepare(projectRemovalCounts).get(projectId, projectId) as {
+      blobCount: number; receiptCount: number;
+    };
+    return row;
+  }
+
+  private deleteProjectGraph(projectId: string): void {
+    for (const statement of projectGraphDeletes) this.database.connection.prepare(statement).run(projectId);
   }
 
   createBlob(id: string, input: BlobInput): BlobMutationResult {
@@ -1025,6 +1062,27 @@ const blobsEnterDebugMode = `UPDATE blobs SET executionMode = 'step', runRequest
 const settingSelect = "SELECT value FROM settings WHERE key = ?";
 const settingUpsert = `INSERT INTO settings (key, value, updatedAt) VALUES (?, ?, ?)
   ON CONFLICT(key) DO UPDATE SET value = excluded.value, updatedAt = excluded.updatedAt`;
+const projectRemovalCounts = `SELECT
+  (SELECT COUNT(*) FROM blobs WHERE projectId = ?) AS blobCount,
+  (SELECT COUNT(*) FROM receipts WHERE blobId IN (SELECT id FROM blobs WHERE projectId = ?)) AS receiptCount`;
+const projectRunningReceiptCount = `SELECT COUNT(*) AS count FROM receipts
+  WHERE status = 'running' AND invalidatedAt IS NULL
+  AND blobId IN (SELECT id FROM blobs WHERE projectId = ?)`;
+const projectRemovalInsert = `INSERT INTO projectRemovals
+  (id, projectId, projectName, blobCount, receiptCount, evidenceJson, removedAt)
+  VALUES (?, ?, ?, ?, ?, ?, ?)`;
+const projectGraphDeletes = [
+  "DELETE FROM localEndpointLeases WHERE blobId IN (SELECT id FROM blobs WHERE projectId = ?)",
+  "DELETE FROM executionEvents WHERE blobId IN (SELECT id FROM blobs WHERE projectId = ?)",
+  "DELETE FROM humanInputs WHERE blobId IN (SELECT id FROM blobs WHERE projectId = ?)",
+  "DELETE FROM attemptEvidence WHERE receiptId IN (SELECT id FROM receipts WHERE blobId IN (SELECT id FROM blobs WHERE projectId = ?))",
+  "DELETE FROM workspaceRelocations WHERE projectId = ?",
+  "DELETE FROM executionWorkspaceBindings WHERE projectId = ?",
+  "DELETE FROM blobRevisions WHERE blobId IN (SELECT id FROM blobs WHERE projectId = ?)",
+  "DELETE FROM receipts WHERE blobId IN (SELECT id FROM blobs WHERE projectId = ?)",
+  "DELETE FROM blobs WHERE projectId = ?",
+  "DELETE FROM projects WHERE id = ?",
+];
 const blobCompleteUpdate = `UPDATE blobs SET state = 'complete', paused = 0,
   runRequested = 0,
   forcedStepId = NULL, humanGateStepId = NULL, humanGateApprovalInputId = NULL,
@@ -1262,6 +1320,14 @@ import type {
   ExecutionWorkspaceBinding,
   LocalEndpointLease,
 } from "./Types.ts";
+export type ProjectRemovalPreview = {
+  projectId: string;
+  projectName: string;
+  blobCount: number;
+  receiptCount: number;
+  confirmation: string;
+};
+export type ProjectRemovalResult = ProjectRemovalPreview & { evidence: string[]; removedAt: string };
 import type { FactorioDatabase } from "./Database.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { discoverPipeline } from "./Pipeline.ts";

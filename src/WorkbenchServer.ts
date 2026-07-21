@@ -10,7 +10,7 @@ type ViewSnapshot = {
   receipts: ViewReceipt[];
   assertions: { label: string; passed: boolean }[];
   evidenceCards?: { label: string; value: string }[];
-  visual?: LiveExecutionVisual | ViewerResilienceVisual | CursorActionVisual | LocalEndpointVisual | OverviewBoundaryVisual;
+  visual?: LiveExecutionVisual | ViewerResilienceVisual | CursorActionVisual | LocalEndpointVisual | OverviewBoundaryVisual | ProjectRemovalVisual;
 };
 type Scenario = { id: string; frames: ViewSnapshot[] };
 type LiveExecutionVisual = {
@@ -57,6 +57,7 @@ type OverviewBoundaryVisual = {
   phase: "leaked" | "clean";
   diagnosticHtml: string;
 };
+type ProjectRemovalVisual = import("../test/harness/ProjectRemovalScenario.ts").ProjectRemovalVisual;
 
 const port = workbenchPort(process.argv);
 const databasePath = resolve(argument("--db") ?? "pipelines/axi-factorio.db");
@@ -64,6 +65,7 @@ const mockLab = new MockHarnessLab();
 const liveExecutionScenario = new LiveExecutionScenario();
 const cursorActionScenario = new CursorActionScenario();
 const localEndpointScenario = new LocalEndpointScenario();
+const projectRemovalScenario = new ProjectRemovalScenario();
 const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? "/", `http://127.0.0.1:${port}`);
   try {
@@ -123,6 +125,12 @@ const server = createServer(async (request, response) => {
       const action = url.pathname.split("/").at(-1) as "approve" | "reject" | "restart" | "reset";
       return json(response, await localEndpointScenario[action]());
     }
+    if (url.pathname === "/api/project-removal/remove" && request.method === "POST") {
+      return json(response, projectRemovalScenario.remove());
+    }
+    if (url.pathname === "/api/project-removal/reset" && request.method === "POST") {
+      return json(response, projectRemovalScenario.reset());
+    }
     if (url.pathname.startsWith("/api/scenarios/")) return json(response, await scenario(url));
     if (url.pathname === "/") return html(response, workbenchHtml);
     response.writeHead(404).end("Not found");
@@ -138,6 +146,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, () => {
     mockLab.dispose();
     cursorActionScenario.dispose();
+    projectRemovalScenario.dispose();
     void Promise.all([localEndpointScenario.dispose(), liveExecutionScenario.dispose()])
       .finally(() => server.close(() => process.exit(0)));
   });
@@ -189,6 +198,10 @@ function scenarioIndex(): object[] {
       id: "local-endpoint-supervisor", name: "Durable declared local endpoint",
       description: "Receipt ends → endpoint lease stays live → restart recovery → owned cleanup",
     },
+    {
+      id: "project-removal", name: "Safe project removal",
+      description: "Preview exact graph · confirm with evidence · remove · Reset",
+    },
   ];
 }
 
@@ -227,6 +240,7 @@ async function scenario(url: URL): Promise<Scenario> {
   }
   if (id === "cursor-action") return cursorActionScenario.snapshot();
   if (id === "local-endpoint-supervisor") return localEndpointScenario.snapshot() as unknown as Scenario;
+  if (id === "project-removal") return projectRemovalScenario.snapshot() as unknown as Scenario;
   throw new Error(`Unknown scenario: ${id}`);
 }
 
@@ -405,6 +419,7 @@ ${liveExecutionStyles}
 .endpoint-visual{background:#fff}.endpoint-controls{display:flex;gap:6px;align-items:center;padding:10px 12px;border-bottom:1px solid var(--line)}.endpoint-controls button{height:30px;border:1px solid var(--line-strong);border-radius:5px;background:#fff;padding:0 12px;cursor:pointer}.endpoint-controls .play{background:var(--ink);color:#fff}.endpoint-controls span{margin-left:auto;color:var(--muted);font-size:9px}.endpoint-flow{display:grid;grid-template-columns:repeat(6,1fr);padding:16px 24px;border-bottom:1px solid var(--line)}.endpoint-phase{position:relative;text-align:center;padding-top:22px;color:var(--muted);font-size:9px}.endpoint-phase:before{content:"";position:absolute;left:0;right:0;top:8px;height:1px;background:var(--line-strong)}.endpoint-phase:first-child:before{left:50%}.endpoint-phase:last-child:before{right:50%}.endpoint-phase i{position:absolute;left:50%;top:3px;width:11px;height:11px;margin-left:-5px;border:2px solid var(--quiet);border-radius:50%;background:#fff}.endpoint-phase.done{color:var(--ink);font-weight:700}.endpoint-phase.done i{border-color:var(--ink);background:var(--ink);box-shadow:inset 0 0 0 3px #fff}.endpoint-phase.current i{border-color:var(--attention);box-shadow:0 0 0 3px var(--attention-soft)}.endpoint-facts{display:grid;grid-template-columns:1.2fr 1fr .8fr .8fr;border-bottom:1px solid var(--line)}.endpoint-fact{padding:10px 12px;border-right:1px solid var(--line);min-width:0}.endpoint-fact:last-child{border-right:0}.endpoint-fact small{display:block;color:var(--muted);font-size:8px}.endpoint-fact b,.endpoint-fact code{display:block;overflow-wrap:anywhere;font-size:9px;line-height:1.35}.endpoint-fact code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.endpoint-visual .matrix{border-top:0}
 .live-scenario{padding:0}.live-scenario-controls{margin:0;padding:12px}.live-conveyor{border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:#fff}.live-details{padding:12px}.live-details .live-panel{margin-bottom:8px}
 .overview-boundary{background:#fff}.boundary-state{display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--line)}.boundary-state b{font-size:10px}.boundary-state span{color:var(--muted);font-size:9px}.boundary-state.leaked{background:var(--danger-soft);color:var(--danger)}.boundary-state.clean{background:var(--neutral-soft)}.overview-boundary>.live-panel{margin:12px}.boundary-pipeline{border-top:1px solid var(--line)}
+.removal-visual{padding:18px;background:#fff}.removal-controls{display:flex;gap:7px;align-items:center;margin-bottom:16px}.removal-controls button{height:30px;border:1px solid var(--line-strong);border-radius:5px;background:#fff;padding:0 12px;cursor:pointer}.removal-controls .remove{background:var(--ink);color:#fff}.removal-controls button:disabled{opacity:.4;cursor:default}.removal-controls span{margin-left:auto;color:var(--muted);font-size:9px}.removal-scope{display:grid;grid-template-columns:1.6fr repeat(2,.7fr) 1fr;border:1px solid var(--line)}.removal-fact{padding:12px;border-right:1px solid var(--line)}.removal-fact:last-child{border-right:0}.removal-fact small{display:block;color:var(--muted);font-size:8px}.removal-fact b{display:block;margin-top:3px;font-size:11px}.removal-result{margin-top:10px;padding:10px;border:1px solid var(--line);background:#f7f9f8;font-size:9px}@media(max-width:700px){.removal-scope{grid-template-columns:1fr 1fr}.removal-fact{border-bottom:1px solid var(--line)}}
 </style></head><body><div class="app"><header class="topbar"><div class="identity"><strong>Factorio Workbench</strong><span class="online">Internal</span></div><div class="modes" role="tablist" aria-label="Workbench views"><button class="mode active" role="tab" aria-selected="true" data-source="lab">Harness Lab</button><button class="mode" role="tab" aria-selected="false" data-source="scenario">Scenario</button><button class="mode" role="tab" aria-selected="false" data-source="tests">Tests</button><button class="mode" role="tab" aria-selected="false" data-source="database">Database</button></div><div class="actions"><button class="control" id="previous" hidden>Previous</button><button class="control" id="next" hidden>Next</button><button class="control" id="refresh">Refresh</button><button class="control primary" id="run">Run scenario</button></div></header>
 <main class="content"><div class="toolbar"><div class="scenario-copy"><strong id="title">Loading scenario</strong><span id="description"></span></div><select class="picker" id="scenario-picker" aria-label="Choose scenario" hidden></select><select class="picker" id="test-picker" aria-label="Choose test" hidden></select><span class="frame" id="frame"></span></div><div class="workspace" id="workspace"><div class="empty">Loading scenario…</div></div><div class="footer"><div class="legend"><span><i class="key complete"></i>Completed</span><span><i class="key imported"></i>Imported</span><span><i class="key inventory"></i>Inventory</span><span><i class="key current"></i>Current</span><span><i class="key waiting"></i>Awaiting review / needs attention</span><span><i class="key"></i>Pending</span><span><i class="key failed"></i>Failed</span></div><span class="total" id="total"></span></div><details class="inspector"><summary><span>Inspect evidence</span><small id="result"></small></summary><div class="evidence"><section class="panel"><div class="panel-head"><span id="event-label">Receipt stream</span><span>append only</span></div><div id="events"></div></section><section class="panel"><div class="panel-head"><span>Assertions</span><span id="assertion-count"></span></div><div id="checks"></div></section></div></details><div id="error" role="status"></div></main></div>
 <script>
@@ -414,8 +429,11 @@ async function init(){[scenarios,tests]=await Promise.all([fetch("/api/scenarios
 function renderPickers(){byId("scenario-picker").innerHTML=scenarios.map(item=>'<option value="'+safe(item.id)+'">'+safe(item.name)+'</option>').join("");byId("test-picker").innerHTML=tests.map(item=>'<option value="'+safe(item.id)+'">'+safe(item.category)+' · '+safe(item.name)+'</option>').join("")}
 async function load(){clearInterval(timer);const version=++loadVersion;if(source==="tests"){testRun=null;frames=[];renderTest();return}if(source==="lab"){lab=await fetch("/api/mock-lab").then(r=>r.json());if(version===loadVersion)renderLab();return}const data=source==="database"?await fetch("/api/database").then(r=>r.json()):await fetch("/api/scenarios/"+selected).then(r=>r.json());if(version!==loadVersion)return;frames=data.frames||[data];frame=frames.length-1;renderScenario()}
 function groups(steps){const result=[];for(const step of steps){const id=step.id.split(".")[0]||"pipeline",last=result.at(-1);if(last?.id===id)last.count++;else result.push({id,label:id,count:1})}return result}
-function renderScenario(){const snapshot=frames[frame];if(!snapshot)return;const interactive=["live-execution","cursor-action","local-endpoint"].includes(snapshot.visual?.kind);byId("title").textContent=snapshot.name;byId("description").textContent=snapshot.description;byId("frame").textContent=interactive?"Live temporary state":source==="scenario"?"Frame "+(frame+1)+" / "+frames.length:"Live database";byId("run").hidden=source!=="scenario"||interactive;byId("run").textContent="Run scenario";showFrameControls(source==="scenario"&&!interactive);byId("workspace").innerHTML=scenarioVisual(snapshot);renderEvidence(snapshot);byId("total").textContent=snapshot.blobs.length+" blob"+(snapshot.blobs.length===1?"":"s")+" · "+snapshot.receipts.length+" receipts";if(snapshot.visual?.kind==="live-execution")wireLiveExecution(snapshot.visual);if(snapshot.visual?.kind==="cursor-action")wireCursorAction();if(snapshot.visual?.kind==="local-endpoint")wireLocalEndpoint()}
-function scenarioVisual(snapshot){if(snapshot.visual?.kind==="live-execution")return liveExecutionVisual(snapshot);if(snapshot.visual?.kind==="cursor-action")return cursorActionVisual(snapshot);if(snapshot.visual?.kind==="local-endpoint")return localEndpointVisual(snapshot);if(snapshot.visual?.kind==="overview-boundary")return overviewBoundaryVisual(snapshot);if(snapshot.visual?.kind==="viewer-resilience")return viewerResilienceVisual(snapshot)+matrix(snapshot)+scenarioEvidence(snapshot);return matrix(snapshot)+scenarioEvidence(snapshot)}
+function renderScenario(){const snapshot=frames[frame];if(!snapshot)return;const interactive=["live-execution","cursor-action","local-endpoint","project-removal"].includes(snapshot.visual?.kind);byId("title").textContent=snapshot.name;byId("description").textContent=snapshot.description;byId("frame").textContent=interactive?"Live temporary state":source==="scenario"?"Frame "+(frame+1)+" / "+frames.length:"Live database";byId("run").hidden=source!=="scenario"||interactive;byId("run").textContent="Run scenario";showFrameControls(source==="scenario"&&!interactive);byId("workspace").innerHTML=scenarioVisual(snapshot);renderEvidence(snapshot);byId("total").textContent=snapshot.blobs.length+" blob"+(snapshot.blobs.length===1?"":"s")+" · "+snapshot.receipts.length+" receipts";if(snapshot.visual?.kind==="live-execution")wireLiveExecution(snapshot.visual);if(snapshot.visual?.kind==="cursor-action")wireCursorAction();if(snapshot.visual?.kind==="local-endpoint")wireLocalEndpoint();if(snapshot.visual?.kind==="project-removal")wireProjectRemoval()}
+function scenarioVisual(snapshot){if(snapshot.visual?.kind==="live-execution")return liveExecutionVisual(snapshot);if(snapshot.visual?.kind==="cursor-action")return cursorActionVisual(snapshot);if(snapshot.visual?.kind==="local-endpoint")return localEndpointVisual(snapshot);if(snapshot.visual?.kind==="project-removal")return projectRemovalVisual(snapshot);if(snapshot.visual?.kind==="overview-boundary")return overviewBoundaryVisual(snapshot);if(snapshot.visual?.kind==="viewer-resilience")return viewerResilienceVisual(snapshot)+matrix(snapshot)+scenarioEvidence(snapshot);return matrix(snapshot)+scenarioEvidence(snapshot)}
+function projectRemovalVisual(snapshot){const data=snapshot.visual,removed=data.phase==="removed";return '<section class="removal-visual"><div class="removal-controls"><button class="remove" data-removal-action="remove" '+(removed?'disabled':'')+'>Remove exact project</button><button data-removal-action="reset">Reset</button><span>'+(removed?'Removed with evidence':'Preview only · nothing removed')+'</span></div><div class="removal-scope"><div class="removal-fact"><small>Exact project</small><b>'+safe(data.preview.projectName)+'</b></div><div class="removal-fact"><small>Blobs</small><b>'+data.preview.blobCount+'</b></div><div class="removal-fact"><small>Receipts</small><b>'+data.preview.receiptCount+'</b></div><div class="removal-fact"><small>Confirmation</small><b>'+safe(data.preview.confirmation)+'</b></div></div><div class="removal-result">'+(removed?'Project graph removed · '+data.auditCount+' durable removal record':'Remove applies this exact preview with explicit evidence.')+'</div></section>'}
+function wireProjectRemoval(){document.querySelectorAll('[data-removal-action]').forEach(button=>button.onclick=()=>projectRemovalAction(button.dataset.removalAction))}
+async function projectRemovalAction(action){const response=await fetch('/api/project-removal/'+action,{method:'POST'});const data=await response.json();if(!response.ok)return showScenarioError(data);frames=data.frames;frame=0;renderScenario()}
 function overviewBoundaryVisual(snapshot){const data=snapshot.visual;return '<section class="overview-boundary"><div class="boundary-state '+data.phase+'"><b>'+(data.phase==="leaked"?'Before · boundary broken':'After · boundary enforced')+'</b><span>'+(data.phase==="leaked"?'Internal diagnostics appear before the actual work.':'Overview begins directly with projects and task beads.')+'</span></div>'+(data.diagnosticHtml||'')+'<div class="boundary-pipeline">'+matrix(snapshot)+'</div></section>'}
 function viewerResilienceVisual(snapshot){return '<section class="resilience-projects" aria-label="Viewer project health">'+snapshot.visual.projects.map(project=>'<div class="resilience-project '+(project.issue?'unavailable':'healthy')+'"><div><b>'+safe(project.name)+'</b><span>'+project.taskCount+' task'+(project.taskCount===1?'':'s')+'</span></div>'+(project.issue?'<strong title="'+safe(project.issue.detail)+'">'+safe(project.issue.summary)+'</strong><small>This project is isolated until its pipeline path is restored.</small>':'<strong>Pipeline '+safe(project.pipeline||'available')+'</strong><small>Healthy project remains usable.</small>')+'</div>').join('')+'</section>'}
 function cursorActionVisual(snapshot){const data=snapshot.visual;const resultClass=data.lastResult.startsWith('Failed:')?' failure':'';return '<section class="cursor-action-visual"><div class="cursor-action-controls"><button class="play" data-cursor-scenario="play">Play assigned workspace</button><button data-cursor-scenario="reset">Reset</button><span>'+data.calls+' launch attempt'+(data.calls===1?'':'s')+'</span></div>'+data.rows.map(row=>'<div class="cursor-action-row"><div><b>'+safe(row.title)+'</b><small>'+safe(row.workspaceKind)+'</small></div><code>'+safe(row.root)+'</code>'+row.actionHtml+'</div>').join('')+'<div class="cursor-action-result'+resultClass+'">'+safe(data.lastResult)+'</div>'+scenarioEvidence(snapshot)+'</section>'}
@@ -551,4 +569,5 @@ import { MockHarnessLab, type LabAction } from "../test/harness/MockHarnessLab.t
 import { LiveExecutionScenario } from "../test/harness/LiveExecutionScenario.ts";
 import { CursorActionScenario } from "../test/harness/CursorActionScenario.ts";
 import { LocalEndpointScenario } from "../test/harness/LocalEndpointScenario.ts";
+import { ProjectRemovalScenario } from "../test/harness/ProjectRemovalScenario.ts";
 import { executionOverviewMarkup, liveExecutionStyles } from "./LiveExecutions.ts";

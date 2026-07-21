@@ -157,6 +157,16 @@ const schema = `
     updatedAt TEXT NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS projectRemovals (
+    id TEXT PRIMARY KEY,
+    projectId TEXT NOT NULL,
+    projectName TEXT NOT NULL,
+    blobCount INTEGER NOT NULL,
+    receiptCount INTEGER NOT NULL,
+    evidenceJson TEXT NOT NULL,
+    removedAt TEXT NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS receipts (
     id TEXT PRIMARY KEY,
     blobId TEXT NOT NULL REFERENCES blobs(id),

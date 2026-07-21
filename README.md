@@ -28,6 +28,11 @@ Port `4317` belongs to the installed user viewer. The Workbench defaults to
 `4318` and refuses to start on the configured viewer port. When the viewer uses
 a non-default port, pass it with `-- --viewer-port <port>`.
 
+Installed-runtime proofs must never use the consuming workspace database. Create
+an isolated temporary proof location with `createInstalledRuntimeProof()` and
+pass its `databasePath` explicitly to every proof CLI/service invocation. The
+guard rejects the configured live database path.
+
 The Harness Lab is an operable deterministic mock environment. Its Play, Step,
 Stop, Retry, Feedback, Approve, Fail, and Restart controls call the production
 runner/store boundary against a temporary SQLite database. It exposes blob and
@@ -194,7 +199,7 @@ npm run build
 
 This recreates `release/` with:
 
-- `axi-factorio-0.1.0-rc.27.tgz`, the installable package;
+- `axi-factorio-0.1.0-rc.28.tgz`, the installable package;
 - `SHA256SUMS`, for artifact verification; and
 - `INSTALL.md`, with direct and vendored installation commands.
 
@@ -206,7 +211,7 @@ Do not use `npm link` for a consuming project. Install the exact tarball so
 Install the exact candidate in the consuming npm project:
 
 ```sh
-npm install --save-exact /path/to/axi-factorio-0.1.0-rc.27.tgz
+npm install --save-exact /path/to/axi-factorio-0.1.0-rc.28.tgz
 ```
 
 From the consuming project root, the defaults are:
