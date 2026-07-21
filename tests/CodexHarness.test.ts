@@ -151,6 +151,16 @@ test("reports exact interrupted external lifecycle through the generic contract"
   assert.match("reason" in state ? state.reason : "", /thread-interrupted.*notLoaded/);
 });
 
+test("classifies an empty Codex rollout as a fresh-task recovery", () => {
+  const error = new Error("failed to read session metadata /tmp/rollout.jsonl: rollout at /tmp/rollout.jsonl is empty");
+
+  assert.deepEqual(classifyCodexLifecycleFailure(error, "thread-empty"), {
+    status: "interrupted",
+    reason: "Codex external task thread-empty has an empty, unresumable session record.",
+    recovery: "restart",
+  });
+});
+
 test("rejects malformed Codex JSONL", async () => {
   const fixture = createAdapterFixture();
   process.env.FAKE_CODEX_MODE = "malformed";
@@ -302,7 +312,7 @@ printf '%s\\n' '{"type":"turn.completed"}'
 type AdapterFixture = { root: string; argsLog: string; argvLog: string; adapter: CodexHarness };
 
 import type { HarnessObserver, HarnessStartInput } from "../src/Harness.ts";
-import { CodexHarness } from "../src/CodexHarness.ts";
+import { CodexHarness, classifyCodexLifecycleFailure } from "../src/CodexHarness.ts";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";

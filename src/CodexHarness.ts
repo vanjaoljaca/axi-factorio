@@ -337,11 +337,25 @@ async function readCodexLifecycle(externalRunId: string): Promise<HarnessExterna
     const thread = await readCodexThread(externalRunId);
     return codexThreadState(thread, externalRunId);
   } catch (error) {
+    const classified = classifyCodexLifecycleFailure(error, externalRunId);
+    if (classified) return classified;
     if (isMissingThread(error)) {
       return { status: "missing", reason: `Codex external task ${externalRunId} was not found.` };
     }
     throw error;
   }
+}
+
+export function classifyCodexLifecycleFailure(
+  error: unknown,
+  externalRunId: string,
+): HarnessExternalState | null {
+  if (!/rollout[\s\S]*is empty|empty session file/iu.test(errorMessage(error))) return null;
+  return {
+    status: "interrupted",
+    reason: `Codex external task ${externalRunId} has an empty, unresumable session record.`,
+    recovery: "restart",
+  };
 }
 
 async function readCodexThread(externalRunId: string): Promise<CodexThread> {

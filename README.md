@@ -199,7 +199,7 @@ npm run build
 
 This recreates `release/` with:
 
-- `axi-factorio-0.1.0-rc.37.tgz`, the installable package;
+- `axi-factorio-0.1.0-rc.38.tgz`, the installable package;
 - `SHA256SUMS`, for artifact verification; and
 - `INSTALL.md`, with direct and vendored installation commands.
 
@@ -211,7 +211,7 @@ Do not use `npm link` for a consuming project. Install the exact tarball so
 Install the exact candidate in the consuming npm project:
 
 ```sh
-npm install --save-exact /path/to/axi-factorio-0.1.0-rc.37.tgz
+npm install --save-exact /path/to/axi-factorio-0.1.0-rc.38.tgz
 ```
 
 From the consuming project root, the defaults are:
