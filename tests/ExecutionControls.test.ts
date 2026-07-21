@@ -65,7 +65,7 @@ test("failure halts continuous execution until an explicit retry", async () => {
   fixture.database.close();
 });
 
-test("terminal external state fails safely and retry resumes the same run", async () => {
+test("terminal external state fails safely and retry starts a fresh run", async () => {
   const harness = new ReconcilingHarness();
   const fixture = createExecutionFixture(["g1.first"], [], harness, {
     reconcileEveryMs: 2, confirmTerminalAfterMs: 2,
@@ -83,8 +83,8 @@ test("terminal external state fails safely and retry resumes the same run", asyn
   await fixture.runner.runOnce();
 
   const receipts = fixture.store.listReceipts("blob-1");
-  assert.equal(receipts[1].continuationThreadId, "external:interrupted");
-  assert.equal(receipts[1].externalRunId, "external:interrupted");
+  assert.equal(receipts[1].continuationThreadId, null);
+  assert.equal(receipts[1].externalRunId, "external:fresh");
   assert.equal(fixture.store.getBlob("blob-1")?.state, "complete");
   assert.ok(fixture.store.listExecutionEvents("blob-1")
     .some((event) => event.name === "axi_factorio.harness.reconcile"));
@@ -216,11 +216,20 @@ class ControlledAdapter extends OutcomeHarness {
 
 class ReconcilingHarness extends OutcomeHarness {
   private reject: ((error: Error) => void) | null = null;
+  private starts = 0;
 
   override async start(
     _input: HarnessStartInput,
     observer: HarnessObserver,
   ): Promise<HarnessResult> {
+    this.starts += 1;
+    if (this.starts > 1) {
+      observer.event({ type: "external-run", externalRunId: "external:fresh" });
+      return {
+        decision: "advance", reason: "fresh task started safely",
+        outputArtifacts: [], externalRunId: "external:fresh",
+      };
+    }
     observer.event({ type: "external-run", externalRunId: "external:interrupted" });
     return new Promise((_resolve, reject) => this.reject = reject);
   }

@@ -1159,6 +1159,7 @@ const runningReceiptByBlob = `SELECT 1 FROM receipts WHERE blobId = ?
 const attemptSelect = "SELECT COALESCE(MAX(attempt), 0) + 1 AS attempt FROM receipts WHERE blobId = ? AND stepId = ?";
 const receiptContinuationSelect = `SELECT externalRunId FROM receipts WHERE blobId = ?
   AND stepId = ? AND invalidatedAt IS NULL AND externalRunId IS NOT NULL
+  AND status NOT IN ('failed', 'interrupted')
   ORDER BY attempt DESC LIMIT 1`;
 const humanInputInsert = `INSERT INTO humanInputs
   (id, blobId, stepId, kind, text, evidenceJson, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)`;

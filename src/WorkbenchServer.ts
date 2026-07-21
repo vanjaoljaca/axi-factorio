@@ -178,6 +178,10 @@ function scenarioIndex(): object[] {
       description: "notLoaded container · fresh active turn · production receipt path",
     },
     {
+      id: "interrupted-continuation-boundary", category: "Harness", name: "Fresh task after interruption",
+      description: "same blob + same step · immutable failed receipt · new external task",
+    },
+    {
       id: "codex-mcp-isolation", category: "Harness", name: "Pinned Codex MCP isolation",
       description: "0.144.6 argv contract · unrelated MCP failure · production receipt path",
     },
@@ -238,6 +242,11 @@ async function scenario(url: URL): Promise<Scenario> {
   if (id === "codex-active-turn") {
     const { runCodexActiveTurnScenario } = await import("../test/harness/CodexActiveTurnScenario.ts");
     return runCodexActiveTurnScenario();
+  }
+  if (id === "interrupted-continuation-boundary") {
+    const { runInterruptedContinuationScenario } =
+      await import("../test/harness/InterruptedContinuationScenario.ts");
+    return runInterruptedContinuationScenario();
   }
   if (id === "codex-mcp-isolation") {
     const { runCodexMcpIsolationScenario } = await import("../test/harness/CodexMcpIsolationScenario.ts");
