@@ -73,9 +73,12 @@ test("terminal external state fails safely and retry starts a fresh run", async 
   fixture.store.createBlob("blob-1", blobInput(fixture));
   fixture.store.requestStep("blob-1");
 
+  await fixture.runner.runOnce();
+  fixture.store.addHumanFeedback("blob-1", "Continue after review.", ["review:1"]);
+
   await assert.rejects(fixture.runner.runOnce(), /external task was interrupted/);
 
-  const failed = fixture.store.listReceipts("blob-1")[0];
+  const failed = fixture.store.listReceipts("blob-1")[1];
   assert.equal(failed.status, "failed");
   assert.match(failed.error ?? "", /external task was interrupted/);
   assert.deepEqual(executionState(fixture), ["g1.first", true, false]);
@@ -83,9 +86,10 @@ test("terminal external state fails safely and retry starts a fresh run", async 
   await fixture.runner.runOnce();
 
   const receipts = fixture.store.listReceipts("blob-1");
-  assert.equal(receipts[1].continuationThreadId, null);
-  assert.equal(receipts[1].externalRunId, "external:fresh");
-  assert.equal(fixture.store.getBlob("blob-1")?.state, "complete");
+  assert.deepEqual(receipts.map((receipt) => receipt.status), ["blocked", "failed", "blocked"]);
+  assert.equal(receipts[2].continuationThreadId, null);
+  assert.equal(receipts[2].externalRunId, "external:fresh");
+  assert.deepEqual(executionState(fixture), ["g1.first", true, false]);
   assert.ok(fixture.store.listExecutionEvents("blob-1")
     .some((event) => event.name === "axi_factorio.harness.reconcile"));
   fixture.database.close();
@@ -231,7 +235,10 @@ class ReconcilingHarness extends OutcomeHarness {
       };
     }
     observer.event({ type: "external-run", externalRunId: "external:interrupted" });
-    return new Promise((_resolve, reject) => this.reject = reject);
+    return {
+      decision: "blocked", reason: "awaiting review",
+      outputArtifacts: [], externalRunId: "external:interrupted",
+    };
   }
 
   override async resume(
@@ -239,10 +246,7 @@ class ReconcilingHarness extends OutcomeHarness {
     observer: HarnessObserver,
   ): Promise<HarnessResult> {
     observer.event({ type: "external-run", externalRunId: input.externalRunId });
-    return {
-      decision: "advance", reason: "resumed safely",
-      outputArtifacts: [], externalRunId: input.externalRunId,
-    };
+    return new Promise((_resolve, reject) => this.reject = reject);
   }
 
   async reconcile(): Promise<HarnessExternalState> {

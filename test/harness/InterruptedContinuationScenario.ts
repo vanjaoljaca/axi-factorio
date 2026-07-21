@@ -9,14 +9,16 @@ export async function runInterruptedContinuationScenario(): Promise<InterruptedC
       cwd: dirname(fixture.pipelinePath), pipelinePath: fixture.pipelinePath, inputArtifacts: [],
     });
     fixture.store.requestStep(blobId);
+    await runner.runOnce();
+    fixture.store.addHumanFeedback(blobId, "Continue after review.", ["review:1"]);
     await runExpectedFailure(runner);
-    const interrupted = fixture.store.listReceipts(blobId)[0];
+    const interrupted = fixture.store.listReceipts(blobId);
     fixture.store.retryBlob(blobId);
     await runner.runOnce();
     const receipts = fixture.store.listReceipts(blobId);
     return {
       id: scenarioId,
-      frames: [scenarioFrame("Interrupted external task", [interrupted]), scenarioFrame("Fresh task allocated", receipts)],
+      frames: [scenarioFrame("Interrupted external task", interrupted), scenarioFrame("Fresh task allocated", receipts)],
       receipts,
       starts: harness.starts,
       resumes: harness.resumes,
@@ -37,13 +39,13 @@ class InterruptedThenFreshHarness implements AgentHarness {
     const externalRunId = this.starts === 1 ? interruptedRun : freshRun;
     observer.event({ type: "external-run", externalRunId });
     if (this.starts > 1) return { decision: "advance", reason: "Fresh task completed.", outputArtifacts: [], externalRunId };
-    return new Promise((_resolve, reject) => this.reject = reject);
+    return { decision: "blocked", reason: "Awaiting review.", outputArtifacts: [], externalRunId };
   }
 
   async resume(input: HarnessResumeInput, observer: HarnessObserver): Promise<HarnessResult> {
     this.resumes += 1;
     observer.event({ type: "external-run", externalRunId: input.externalRunId });
-    return { decision: "advance", reason: "Unexpected dead-task resume.", outputArtifacts: [], externalRunId: input.externalRunId };
+    return new Promise((_resolve, reject) => this.reject = reject);
   }
 
   async reconcile(): Promise<HarnessExternalState> {
@@ -63,7 +65,7 @@ async function runExpectedFailure(runner: ConveyorRunner): Promise<void> {
 
 function scenarioFrame(label: string, receipts: Receipt[]): WorkbenchFrame {
   const latest = receipts.at(-1)!;
-  const fresh = receipts.length > 1;
+  const fresh = receipts.length > 2;
   return {
     name: "Fresh task after interruption",
     description: "Play the two frames: the bead stays on the same step while only the dead external task identity changes.",
@@ -71,13 +73,14 @@ function scenarioFrame(label: string, receipts: Receipt[]): WorkbenchFrame {
     steps: [{ id: "g1.first", label: "First" }, { id: "g2.second", label: "Second" }],
     blobs: [{
       id: blobId, title: "Interrupted task gets a fresh session",
-      state: fresh ? "advanced" : "failed", stepId: fresh ? "g2.second" : "g1.first",
+      state: fresh ? "waiting" : "failed", stepId: "g1.first",
     }],
     receipts: receipts.map(viewReceipt),
     assertions: [
       { label: "Blob identity remains unchanged", passed: receipts.every((receipt) => receipt.blobId === blobId) },
       { label: "Retry remains on the same step", passed: receipts.every((receipt) => receipt.stepId === "g1.first") },
-      { label: "Interrupted task is retained in history", passed: receipts[0]?.externalRunId === interruptedRun },
+      { label: "Earlier blocked task is retained in history", passed: receipts[0]?.externalRunId === interruptedRun },
+      { label: "Interrupted continuation is retained in history", passed: receipts[1]?.status === "failed" },
       { label: "Next receipt has no continuation task", passed: !fresh || latest.continuationThreadId === null },
       { label: "Next receipt allocates a fresh task", passed: !fresh || latest.externalRunId === freshRun },
     ],

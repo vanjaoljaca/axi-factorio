@@ -637,7 +637,10 @@ export class ConveyorStore {
 
   private continuationThreadFor(blobId: string, stepId: string): string | null {
     const row = this.database.connection.prepare(receiptContinuationSelect).get(blobId, stepId);
-    return row ? nullableString(asRecord(row).externalRunId) : null;
+    if (!row) return null;
+    const receipt = asRecord(row);
+    return receipt.status === "failed" || receipt.status === "interrupted"
+      ? null : nullableString(receipt.externalRunId);
   }
 
   private pendingHumanInputs(blobId: string, stepId: string): HumanInput[] {
@@ -1157,9 +1160,8 @@ const runningReceiptList = `SELECT receipts.* FROM receipts JOIN blobs ON blobs.
 const runningReceiptByBlob = `SELECT 1 FROM receipts WHERE blobId = ?
   AND status = 'running' AND invalidatedAt IS NULL LIMIT 1`;
 const attemptSelect = "SELECT COALESCE(MAX(attempt), 0) + 1 AS attempt FROM receipts WHERE blobId = ? AND stepId = ?";
-const receiptContinuationSelect = `SELECT externalRunId FROM receipts WHERE blobId = ?
-  AND stepId = ? AND invalidatedAt IS NULL AND externalRunId IS NOT NULL
-  AND status NOT IN ('failed', 'interrupted')
+const receiptContinuationSelect = `SELECT externalRunId, status FROM receipts WHERE blobId = ?
+  AND stepId = ? AND invalidatedAt IS NULL
   ORDER BY attempt DESC LIMIT 1`;
 const humanInputInsert = `INSERT INTO humanInputs
   (id, blobId, stepId, kind, text, evidenceJson, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)`;
