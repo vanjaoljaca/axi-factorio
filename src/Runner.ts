@@ -71,6 +71,7 @@ export class ConveyorRunner {
     let replacingExternalRunId: string | null = null;
     let harnessActivity = 0;
     let cancelPromise: Promise<void> | null = null;
+    let cancellationReason = "Dispatcher stopped.";
     let localEndpoint: LocalEndpointSession | null = null;
     let terminalStatus: ReceiptStatus | null = null;
     const requestCancel = () => {
@@ -79,7 +80,7 @@ export class ConveyorRunner {
       const harnessCancel = this.harness.cancel({
         runId: claim.receipt.id,
         externalRunId,
-        reason: signal?.reason instanceof Error ? signal.reason.message : "Dispatcher stopped.",
+        reason: signal?.reason instanceof Error ? signal.reason.message : cancellationReason,
       });
       this.store.requestLocalEndpointStop(claim.blob.id, "Receipt execution was cancelled.");
       const endpointCancel = this.localEndpoints?.stop(claim.receipt.id, localEndpoint?.pid) ?? Promise.resolve();
@@ -167,6 +168,9 @@ export class ConveyorRunner {
         await cancelPromise;
         return this.interrupt(claim, ownerId, abortReason(signal));
       }
+      cancellationReason = `Receipt execution failed: ${errorMessage(error)}`;
+      requestCancel();
+      await cancelPromise;
       this.recordBoundary("error", claim, { error: errorMessage(error) });
       this.store.failReceipt(claim.receipt.id, error, ownerId);
       log("receipt_failed", { receiptId: claim.receipt.id, error: errorMessage(error) });

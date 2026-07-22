@@ -110,7 +110,7 @@ test("empty-launch recovery is capped at one within-receipt restart", async () =
   assert.equal(receipts[0].status, "failed");
   assert.equal(harness.starts, 2);
   assert.equal(harness.resumes, 0);
-  assert.equal(harness.cancels, 2);
+  assert.equal(harness.cancels, 3);
   fixture.database.close();
 });
 

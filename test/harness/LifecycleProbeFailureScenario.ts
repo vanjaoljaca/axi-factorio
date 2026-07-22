@@ -11,7 +11,7 @@ export async function runLifecycleProbeFailureScenario(): Promise<Scenario> {
     const harness = new TimeoutProbeHarness();
     const runner = new ConveyorRunner(base.store, harness, undefined, runnerOptions);
     base.store.requestStep(blob.id);
-    const before = frame("Probe unavailable", "running", harness.probes, null);
+    const before = frame("Probe unavailable", "running", harness.probes, null, false);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(new Error("Scenario safety timeout.")), safetyTimeoutMs);
     await runner.runOnce(controller.signal).catch((error) => {
@@ -20,9 +20,12 @@ export async function runLifecycleProbeFailureScenario(): Promise<Scenario> {
     const receipt = base.store.listReceipts(blob.id).at(-1)!;
     return {
       id: scenarioId,
-      frames: [before, frame("Bounded honest failure", receipt.status, harness.probes, receipt)],
+      frames: [before, frame(
+        "Bounded honest failure", receipt.status, harness.probes, receipt, harness.cancelled,
+      )],
       receipt,
       probeCount: harness.probes,
+      harnessCancelled: harness.cancelled,
     };
   } finally {
     base.dispose();
@@ -33,6 +36,7 @@ class TimeoutProbeHarness implements AgentHarness {
   readonly name = "probe-timeout-scenario";
   readonly model = "deterministic";
   probes = 0;
+  cancelled = false;
   private rejectRun: ((error: Error) => void) | null = null;
 
   async start(_input: HarnessStartInput, observer: HarnessObserver): Promise<HarnessResult> {
@@ -45,6 +49,7 @@ class TimeoutProbeHarness implements AgentHarness {
   }
 
   async cancel(): Promise<void> {
+    this.cancelled = true;
     this.rejectRun?.(new Error("Scenario run cancelled."));
     this.rejectRun = null;
   }
@@ -55,7 +60,13 @@ class TimeoutProbeHarness implements AgentHarness {
   }
 }
 
-function frame(label: string, status: string, probes: number, receipt: Receipt | null): WorkbenchFrame {
+function frame(
+  label: string,
+  status: string,
+  probes: number,
+  receipt: Receipt | null,
+  cancelled: boolean,
+): WorkbenchFrame {
   return {
     name: "Lifecycle probe failure boundary",
     description: "Watch probe failures stop refreshing a dead receipt and become an honest retryable failure.",
@@ -72,7 +83,9 @@ function frame(label: string, status: string, probes: number, receipt: Receipt |
     }] : [],
     assertions: [
       { label: `${probes} consecutive probe failures observed`, passed: probes >= maxProbeFailures },
+      { label: "Lifecycle probe budget tolerates the pinned app-server startup", passed: lifecycleProbeTimeoutMs >= 30_000 },
       { label: "Receipt is no longer silently running", passed: receipt?.status === "failed" },
+      { label: "Failed receipt cancels its live harness before returning", passed: !receipt || cancelled },
       { label: "Blob is paused for an explicit retry", passed: receipt?.status === "failed" },
     ],
   };
@@ -89,7 +102,13 @@ const scenarioId = "lifecycle-probe-failure";
 const blobId = "lifecycle-probe-failure";
 const externalRunId = "codex-thread:probe-timeout";
 
-export type Scenario = { id: string; frames: WorkbenchFrame[]; receipt: Receipt; probeCount: number };
+export type Scenario = {
+  id: string;
+  frames: WorkbenchFrame[];
+  receipt: Receipt;
+  probeCount: number;
+  harnessCancelled: boolean;
+};
 type WorkbenchFrame = {
   name: string;
   description: string;
@@ -110,5 +129,6 @@ import type {
 } from "../../src/Harness.ts";
 import type { Receipt } from "../../src/Types.ts";
 import { ConveyorRunner, ReceiptRunError } from "../../src/Runner.ts";
+import { lifecycleProbeTimeoutMs } from "../../src/CodexHarness.ts";
 import { createTestHarness } from "./CreateTestHarness.ts";
 import { dirname } from "node:path";

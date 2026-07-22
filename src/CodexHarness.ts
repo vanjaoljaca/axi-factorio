@@ -548,7 +548,7 @@ const runtimeMarker = "---\naxi-factorio runtime context";
 const exitSchemaPath = fileURLToPath(new URL("./exit-result.schema.json", import.meta.url));
 const terminationGraceMs = 2_000;
 const processCheckMs = 10;
-const lifecycleProbeTimeoutMs = 10_000;
+export const lifecycleProbeTimeoutMs = 30_000;
 const lifecycleArgs = ["app-server", "-c", "mcp_servers={}", "--stdio"];
 const activeTurnFreshnessMs = 5 * 60_000;
 const initializeParams = {

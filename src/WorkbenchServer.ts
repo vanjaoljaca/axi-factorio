@@ -187,7 +187,7 @@ function scenarioIndex(): object[] {
     },
     {
       id: "lifecycle-probe-failure", category: "Harness", name: "Lifecycle probe failure boundary",
-      description: "Probe timeout → bounded retries → honest terminal receipt",
+      description: "Slow provider read → 30s budget · unavailable probe → bounded honest failure",
     },
     {
       id: "interrupted-continuation-boundary", category: "Harness", name: "Fresh task after interruption",
