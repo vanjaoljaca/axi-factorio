@@ -238,6 +238,10 @@ function scenarioIndex(): object[] {
       description: "Play · listener closes · dispatcher exits · same receipt reconciles · Reset",
     },
     {
+      id: "dispatcher-provider-allocation", category: "Service", name: "Dispatcher owns provider allocation",
+      description: "Queued receipt · delayed provider allocation · late heartbeat · run ID saved",
+    },
+    {
       id: "project-removal", category: "Store", name: "Safe project removal",
       description: "Preview exact graph · confirm with evidence · remove · Reset",
     },
@@ -307,6 +311,11 @@ async function scenario(url: URL): Promise<Scenario> {
   if (id === "cursor-action") return cursorActionScenario.snapshot();
   if (id === "local-endpoint-supervisor") return localEndpointScenario.snapshot() as unknown as Scenario;
   if (id === "coupled-service-recovery") return coupledServiceRecoveryScenario.snapshot() as unknown as Scenario;
+  if (id === "dispatcher-provider-allocation") {
+    const { runDispatcherAllocationScenario } =
+      await import("../test/harness/DispatcherAllocationScenario.ts");
+    return runDispatcherAllocationScenario() as unknown as Scenario;
+  }
   if (id === "project-removal") return projectRemovalScenario.snapshot() as unknown as Scenario;
   if (id === "aggregate-polling") return aggregatePollingScenario();
   if (id === "active-projects-fold") {

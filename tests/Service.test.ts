@@ -30,6 +30,39 @@ test("service heartbeats while an adapter runs", async () => {
   fixture.database.close();
 });
 
+test("late heartbeat keeps ownership when no dispatcher has taken the expired lease", async () => {
+  const fixture = createServiceFixture();
+  assert.equal(fixture.store.acquireLease("named-service", 10), true);
+  await delay(20);
+
+  assert.equal(fixture.store.renewLease("named-service", 1_000), true);
+  assert.equal(fixture.store.acquireLease("competing-service", 1_000), false);
+  fixture.store.releaseLease("named-service");
+  fixture.database.close();
+});
+
+test("late heartbeat loses ownership after another dispatcher takes the expired lease", async () => {
+  const fixture = createServiceFixture();
+  fixture.store.createBlob("blob-1", blobInput(fixture));
+  fixture.store.requestStep("blob-1");
+  assert.equal(fixture.store.acquireLease("named-service", 10), true);
+  const step = discoverPipeline(fixture.pipelinePath)[0];
+  const receipt = fixture.store.beginReceipt({
+    blobId: "blob-1", step, definition: snapshotDefinition(step, fixture.pipelinePath),
+    adapter: "fixture", model: null, reasoningEffort: null, inputArtifacts: [],
+  }, "named-service").receipt;
+  await delay(20);
+
+  assert.equal(fixture.store.acquireLease("competing-service", 1_000), true);
+  assert.equal(fixture.store.renewLease("named-service", 1_000), false);
+  assert.throws(
+    () => fixture.store.recordExternalRun(receipt.id, "stale-owner-run", "named-service"),
+    /dispatcher lease was lost/,
+  );
+  fixture.store.releaseLease("competing-service");
+  fixture.database.close();
+});
+
 test("service heartbeats while a slow local endpoint reconciliation is in flight", async () => {
   const fixture = createServiceFixture(new ServiceAdapter(), 120);
   const original = fixture.serviceRunner.reconcileLocalEndpoints.bind(fixture.serviceRunner);
@@ -228,6 +261,7 @@ type ServiceFixture = PipelineFixture & {
 };
 
 import type { BlobInput } from "../src/Types.ts";
+import { discoverPipeline, snapshotDefinition } from "../src/Pipeline.ts";
 import type {
   AgentHarness,
   HarnessObserver,

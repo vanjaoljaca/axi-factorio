@@ -517,7 +517,7 @@ export class ConveyorStore {
   renewLease(ownerId: string, leaseMs: number): boolean {
     const at = this.now();
     const until = new Date(Date.parse(at) + leaseMs).toISOString();
-    const result = this.database.connection.prepare(leaseRenew).run(until, at, ownerId, at);
+    const result = this.database.connection.prepare(leaseRenew).run(until, at, ownerId);
     return Number(result.changes) === 1;
   }
 
@@ -876,7 +876,7 @@ export class ConveyorStore {
 
   private requireActiveLease(ownerId?: string): void {
     if (!ownerId) return;
-    const row = this.database.connection.prepare(activeLeaseSelect).get(ownerId, this.now());
+    const row = this.database.connection.prepare(activeLeaseSelect).get(ownerId);
     if (!row) throw new Error("The axi-factorio dispatcher lease was lost.");
   }
 
@@ -1283,10 +1283,10 @@ const leaseDeleteExpired = "DELETE FROM dispatcherLeases WHERE name = 'runner' A
 const leaseInsert = `INSERT OR IGNORE INTO dispatcherLeases
   (name, ownerId, leaseUntil, updatedAt) VALUES ('runner', ?, ?, ?)`;
 const leaseRenew = `UPDATE dispatcherLeases SET leaseUntil = ?, updatedAt = ?
-  WHERE name = 'runner' AND ownerId = ? AND leaseUntil > ?`;
+  WHERE name = 'runner' AND ownerId = ?`;
 const leaseRelease = "DELETE FROM dispatcherLeases WHERE name = 'runner' AND ownerId = ?";
 const activeLeaseSelect = `SELECT 1 FROM dispatcherLeases
-  WHERE name = 'runner' AND ownerId = ? AND leaseUntil > ?`;
+  WHERE name = 'runner' AND ownerId = ?`;
 const projectInsert = `INSERT INTO projects
   (id, name, cwd, root, pipelineRoot, defaultPipeline, createdAt, updatedAt)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
