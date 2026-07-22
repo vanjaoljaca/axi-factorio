@@ -220,11 +220,16 @@ test("Viewer Debug setting is durable, manual, and exposed through Settings", as
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ opener: "cursor" }),
     }).then(readJson);
+    const view = await fetch(`${endpoint}/api/settings/view`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ activeProjectDays: 3, sortProjectsByProgress: false }),
+    }).then(readJson);
     const play = await fetch(`${endpoint}/api/blobs/debug-controlled/play`, { method: "POST" });
 
     assert.equal(enabled.settings.debugMode, true);
     assert.equal(snapshot.settings.debugMode, true);
     assert.deepEqual(opener.settings.opener, { id: "cursor", label: "Cursor" });
+    assert.deepEqual(view.settings, { activeProjectDays: 3, sortProjectsByProgress: false });
     assert.equal(snapshot.projects[0].blobs[0].execution.play.enabled, false);
     assert.equal(play.status, 409);
   } finally {
@@ -499,7 +504,7 @@ function blobInput(fixture: PipelineFixture, title: string): BlobInput {
 
 type ViewSnapshot = {
   stats: { projects: number; tasks: number };
-  settings: { debugMode: boolean; opener: { id: string; label: string } };
+  settings: { debugMode: boolean; activeProjectDays: number; sortProjectsByProgress: boolean; opener: { id: string; label: string } };
   executionOverviewHtml: string;
   executionSessions: Array<{
     blobId: string;

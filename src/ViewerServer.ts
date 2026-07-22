@@ -22,6 +22,9 @@ type ViewBlob = {
   completedStepIds: string[];
   importedStepIds: string[];
   steps: ViewStep[];
+  createdAt: string;
+  latestReceiptAt: string | null;
+  latestHumanInputAt: string | null;
 };
 type ViewAttempt = {
   receipt: Receipt;
@@ -54,13 +57,15 @@ export function createViewSnapshot(
     const receipts = store.listReceipts();
     const debugMode = store.debugMode();
     const opener = store.opener();
-    const projects = groupProjects(store.listProjects(), store.listBlobs(), receipts, cursorLauncher, debugMode);
+    const activeProjectDays = store.activeProjectDays();
+    const sortProjectsByProgress = store.sortProjectsByProgress();
+    const projects = groupProjects(store.listProjects(), store.listBlobs(), receipts, store.listHumanInputs(), cursorLauncher, debugMode);
     const steps = sharedSteps(projects);
     const executionSessions = listExecutionSessions(store).slice(0, 12);
     const executionStatusItems = listExecutionStatusItems(store);
     return {
       name: "Factorio Dashboard",
-      settings: { debugMode, opener: { id: opener, label: openerLabel(opener) } },
+      settings: { debugMode, activeProjectDays, sortProjectsByProgress, opener: { id: opener, label: openerLabel(opener) } },
       stats: { tasks: projects.reduce((sum, project) => sum + project.blobs.length, 0), projects: projects.length },
       groups: stepGroups(steps),
       steps,
@@ -96,6 +101,7 @@ export function createViewerServer(
         if (url.pathname === "/api/settings/opener") {
           return await openerRequest(request, response, databasePath);
         }
+        if (url.pathname === "/api/settings/view") return await viewSettingsRequest(request, response, databasePath);
         return await controlRequest(request, response, databasePath, url.pathname, cursorLauncher);
       }
       if (request.method === "GET" && url.pathname === "/") return html(response, viewerHtml);
@@ -105,6 +111,18 @@ export function createViewerServer(
       json(response, { error: error instanceof Error ? error.message : String(error) }, status);
     }
   });
+}
+
+async function viewSettingsRequest(request: IncomingMessage, response: ServerResponse, databasePath: string): Promise<void> {
+  const body = await readBody(request);
+  if (typeof body.sortProjectsByProgress !== "boolean") throw new Error("Sort projects by progress requires a boolean value.");
+  const database = new FactorioDatabase(databasePath);
+  try {
+    const store = new ConveyorStore(database);
+    const activeProjectDays = store.setActiveProjectDays(number(body.activeProjectDays));
+    const sortProjectsByProgress = store.setSortProjectsByProgress(body.sortProjectsByProgress);
+    json(response, { ok: true, settings: { activeProjectDays, sortProjectsByProgress } });
+  } finally { database.close(); }
 }
 
 async function openerRequest(
@@ -347,6 +365,7 @@ function groupProjects(
   records: Project[],
   blobs: Blob[],
   receipts: Receipt[],
+  humanInputs: HumanInput[],
   cursorLauncher: CursorWorkspaceLauncher,
   debugMode: boolean,
 ): ViewProject[] {
@@ -356,7 +375,7 @@ function groupProjects(
   ]));
   for (const blob of blobs) {
     const project = projects.get(blob.projectId) ?? fallbackProject(blob);
-    project.blobs.push(viewBlob(blob, receipts, cursorLauncher, debugMode));
+    project.blobs.push(viewBlob(blob, receipts, humanInputs, cursorLauncher, debugMode));
     projects.set(project.id, project);
   }
   return [...projects.values()].sort((left, right) => left.name.localeCompare(right.name));
@@ -411,11 +430,13 @@ function projectName(id: string): string {
 function viewBlob(
   blob: Blob,
   receipts: Receipt[],
+  humanInputs: HumanInput[],
   cursorLauncher: CursorWorkspaceLauncher,
   debugMode: boolean,
 ): ViewBlob {
   const relevant = receipts.filter((receipt) => receipt.blobId === blob.id && !receipt.invalidatedAt);
   const latest = relevant.at(-1);
+  const inputs = humanInputs.filter((input) => input.blobId === blob.id);
   const open = cursorLauncher.inspect(blob);
   return {
     id: blob.id,
@@ -432,6 +453,9 @@ function viewBlob(
     importedStepIds: relevant.filter((receipt) =>
       receipt.status === "advance" && receipt.executionKind === "imported").map((receipt) => receipt.stepId),
     steps: discoverPipeline(blob.pipelinePath).map(viewStep),
+    createdAt: blob.createdAt,
+    latestReceiptAt: latest ? latest.lastProgressAt || latest.finishedAt || latest.startedAt : null,
+    latestHumanInputAt: inputs.at(-1)?.createdAt ?? null,
   };
 }
 
@@ -615,6 +639,8 @@ ${liveExecutionStyles}
 @media(max-width:760px){.app{grid-template-columns:76px minmax(0,1fr)}.rail{width:76px;padding-inline:7px}.brand{margin-inline:4px}.nav-item{justify-content:center;padding:0;font-size:9px}.agent{display:none}.identity{min-width:auto}.identity strong{font-size:11px}.content{padding-inline:12px}.topbar{padding-inline:12px}.search{width:min(240px,45vw)}}
 @media(max-width:520px){.app{display:block}.rail{position:static;width:100%;height:48px;border-right:0;border-bottom:1px solid var(--line);display:flex;flex-direction:row;align-items:center;padding:6px 10px}.brand{margin:0 14px 0 0}.nav{display:flex}.nav-item{height:30px;padding:0 8px}.nav-item:not(.active){display:none}.main{display:block}.topbar{height:auto;min-height:92px;flex-wrap:wrap;padding-block:12px}.identity{width:calc(100% - 72px)}.search{order:3;width:100%;margin:0}.content{padding-top:10px}.matrix-head{grid-template-columns:220px repeat(var(--steps),minmax(66px,1fr))}.taskrow{grid-template-columns:220px repeat(var(--steps),minmax(66px,1fr))}.task-title{padding-left:14px}.task-status{display:none}}
 .project-head-row{height:37px;display:grid;grid-template-columns:280px repeat(var(--steps),minmax(72px,1fr)) 36px;align-items:center;background:#fff}.project-identity{position:sticky;left:0;z-index:3;height:37px;display:flex;align-items:center;padding:0 12px 0 24px;background:inherit;font-weight:700;font-size:10px;min-width:0}.project-identity>span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.project-identity .pipeline-issue{margin-left:8px;border:1px solid #e5c89f;border-radius:999px;background:#fff8ed;color:#986016;padding:2px 7px;font-size:8px;font-weight:700;white-space:nowrap}.project-disclosure{position:sticky;right:0;z-index:5;align-self:stretch;width:36px;height:37px;border:0;border-left:1px solid var(--line);background:#fff;color:#68726c;display:grid;place-items:center;cursor:pointer;font-size:17px;line-height:1}.project-disclosure:hover{background:var(--neutral-soft)}.project-disclosure:focus-visible{outline:2px solid #85938a;outline-offset:-3px}.project.collapsed .taskrows{display:none}.project-head-track{height:37px;position:relative}.project-head-track:before{content:"";position:absolute;left:0;right:0;top:19px;height:1px;background:var(--line-strong)}.project-head-track.first:before{left:50%}.project-head-track.last:before{right:50%}.task-name-button{display:block;max-width:100%;color:inherit}.task-name-button:focus-visible{outline:2px solid #85938a;outline-offset:2px;border-radius:2px}.blob-menu{position:fixed;z-index:1000;min-width:148px;padding:4px;border:1px solid var(--line-strong);border-radius:7px;background:#fff;box-shadow:0 10px 28px #18201b24}.blob-menu[hidden]{display:none}.blob-menu button{width:100%;height:31px;border:0;border-radius:4px;background:transparent;padding:0 10px;text-align:left;cursor:pointer;font-size:10px}.blob-menu button:hover,.blob-menu button:focus-visible{background:var(--neutral-soft);outline:0}.blob-menu button:disabled{color:#a9b0ac;cursor:not-allowed}.blob-menu small{display:block;padding:5px 10px;color:var(--muted);font-size:8px;max-width:220px}.opener-select{height:30px;min-width:130px;border:1px solid var(--line-strong);border-radius:5px;background:#fff;padding:0 28px 0 9px}@media(max-width:520px){.matrix-head,.project-head-row,.taskrow{grid-template-columns:220px repeat(var(--steps),minmax(66px,1fr)) 36px}.project-identity{padding-left:14px}.blob-menu{max-width:calc(100vw - 16px)}}
+.matrix-head{grid-template-columns:280px repeat(var(--steps),minmax(72px,1fr)) 30px;position:relative;top:auto}.corner{position:sticky;left:0;z-index:5;background:#fff}.matrix-action-gutter{z-index:6;width:30px;border-left:1px solid var(--line-strong);background:#f7f8f7;box-shadow:-4px 0 7px #18201b0a}.project-head-row{grid-template-columns:280px repeat(var(--steps),minmax(72px,1fr)) 30px}.project-disclosure{width:30px;border-left-color:var(--line-strong);background:#f7f8f7;box-shadow:-4px 0 7px #18201b0a}.aggregate-bead:after{background:var(--center,#fff)}.opener-select,.view-days{height:30px;min-width:130px;border:1px solid var(--line-strong);border-radius:5px;background:#fff;padding:0 9px}@media(max-width:520px){.matrix-head,.project-head-row,.taskrow{grid-template-columns:220px repeat(var(--steps),minmax(66px,1fr)) 30px}}
+.taskrow{grid-template-columns:280px repeat(var(--steps),minmax(72px,1fr)) 30px}
 </style></head><body><div class="app">
 <aside class="rail" aria-label="Primary navigation"><div class="brand">axi-factorio</div><nav class="nav">
 <button class="nav-item active" data-page="overview">Overview</button><button class="nav-item" data-page="projects">Projects</button><button class="nav-item" data-page="runs">Runs</button><button class="nav-item" data-page="alerts">Alerts</button><button class="nav-item" data-page="settings">Settings</button>
@@ -637,11 +663,11 @@ function collapseNewProjects(projects){for(const project of projects){if(!knownP
 function render(){if(!snapshot)return;document.querySelectorAll('[data-page]').forEach(button=>button.classList.toggle('active',button.dataset.page===currentPage));byId('page-title').textContent=pageTitle();byId('search').hidden=!['overview','projects'].includes(currentPage);byId('footer').hidden=currentPage!=='overview';byId('workspace').classList.toggle('plain',currentPage!=='overview');if(currentPage==='overview')return renderOverview();if(currentPage==='projects')return renderProjects();if(currentPage==='runs')return renderRuns();if(currentPage==='alerts')return renderAlerts();renderSettings()}
 function pageTitle(){return {overview:'All Projects',projects:'Projects',runs:'Runs',alerts:'Alerts',settings:'Settings'}[currentPage]}
 function filteredProjects(){const query=byId('search').value.trim().toLowerCase();return snapshot.projects.map(project=>({...project,blobs:project.blobs.filter(blob=>matches(blob,project,query))})).filter(project=>project.blobs.length||(!query&&snapshot.projects.length)||project.name.toLowerCase().includes(query))}
-function renderOverview(){const projects=filteredProjects(),active=projects.filter(projectHasActiveWork),inactive=projects.filter(project=>!projectHasActiveWork(project)),visible=showAllProjects?[...active,...inactive]:active,query=byId('search').value.trim(),key=overviewKey(visible)+'|fold:'+showAllProjects+'|inactive:'+inactive.map(project=>project.id).join(',');byId('total').textContent=snapshot.stats.tasks+' '+plural(snapshot.stats.tasks,'task')+' across '+snapshot.stats.projects+' '+plural(snapshot.stats.projects,'project');if(!projects.length){overviewStructureKey='';return void(byId('workspace').innerHTML='<div class="no-results">'+(query?'No projects or tasks match your search.':'No projects yet. Add a project and its work will appear here.')+'</div>')}if(key!==overviewStructureKey||!byId('workspace').querySelector('.matrix')){byId('workspace').innerHTML=matrix(active,showAllProjects?inactive:[],inactive.length);overviewStructureKey=key;return}patchOverview(visible)}
+function renderOverview(){const projects=filteredProjects(),days=snapshot.settings.activeProjectDays,sorted=sortProjects(projects,snapshot.settings.sortProjectsByProgress),active=sorted.filter(project=>projectHasActiveWork(project,new Date(),days)),inactive=sorted.filter(project=>!projectHasActiveWork(project,new Date(),days)),visible=showAllProjects?[...active,...inactive]:active,query=byId('search').value.trim(),key=overviewKey(visible)+'|fold:'+showAllProjects+'|inactive:'+inactive.map(project=>project.id).join(',');byId('total').textContent=snapshot.stats.tasks+' '+plural(snapshot.stats.tasks,'task')+' across '+snapshot.stats.projects+' '+plural(snapshot.stats.projects,'project');if(!projects.length){overviewStructureKey='';return void(byId('workspace').innerHTML='<div class="no-results">'+(query?'No projects or tasks match your search.':'No projects yet. Add a project and its work will appear here.')+'</div>')}if(key!==overviewStructureKey||!byId('workspace').querySelector('.matrix')){byId('workspace').innerHTML=matrix(active,showAllProjects?inactive:[],inactive.length);overviewStructureKey=key;return}patchOverview(visible)}
 function renderProjects(){overviewStructureKey='';const projects=filteredProjects();byId('workspace').innerHTML='<div class="page-list">'+(projects.map(project=>'<article class="page-card"><div class="page-card-head"><strong>'+escapeHtml(project.name)+'</strong><span>'+project.blobs.length+' '+plural(project.blobs.length,'task')+'</span></div><p>Pipeline '+escapeHtml(project.resolvedPipeline||project.defaultPipeline)+(project.pipelineIssue?' · '+escapeHtml(project.pipelineIssue.summary):'')+'</p><p><code>'+escapeHtml(project.root)+'</code></p></article>').join('')||'<div class="empty"><b>No projects found</b>Try another search.</div>')+'</div>'}
 function renderRuns(){overviewStructureKey='';byId('workspace').innerHTML=snapshot.executionOverviewHtml||'<div class="empty"><b>No runs yet</b>Execution history will appear here.</div>'}
 function renderAlerts(){const alerts=[];for(const project of snapshot.projects){if(project.pipelineIssue)alerts.push({kind:'failure',title:project.name+' · Pipeline unavailable',detail:project.pipelineIssue.detail});for(const blob of project.blobs){if(blob.status==='failed')alerts.push({kind:'failure',title:blob.title+' · Failed',detail:'Current step: '+blob.stepId});else if(blob.status==='blocked'||blob.status==='waiting')alerts.push({kind:'attention',title:blob.title+' · '+statusLabel(blob.status),detail:project.name+' · '+blob.stepId})}}byId('workspace').innerHTML=alerts.length?'<div class="page-list">'+alerts.map(alert=>'<article class="page-card alert-card '+alert.kind+'"><div class="page-card-head"><strong>'+escapeHtml(alert.title)+'</strong></div><p>'+escapeHtml(alert.detail)+'</p></article>').join('')+'</div>':'<div class="empty"><b>No alerts</b>Failures and work needing attention will appear here.</div>'}
-function renderSettings(){const enabled=snapshot.settings.debugMode,opener=snapshot.settings.opener;byId('workspace').innerHTML='<section class="page-list"><article class="page-card settings-card"><div class="setting-row"><div class="setting-copy"><strong>Default opener</strong><p>Choose the local app used by Open on a task.</p></div><select class="opener-select" id="opener" aria-label="Default opener"><option value="cursor" '+(opener.id==='cursor'?'selected':'')+'>Cursor</option></select></div></article><article class="page-card settings-card"><div class="setting-row"><div class="setting-copy"><strong>Debug mode</strong><p>Pause automatic progression and expose manual Step, Play, and Stop controls for pipeline validation.</p></div><label class="switch"><input id="debug-mode" type="checkbox" '+(enabled?'checked':'')+' aria-label="Debug mode"><span></span></label></div>'+(enabled?'<div class="debug-notice">Debug mode is on. Continuous play is disabled; use Step to advance one transition at a time.</div>':'')+'</article></section>'}
+function renderSettings(){const enabled=snapshot.settings.debugMode,opener=snapshot.settings.opener,days=snapshot.settings.activeProjectDays,sort=snapshot.settings.sortProjectsByProgress;byId('workspace').innerHTML='<section class="page-list"><article class="page-card settings-card"><div class="setting-row"><div class="setting-copy"><strong>Default opener</strong><p>Choose the local app used by Open on a task.</p></div><select class="opener-select" id="opener" aria-label="Default opener"><option value="cursor" '+(opener.id==='cursor'?'selected':'')+'>Cursor</option></select></div></article><article class="page-card settings-card"><div class="setting-row"><div class="setting-copy"><strong>Active project window</strong><p>Show projects with meaningful task activity in the last number of days.</p></div><input class="view-days" id="active-project-days" type="number" min="1" max="365" value="'+days+'" aria-label="Active project window in days"></div><div class="setting-row" style="margin-top:14px"><div class="setting-copy"><strong>Sort projects by progress</strong><p>Show the furthest-progressed projects first.</p></div><label class="switch"><input id="sort-projects" type="checkbox" '+(sort?'checked':'')+' aria-label="Sort projects by progress"><span></span></label></div></article><article class="page-card settings-card"><div class="setting-row"><div class="setting-copy"><strong>Debug mode</strong><p>Pause automatic progression and expose manual Step, Play, and Stop controls for pipeline validation.</p></div><label class="switch"><input id="debug-mode" type="checkbox" '+(enabled?'checked':'')+' aria-label="Debug mode"><span></span></label></div>'+(enabled?'<div class="debug-notice">Debug mode is on. Continuous play is disabled; use Step to advance one transition at a time.</div>':'')+'</article></section>'}
 function matches(blob,project,query){return !query||project.name.toLowerCase().includes(query)||blob.title.toLowerCase().includes(query)||blob.id.toLowerCase().includes(query)}
 function matrix(active,inactive,inactiveCount){const steps=snapshot.steps,fold=inactiveCount?projectFold(inactiveCount):'';return '<div class="matrix" style="--steps:'+Math.max(steps.length,1)+'"><div class="matrix-head" style="--steps:'+Math.max(steps.length,1)+'"><div class="corner"></div><div class="matrix-action-gutter" aria-hidden="true"></div>'+snapshot.groups.map(group=>'<div class="band" style="grid-column:span '+group.count+'">'+escapeHtml(group.label)+'</div>').join('')+steps.map(step=>'<div class="step">'+escapeHtml(step.label)+'</div>').join('')+'</div>'+active.map(projectCard).join('')+fold+inactive.map(projectCard).join('')+'</div>'}
 function projectFold(count){const action=showAllProjects?'Hide inactive projects':'Show all projects';return '<div class="project-fold-row"><button data-show-projects="'+(!showAllProjects)+'" aria-expanded="'+showAllProjects+'"><span aria-hidden="true">'+(showAllProjects?'⌃':'⌄')+'</span>'+action+'<small>'+count+'</small></button></div>'}
@@ -652,10 +678,9 @@ function controlButton(blob,action,icon){const control=blob.execution[action];co
 function playIcon(){return '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1.3v9.4L10 6z"/></svg>'}function stepIcon(){return '<svg viewBox="0 0 14 12" aria-hidden="true"><path d="M1 1.3v9.4L9 6zM11 1h2v10h-2z"/></svg>'}function stopIcon(){return '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 2h8v8H2z"/></svg>'}
 function beadCell(blob,step,index){const known=blob.steps.some(candidate=>candidate.id===step.id);const done=blob.stepId==='complete'||blob.completedStepIds.includes(step.id);const current=blob.stepId===step.id;const imported=done&&blob.importedStepIds.includes(step.id);const classes=['bead',done?'done':'',imported?'imported':'',current?'current':'',current?blob.status:'',!known?'unavailable':''].filter(Boolean).join(' ');const tooltip=beadTooltip(blob,step,done,current,imported,known);return '<div class="track-cell '+(index===0?'first ':'')+(index===snapshot.steps.length-1?'last':'')+'"><i class="'+classes+'" title="'+escapeAttr(tooltip)+'" aria-label="'+escapeAttr(tooltip)+'"></i></div>'}
 function beadTooltip(blob,step,done,current,imported,known){if(!known)return step.label+' is not in this task pipeline.';if(current&&blob.status==='held')return 'Inventory — held before its first run.';if(current)return step.label+' — '+(statusLabel(blob.status)||'current');if(done)return step.label+' — '+(imported?'imported completion':'completed');return step.label+' — pending'}
-function aggregateCell(project,step,index){const data=aggregateModel(project,step),key=project.id+'::'+step.id;return '<div class="track-cell '+(index===0?'first ':'')+(index===snapshot.steps.length-1?'last':'')+'"><i class="aggregate-bead '+(data.total?'':'unavailable')+'" data-aggregate-key="'+escapeAttr(key)+'" data-aggregate-state="'+escapeAttr(data.signature)+'" style="--composition:'+escapeAttr(data.composition)+'" title="'+escapeAttr(data.label)+'" aria-label="'+escapeAttr(data.label)+'"></i></div>'}
-function aggregateModel(project,step){const tasks=project.blobs.filter(blob=>blob.steps.some(candidate=>candidate.id===step.id)).slice().sort((a,b)=>a.id.localeCompare(b.id)),counts={completed:0,running:0,attention:0,failed:0,unfinished:0},colors=[];for(const blob of tasks){const category=aggregateCategory(blob,step);counts[category]++;colors.push({completed:'var(--green)',running:'var(--ink)',attention:'var(--attention)',failed:'var(--danger)',unfinished:'#aeb7b1'}[category])}const total=tasks.length,composition=total?segmentedGradient(colors):'var(--neutral-soft)',label=total?step.label+' — '+total+' tasks: '+counts.completed+' completed, '+counts.running+' running, '+counts.attention+' need attention, '+counts.failed+' failed, '+counts.unfinished+' unfinished or inventory':step.label+' — 0 tasks';return {total,composition,label,signature:[...colors,label].join('|')}}
+function aggregateCell(project,step,index){const data=aggregateModel(project,step),key=project.id+'::'+step.id;return '<div class="track-cell '+(index===0?'first ':'')+(index===snapshot.steps.length-1?'last':'')+'"><i class="aggregate-bead '+(data.total?'':'unavailable')+'" data-aggregate-key="'+escapeAttr(key)+'" data-aggregate-state="'+escapeAttr(data.signature)+'" style="--composition:'+escapeAttr(data.composition)+';--center:'+escapeAttr(data.center)+'" title="'+escapeAttr(data.label)+'" aria-label="'+escapeAttr(data.label)+'"></i></div>'}
+function aggregateModel(project,step){const tasks=project.blobs.filter(blob=>blob.steps.some(candidate=>candidate.id===step.id)).slice().sort((a,b)=>a.id.localeCompare(b.id)),counts={completed:0,running:0,attention:0,failed:0,unfinished:0};for(const blob of tasks)counts[aggregateCategory(blob,step)]++;const total=tasks.length,composition=total?aggregateProgressGradient(counts.completed,total):'var(--neutral-soft)',center=counts.failed?'var(--danger)':counts.attention?'var(--attention)':counts.running?'var(--ink)':'#fff',label=total?step.label+' — '+total+' tasks: '+counts.completed+' completed, '+counts.running+' running, '+counts.attention+' need attention, '+counts.failed+' failed, '+counts.unfinished+' unfinished or inventory':step.label+' — 0 tasks';return {total,composition,center,label,signature:[composition,center,label].join('|')}}
 function aggregateCategory(blob,step){if(blob.stepId==='complete'||blob.completedStepIds.includes(step.id))return 'completed';if(blob.stepId!==step.id)return 'unfinished';if(blob.status==='failed')return 'failed';if(blob.status==='waiting'||blob.status==='blocked')return 'attention';if(blob.status==='running'||blob.status==='queued')return 'running';return 'unfinished'}
-function segmentedGradient(colors){const span=360/colors.length,gap=Math.min(2,span*.14),stops=[];colors.forEach((color,index)=>{const start=index*span,end=(index+1)*span;stops.push('#fff '+start+'deg '+(start+gap)+'deg',color+' '+(start+gap)+'deg '+(end-gap)+'deg','#fff '+(end-gap)+'deg '+end+'deg')});return 'conic-gradient(from -90deg,'+stops.join(',')+')'}
 function overviewKey(projects){return JSON.stringify({steps:snapshot.steps.map(step=>step.id),debug:snapshot.settings.debugMode,projects:projects.map(project=>[project.id,project.name,project.pipelineIssue?.summary||'',collapsedProjects.has(project.id),project.blobs.map(blob=>[blob.id,blob.title])])})}
 function blobViewKey(blob){return JSON.stringify([blob.title,blob.status,blob.stepId,blob.completedStepIds,blob.importedStepIds,snapshot.settings.debugMode,blob.execution])}
 function patchOverview(projects){for(const project of projects){for(const step of snapshot.steps){const marker=byId('workspace').querySelector('[data-aggregate-key="'+CSS.escape(project.id+'::'+step.id)+'"]');if(marker)updateAggregateMarker(marker,aggregateModel(project,step))}for(const blob of project.blobs){const row=byId('workspace').querySelector('[data-blob-row="'+CSS.escape(blob.id)+'"]');if(row&&row.dataset.viewKey!==blobViewKey(blob))row.outerHTML=taskRow(blob)}}}
@@ -681,13 +706,14 @@ function showLearningError(error){const target=byId('learning-error')||byId('err
 byId('refresh').onclick=async()=>{closeBlobMenu(false);await load();if(learning)await openLearning(learning.blob.id)};byId('search').oninput=render;document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!byId('blob-menu').hidden){event.preventDefault();return closeBlobMenu(true)}if(event.key==='/'&&document.activeElement!==byId('search')){event.preventDefault();byId('search').focus()}});
 document.querySelector('.nav').onclick=event=>{const target=event.target.closest('[data-page]');if(!target)return;currentPage=target.dataset.page;learning=null;renderLearning();render()};
 byId('workspace').onclick=event=>{const menu=event.target.closest('[data-blob-menu]');if(menu){event.stopPropagation();return openBlobMenu(menu)}const action=event.target.closest('[data-action]');if(action){action.disabled=true;return void control(action.dataset.action,action.dataset.blob)}const fold=event.target.closest('[data-show-projects]');if(fold){showAllProjects=fold.dataset.showProjects==='true';overviewStructureKey='';return renderOverview()}const disclosure=event.target.closest('[data-project-toggle]');if(!disclosure)return;const id=disclosure.dataset.projectToggle;if(collapsedProjects.has(id))collapsedProjects.delete(id);else collapsedProjects.add(id);renderOverview()};
-byId('workspace').onchange=event=>{if(event.target.id==='debug-mode')return void updateDebugMode(event.target.checked);if(event.target.id==='opener')return void updateOpener(event.target.value)};
+byId('workspace').onchange=event=>{if(event.target.id==='debug-mode')return void updateDebugMode(event.target.checked);if(event.target.id==='opener')return void updateOpener(event.target.value);if(event.target.id==='active-project-days'||event.target.id==='sort-projects')return void updateViewSettings()};
 byId('blob-menu').onclick=event=>{const item=event.target.closest('[data-menu-action]');if(!item||item.disabled)return;const blobId=menuBlobId;closeBlobMenu(false);void control(item.dataset.menuAction,blobId)};
 document.addEventListener('click',event=>{if(byId('blob-menu').hidden||event.target.closest('#blob-menu')||event.target.closest('[data-blob-menu]'))return;closeBlobMenu(true)});
 function openBlobMenu(trigger){const blob=snapshot.projects.flatMap(project=>project.blobs).find(item=>item.id===trigger.dataset.blobMenu);if(!blob)return;closeBlobMenu(false);menuTrigger=trigger;menuBlobId=blob.id;trigger.setAttribute('aria-expanded','true');const menu=byId('blob-menu');menu.innerHTML='<button role="menuitem" data-menu-action="open" '+(blob.open.enabled?'':'disabled')+'>Open</button>'+(blob.open.enabled?'':'<small>'+escapeHtml(blob.open.explanation)+'</small>');menu.hidden=false;const box=trigger.getBoundingClientRect(),menuBox=menu.getBoundingClientRect(),left=Math.max(8,Math.min(box.left,innerWidth-menuBox.width-8));const below=box.bottom+5,top=below+menuBox.height<=innerHeight-8?below:Math.max(8,box.top-menuBox.height-5);menu.style.left=left+'px';menu.style.top=top+'px';menu.querySelector('[role="menuitem"]').focus()}
 function closeBlobMenu(returnFocus){const trigger=menuTrigger,blobId=menuBlobId,menu=byId('blob-menu');menu.hidden=true;menu.innerHTML='';if(trigger)trigger.setAttribute('aria-expanded','false');menuTrigger=null;menuBlobId=null;if(returnFocus)queueMicrotask(()=>{const target=trigger?.isConnected?trigger:document.querySelector('[data-blob-menu="'+CSS.escape(blobId||'')+'"]');target?.focus({preventScroll:true})})}
 async function updateDebugMode(enabled){try{const response=await fetch('/api/settings/debug-mode',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({enabled})});const result=await response.json();if(!response.ok)throw new Error(result.error||'Could not update Debug mode.');await load();showActionStatus(enabled?'Debug mode enabled. Automatic progression is paused.':'Debug mode disabled.','success')}catch(error){showActionStatus(error.message,'failure');await load()}}
 async function updateOpener(opener){try{const response=await fetch('/api/settings/opener',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({opener})});const result=await response.json();if(!response.ok)throw new Error(result.error||'Could not update the opener.');await load();showActionStatus('Default opener set to '+result.settings.opener.label+'.','success')}catch(error){showActionStatus(error.message,'failure');await load()}}
+async function updateViewSettings(){try{const activeProjectDays=Number(byId('active-project-days').value),sortProjectsByProgress=byId('sort-projects').checked,response=await fetch('/api/settings/view',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({activeProjectDays,sortProjectsByProgress})}),result=await response.json();if(!response.ok)throw new Error(result.error||'Could not update View settings.');await load();showActionStatus('View settings saved.','success')}catch(error){showActionStatus(error.message,'failure');await load()}}
 byId('learning').onclick=event=>{const attempt=event.target.closest('[data-attempt]');if(attempt){selectedAttemptId=attempt.dataset.attempt;blobPreview=null;promptPreview=null;return renderLearning()}const action=event.target.closest('[data-learning-action]');if(action)return void learningAction(action.dataset.learningAction)};
 byId('learning').onchange=event=>{if(event.target.id!=='prompt-kind')return;const step=selectedStep();byId('prompt-content').value=event.target.value==='entry'?step.entry:step.exit;promptPreview=null};
 load();setInterval(load,2000);
@@ -701,6 +727,7 @@ import type {
   Blob,
   ExecutionEvent,
   ExecutionMode,
+  HumanInput,
   Project,
   Receipt,
   StepDefinition,

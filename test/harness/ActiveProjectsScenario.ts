@@ -1,8 +1,9 @@
 export function runActiveProjectsScenario(): Scenario {
   const databasePath = createFixture();
   const snapshot = createViewSnapshot(databasePath) as ViewerSnapshot;
-  const active = snapshot.projects.filter(projectHasActiveWork);
-  const inactive = snapshot.projects.filter((project) => !projectHasActiveWork(project));
+  const now = new Date("2026-07-22T00:00:00.000Z");
+  const active = sortProjects(snapshot.projects.filter((project) => projectHasActiveWork(project, now, 7)), true);
+  const inactive = sortProjects(snapshot.projects.filter((project) => !projectHasActiveWork(project, now, 7)), true);
   return { id: "active-projects-fold", frames: [{
     name: "Active projects fold",
     description: "Play refreshes, then reveal completed-only and empty projects without adding a second vertical scroller.",
@@ -10,8 +11,9 @@ export function runActiveProjectsScenario(): Scenario {
     assertions: [
       { label: "Running and attention work is active", passed: active.some((project) => project.id === "running-app") },
       { label: "Paused review work is active", passed: active.some((project) => project.id === "review-app") },
-      { label: "Inventory remains active", passed: active.some((project) => project.id === "inventory-app") },
-      { label: "Completed-only and empty projects are inactive", passed: inactive.map((project) => project.id).join(",") === "completed-app,empty-app" },
+      { label: "Fresh inventory remains active", passed: active.some((project) => project.id === "inventory-app") },
+      { label: "Stale inventory is inactive", passed: inactive.some((project) => project.id === "stale-inventory") },
+      { label: "Completed-only and empty projects are inactive", passed: inactive.some((project) => project.id === "completed-app") && inactive.some((project) => project.id === "empty-app") },
     ], visual: { kind: "active-projects", active, inactive },
   }] };
 }
@@ -31,6 +33,9 @@ function createFixture(): string {
     store.createProject(id, { name, root, pipelineRoot, defaultPipeline: "default" });
   }
   createActiveFixtures(store, pipelinePath, fixture.root);
+  createBlob(store, "stale-inventory", "stale", "Stale inventory", pipelinePath, fixture.root);
+  database.connection.prepare("UPDATE blobs SET createdAt = ?, updatedAt = ? WHERE projectId = ?")
+    .run("2026-06-01T00:00:00.000Z", "2026-07-19T00:00:00.000Z", "stale-inventory");
   const complete = createBlob(store, "completed-app", "complete", "Finished task", pipelinePath, fixture.root);
   store.markCompleted(complete.id);
   database.close();
@@ -59,16 +64,17 @@ function createBlob(store: ConveyorStore, projectId: string, id: string, title: 
 const projects = [
   ["running-app", "Running app"], ["review-app", "Review app"], ["inventory-app", "Inventory app"],
   ["completed-app", "Completed app"], ["empty-app", "Empty app"],
+  ["stale-inventory", "Stale inventory"],
 ] as const;
 
-type ScenarioProject = { id: string; name: string; blobs: Array<{ id: string; title: string; status: string; stepId: string; completedStepIds: string[] }> };
+type ScenarioProject = { id: string; name: string; blobs: Array<{ id: string; title: string; status: string; stepId: string; createdAt: string; latestReceiptAt: string | null; latestHumanInputAt: string | null; completedStepIds: string[]; steps: Array<{ id: string }> }> };
 type ViewerSnapshot = { projects: ScenarioProject[] };
 type Scenario = { id: string; frames: Array<Record<string, unknown>> };
 
 import { FactorioDatabase } from "../../src/Database.ts";
 import { discoverPipeline, snapshotDefinition } from "../../src/Pipeline.ts";
 import { ConveyorStore } from "../../src/Store.ts";
-import { projectHasActiveWork } from "../../src/ViewerComponents.ts";
+import { projectHasActiveWork, sortProjects } from "../../src/ViewerComponents.ts";
 import { createViewSnapshot } from "../../src/ViewerServer.ts";
 import { createPipeline } from "../../tests/Fixtures.ts";
 import { mkdirSync, renameSync } from "node:fs";

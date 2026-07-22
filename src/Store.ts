@@ -48,6 +48,28 @@ export class ConveyorStore {
     return row?.value ?? "cursor";
   }
 
+  activeProjectDays(): number {
+    const row = this.database.connection.prepare(settingSelect).get("activeProjectDays") as { value?: string } | undefined;
+    const value = Number(row?.value ?? "7");
+    return Number.isInteger(value) && value >= 1 && value <= 365 ? value : 7;
+  }
+
+  sortProjectsByProgress(): boolean {
+    const row = this.database.connection.prepare(settingSelect).get("sortProjectsByProgress") as { value?: string } | undefined;
+    return row?.value !== "false";
+  }
+
+  setActiveProjectDays(days: number): number {
+    if (!Number.isInteger(days) || days < 1 || days > 365) throw new Error("Active project days must be an integer from 1 to 365.");
+    this.database.connection.prepare(settingUpsert).run("activeProjectDays", String(days), this.now());
+    return this.activeProjectDays();
+  }
+
+  setSortProjectsByProgress(enabled: boolean): boolean {
+    this.database.connection.prepare(settingUpsert).run("sortProjectsByProgress", String(enabled), this.now());
+    return this.sortProjectsByProgress();
+  }
+
   setOpener(opener: string): string {
     if (opener !== "cursor") throw new Error(`Unsupported opener: ${opener}.`);
     return this.database.transaction(() => {
