@@ -99,7 +99,7 @@ export type Receipt = {
   stepOrder: number;
   attempt: number;
   status: ReceiptStatus;
-  executionKind: "automated" | "imported";
+  executionKind: "automated" | "human" | "imported";
   adapter: string;
   model: string | null;
   reasoningEffort: string | null;

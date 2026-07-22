@@ -118,7 +118,10 @@ entry/exit SHA-256 content hash used for that execution.
 
 The exit Markdown selects the smallest completion rule needed by a pip:
 
-- a blank exit file advances when the agent task completes successfully;
+- when entry contains work and exit is blank, the pip advances when the agent
+  task completes successfully;
+- when a `human.*` pip has both entry and exit blank, it is a human waiting pip:
+  Factorio pauses there without allocating an agent harness session;
 - local Markdown links declare required artifacts, and the pip advances when
   every linked path exists beneath the execution workspace; and
 - non-empty prose without local links retains the legacy exit-classifier
@@ -135,6 +138,12 @@ Factorio records the verified files as receipt output artifacts. Missing files
 leave the blob at the same pip with an `Awaiting declared artifacts` reason;
 they are not converted into a product-level failure. HTTP links, anchors, and
 paths outside the execution workspace do not count as artifact declarations.
+
+This is enough for a simple fan-out / fan-in conveyor. Work pips can produce
+separate artifacts, an empty human pip can hold the blob for a choice, and a
+later work pip receives the still-valid artifact references as fan-in input.
+Approving an empty human pip writes an append-only `human-approval` receipt and
+moves to the next pip without invoking the configured agent harness.
 
 If an older attempt already produced its declared artifact before an optional
 evaluator or provider process failed, verify the current checked-in definition
@@ -385,6 +394,29 @@ Feedback and approval unpause the blob so the service can resume its current
 external task. Approval requires at least one evidence reference. The prompt
 still decides whether the step passes; Factorio only supplies and records the
 human evidence.
+
+At an empty human pip, feedback can instead target an earlier work pip for one
+deliberate iteration. Factorio invalidates that work pip and everything after
+it for progression, retains the old receipts for history, and records the
+feedback on the target pip:
+
+```sh
+npx axi-factorio feedback account-export-1 "Make the hierarchy calmer" \
+  --evidence voice-note:2 \
+  --rerun codex.explore-presentation \
+  --no-run
+npx axi-factorio step account-export-1
+```
+
+When the revised work returns to the empty human pip, approval advances it
+without an agent run:
+
+```sh
+npx axi-factorio approve account-export-1 \
+  --note "Use the revised direction" \
+  --evidence human:chosen \
+  --no-run
+```
 
 To record human input without scheduling continuous execution, add `--no-run`,
 then request exactly one receipt separately:

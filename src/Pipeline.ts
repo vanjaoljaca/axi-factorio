@@ -19,6 +19,12 @@ export function snapshotDefinition(step: StepDefinition, pipelinePath: string): 
   return { gitSha, contentHash, entry, exit };
 }
 
+export function isHumanPip(step: StepDefinition): boolean {
+  return step.id.startsWith("human.")
+    && !readFileSync(step.entryPath, "utf8").trim()
+    && !readFileSync(step.exitPath, "utf8").trim();
+}
+
 export function requireStep(steps: StepDefinition[], stepId: string): StepDefinition {
   const step = steps.find((candidate) => candidate.id === stepId);
   if (!step) throw new Error(`Pipeline step ${stepId} was not found.`);

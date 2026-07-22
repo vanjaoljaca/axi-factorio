@@ -287,8 +287,27 @@ export class ConveyorStore {
     return this.appendHumanInput(blobId, "feedback", text, evidence, schedule);
   }
 
+  addHumanFeedbackForRerun(
+    blobId: string,
+    target: StepDefinition,
+    steps: StepDefinition[],
+    text: string,
+    evidence: string[] = [],
+    schedule = true,
+  ): HumanInput {
+    if (!text.trim()) throw new Error("Human feedback cannot be empty.");
+    return this.database.transaction(() =>
+      this.rerunFromHumanPip(blobId, target, steps, text, evidence, schedule));
+  }
+
   approveHumanGate(blobId: string, text: string, evidence: string[], schedule = true): HumanInput {
     if (!evidence.length) throw new Error("Human approval requires at least one evidence reference.");
+    const blob = this.requireBlob(blobId);
+    const steps = discoverPipeline(blob.pipelinePath);
+    const step = steps.find((candidate) => candidate.id === blob.state);
+    if (step && isHumanPip(step)) {
+      return this.database.transaction(() => this.completeHumanPip(blob, step, steps, text, evidence, schedule));
+    }
     return this.appendHumanInput(blobId, "approval", text, evidence, schedule);
   }
 
@@ -670,6 +689,12 @@ export class ConveyorStore {
       return;
     }
     const state = nextStepId ?? "complete";
+    if (nextStepId && this.humanPip(receipt.blobId, nextStepId)) {
+      this.database.connection.prepare(blobAdvanceToHumanUpdate).run(
+        state, receipt.stepId, receipt.stepOrder, state, this.now(), receipt.blobId,
+      );
+      return;
+    }
     this.database.connection.prepare(blobAdvanceUpdate).run(
       state, 0, nextStepId ? continueRun : 0, 0,
       receipt.stepId, receipt.stepOrder, this.now(), receipt.blobId,
@@ -701,6 +726,94 @@ export class ConveyorStore {
       );
       return this.requireHumanInput(id);
     });
+  }
+
+  private rerunFromHumanPip(
+    blobId: string,
+    target: StepDefinition,
+    steps: StepDefinition[],
+    text: string,
+    evidence: string[],
+    schedule: boolean,
+  ): HumanInput {
+    const blob = this.requireBlob(blobId);
+    const current = steps.find((step) => step.id === blob.state);
+    if (!current || !isHumanPip(current)) throw new Error("Targeted rerun feedback requires a human waiting pip.");
+    if (isHumanPip(target)) throw new Error("Targeted rerun feedback requires a Codex-work pip.");
+    if (target.order >= current.order) throw new Error("Targeted rerun feedback must select an earlier pip.");
+    if (this.hasRunningReceipt(blob.id)) throw new Error("Human feedback cannot be added while a receipt is running.");
+    const input = this.insertHumanInput(blob, target.id, "feedback", text, evidence);
+    const at = this.now();
+    this.invalidateReceipts(blob.id, target, steps, at);
+    const previous = this.previousValidReceipt(blob.id, target, steps);
+    this.database.connection.prepare(blobRewindUpdate).run(
+      target.id, previous?.stepId ?? null, previous?.stepOrder ?? null, target.id, at, blob.id,
+    );
+    if (schedule) this.database.connection.prepare(blobStepUpdate).run(at, blob.id);
+    return input;
+  }
+
+  private completeHumanPip(
+    blob: Blob,
+    step: StepDefinition,
+    steps: StepDefinition[],
+    text: string,
+    evidence: string[],
+    schedule: boolean,
+  ): HumanInput {
+    if (blob.humanGateStepId !== step.id || !blob.paused) throw new Error("This human pip is not waiting for approval.");
+    if (this.hasRunningReceipt(blob.id)) throw new Error("Human approval cannot be added while a receipt is running.");
+    const input = this.insertHumanInput(blob, step.id, "approval", text, evidence);
+    this.database.connection.prepare(blobHumanGateUpdate).run(step.id, input.id, 1, 0, this.now(), blob.id);
+    const current = this.requireBlob(blob.id);
+    const receipt = this.insertReceipt(current, {
+      blobId: blob.id, step, definition: snapshotDefinition(step, blob.pipelinePath),
+      adapter: "human-approval", model: null, inputArtifacts: this.inputArtifactsFor(blob.id),
+    });
+    const finishedAt = this.now();
+    this.database.connection.prepare(humanReceiptCompleteUpdate).run(
+      JSON.stringify(evidence), "Human approved this pip.", finishedAt, finishedAt, receipt.id,
+    );
+    this.advanceHumanPip(current, receipt, steps, schedule);
+    return this.requireHumanInput(input.id);
+  }
+
+  private advanceHumanPip(blob: Blob, receipt: Receipt, steps: StepDefinition[], schedule: boolean): void {
+    const index = steps.findIndex((step) => step.id === receipt.stepId);
+    const next = steps[index + 1] ?? null;
+    if (!next) {
+      this.database.connection.prepare(blobCompleteUpdate).run(this.now(), blob.id);
+      return;
+    }
+    if (isHumanPip(next)) {
+      this.database.connection.prepare(blobAdvanceToHumanUpdate).run(
+        next.id, receipt.stepId, receipt.stepOrder, next.id, this.now(), blob.id,
+      );
+      return;
+    }
+    this.database.connection.prepare(blobAdvanceUpdate).run(
+      next.id, 0, Number(schedule), 0, receipt.stepId, receipt.stepOrder, this.now(), blob.id,
+    );
+  }
+
+  private insertHumanInput(
+    blob: Blob,
+    stepId: string,
+    kind: HumanInputKind,
+    text: string,
+    evidence: string[],
+  ): HumanInput {
+    const id = randomUUID();
+    this.database.connection.prepare(humanInputInsert).run(
+      id, blob.id, stepId, kind, text, JSON.stringify(evidence), this.now(),
+    );
+    return this.requireHumanInput(id);
+  }
+
+  private humanPip(blobId: string, stepId: string): boolean {
+    const blob = this.requireBlob(blobId);
+    const step = discoverPipeline(blob.pipelinePath).find((candidate) => candidate.id === stepId);
+    return Boolean(step && isHumanPip(step));
   }
 
   private continuationThreadFor(blobId: string, stepId: string): string | null {
@@ -1195,6 +1308,10 @@ const blobAdvanceUpdate = `UPDATE blobs SET state = ?, paused = ?, runRequested 
   singleTransitionRequested = ?, lastCompletedStepId = ?,
   lastCompletedOrder = ?, forcedStepId = NULL, humanGateStepId = NULL,
   humanGateApprovalInputId = NULL, updatedAt = ? WHERE id = ?`;
+const blobAdvanceToHumanUpdate = `UPDATE blobs SET state = ?, paused = 1, runRequested = 0,
+  singleTransitionRequested = 0, lastCompletedStepId = ?, lastCompletedOrder = ?,
+  forcedStepId = NULL, humanGateStepId = ?, humanGateApprovalInputId = NULL,
+  updatedAt = ? WHERE id = ?`;
 const blobRewindUpdate = `UPDATE blobs SET state = ?, paused = 0, lastCompletedStepId = ?,
   lastCompletedOrder = ?, forcedStepId = ?, humanGateStepId = NULL,
   humanGateApprovalInputId = NULL, runRequested = 0, singleTransitionRequested = 0,
@@ -1239,6 +1356,9 @@ const receiptMetricsUpdate = `UPDATE receipts SET inputTokens = COALESCE(?, inpu
   totalTokens = COALESCE(?, totalTokens) WHERE id = ?`;
 const receiptCompleteUpdate = `UPDATE receipts SET status = ?, outputArtifactsJson = ?,
   externalRunId = ?, reason = ?, finishedAt = ? WHERE id = ?`;
+const humanReceiptCompleteUpdate = `UPDATE receipts SET status = 'advance', executionKind = 'human',
+  adapter = 'human-approval', outputArtifactsJson = ?, reason = ?, currentOperation = 'Human approval',
+  lastProgressAt = ?, finishedAt = ? WHERE id = ?`;
 const receiptFailureUpdate = "UPDATE receipts SET status = 'failed', error = ?, finishedAt = ? WHERE id = ?";
 const receiptInterruptUpdate = `UPDATE receipts SET status = 'interrupted',
   error = ?, finishedAt = ? WHERE id = ?`;
@@ -1439,7 +1559,7 @@ export type ProjectRemovalPreview = {
 export type ProjectRemovalResult = ProjectRemovalPreview & { evidence: string[]; removedAt: string };
 import type { FactorioDatabase } from "./Database.ts";
 import { createHash, randomUUID } from "node:crypto";
-import { discoverPipeline } from "./Pipeline.ts";
+import { discoverPipeline, isHumanPip, snapshotDefinition } from "./Pipeline.ts";
 import { dirname, isAbsolute, relative } from "node:path";
 import { realpathSync, statSync } from "node:fs";
 

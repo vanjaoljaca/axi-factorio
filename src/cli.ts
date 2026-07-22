@@ -323,12 +323,23 @@ function armHumanReview(args: string[], store: ConveyorStore, json: boolean): vo
 }
 
 function addHumanFeedback(args: string[], store: ConveyorStore, json: boolean): void {
-  const parsed = parseArgs(args, { "--evidence": "value", "--no-run": "boolean" });
+  const parsed = parseArgs(args, {
+    "--evidence": "value", "--no-run": "boolean", "--rerun": "value",
+  });
   requirePositionals(parsed, 2, "feedback requires a blob ID and feedback text.");
   const schedule = !parsed.flags["--no-run"];
-  const input = store.addHumanFeedback(
-    parsed.positionals[0], parsed.positionals[1], parsed.flags["--evidence"] ?? [], schedule,
-  );
+  const rerun = firstFlag(parsed, "--rerun");
+  const blob = store.getBlob(parsed.positionals[0]);
+  if (!blob) throw new Error(`Blob ${parsed.positionals[0]} was not found.`);
+  const steps = discoverPipeline(blob.pipelinePath);
+  const input = rerun
+    ? store.addHumanFeedbackForRerun(
+      blob.id, requireStep(steps, rerun), steps, parsed.positionals[1],
+      parsed.flags["--evidence"] ?? [], schedule,
+    )
+    : store.addHumanFeedback(
+      blob.id, parsed.positionals[1], parsed.flags["--evidence"] ?? [], schedule,
+    );
   printOutput({
     ok: `feedback ${input.blobId} -> ${input.stepId}`,
     scheduled: schedule,
@@ -957,8 +968,8 @@ Examples:
   review: commandHelp("axi-factorio review BLOB_ID [--note TEXT]", ["--note TEXT (default: empty)"], [
     "axi-factorio review <id>", "axi-factorio review <id> --note \"<note>\"",
   ]),
-  feedback: commandHelp("axi-factorio feedback BLOB_ID \"TEXT\" [--evidence REF...] [--no-run]", ["--evidence REF (repeatable)", "--no-run (record without scheduling)"], [
-    "axi-factorio feedback <id> \"<feedback>\"", "axi-factorio feedback <id> \"<feedback>\" --evidence <ref> --no-run",
+  feedback: commandHelp("axi-factorio feedback BLOB_ID \"TEXT\" [--evidence REF...] [--rerun PIP_ID] [--no-run]", ["--evidence REF (repeatable)", "--rerun PIP_ID (rewind an earlier work pip)", "--no-run (record without scheduling)"], [
+    "axi-factorio feedback <id> \"<feedback>\" --rerun codex.explore --no-run",
   ]),
   approve: commandHelp("axi-factorio approve BLOB_ID --evidence REF... [--note TEXT] [--no-run]", ["--evidence REF (required, repeatable)", "--note TEXT (default: empty)", "--no-run (record without scheduling)"], [
     "axi-factorio approve <id> --evidence <ref>", "axi-factorio approve <id> --evidence <git-head-ref> --note \"<note>\" --no-run",
