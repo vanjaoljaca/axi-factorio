@@ -199,7 +199,7 @@ npm run build
 
 This recreates `release/` with:
 
-- `axi-factorio-0.1.0-rc.48.tgz`, the installable package;
+- `axi-factorio-0.1.0-rc.49.tgz`, the installable package;
 - `SHA256SUMS`, for artifact verification; and
 - `INSTALL.md`, with direct and vendored installation commands.
 
@@ -211,7 +211,7 @@ Do not use `npm link` for a consuming project. Install the exact tarball so
 Install the exact candidate in the consuming npm project:
 
 ```sh
-npm install --save-exact /path/to/axi-factorio-0.1.0-rc.48.tgz
+npm install --save-exact /path/to/axi-factorio-0.1.0-rc.49.tgz
 ```
 
 From the consuming project root, the defaults are:
@@ -352,6 +352,22 @@ external task. Approval requires at least one evidence reference. The prompt
 still decides whether the step passes; Factorio only supplies and records the
 human evidence.
 
+To record human input without scheduling continuous execution, add `--no-run`,
+then request exactly one receipt separately:
+
+```sh
+npx axi-factorio feedback account-export-1 "Proceed for one bounded attempt" \
+  --evidence task:authorization-1 \
+  --no-run
+npx axi-factorio step account-export-1
+```
+
+The first command durably records the input and unlocks the human gate while
+leaving `runRequested` false. The second grants a one-receipt budget without
+changing the blob's preferred continuous mode. Use `approve --no-run` instead
+when the evidence is approval of the current step; feedback alone does not
+pretend that approval occurred.
+
 Relocating an existing blob to a new app workspace is deliberate and audited:
 
 ```sh
@@ -391,7 +407,7 @@ harness adds only the Git-owned state required to commit through repeatable
 folders. The assigned workspace must equal Git's reported work root; non-Git
 workspaces retain their previous behavior.
 
-Opening an older database with rc.48 migrates projects, receipt
+Opening an older database with rc.49 migrates projects, receipt
 provenance, durable execution-control columns, blob revisions, and immutable
 attempt evidence, plus durable local-endpoint process leases automatically. Existing blobs receive an
 `executionWorkspaceRoot` equal to their current app root, preserving prior

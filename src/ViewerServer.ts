@@ -250,11 +250,11 @@ function learningMutation(
     return null;
   }
   if (action === "feedback") {
-    store.addHumanFeedback(blob.id, text(body.text), stringList(body.evidence));
+    store.addHumanFeedback(blob.id, text(body.text), stringList(body.evidence), body.schedule !== false);
     return null;
   }
   if (action === "approve") {
-    store.approveHumanGate(blob.id, text(body.text), stringList(body.evidence));
+    store.approveHumanGate(blob.id, text(body.text), stringList(body.evidence), body.schedule !== false);
     return null;
   }
   if (action === "reset-endpoint") {

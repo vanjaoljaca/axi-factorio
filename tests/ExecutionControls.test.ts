@@ -185,6 +185,29 @@ test("one bounded retry preserves continuous preference without creating a third
   fixture.database.close();
 });
 
+test("record-only feedback followed by Step creates one bounded receipt at a human gate", async () => {
+  const fixture = createExecutionFixture(["g1.review", "g2.finish"], ["blocked", "advance"]);
+  fixture.store.createBlob("blob-1", blobInput(fixture));
+  fixture.store.armHumanGate("blob-1", "Review required.");
+  fixture.store.requestContinuous("blob-1");
+  fixture.store.requestStep("blob-1");
+  await fixture.runner.runOnce();
+
+  fixture.store.addHumanFeedback("blob-1", "Proceed once.", ["human:authorized"], false);
+  assert.deepEqual(executionState(fixture), ["g1.review", false, false]);
+  assert.equal(fixture.store.getBlob("blob-1")?.executionMode, "continuous");
+
+  fixture.store.requestStep("blob-1");
+  await fixture.runner.runOnce();
+
+  const receipts = fixture.store.listReceipts("blob-1");
+  assert.deepEqual(receipts.map((receipt) => receipt.status), ["blocked", "blocked"]);
+  assert.equal(receipts[1].continuationThreadId, receipts[0].externalRunId);
+  assert.deepEqual(executionState(fixture), ["g1.review", true, false]);
+  assert.equal(await fixture.runner.runOnce(), false);
+  fixture.database.close();
+});
+
 test("execution mode and requested work survive a database restart", async () => {
   const pipeline = createPipeline(["g1.first", "g2.second"]);
   const databasePath = join(pipeline.root, "factorio.sqlite");

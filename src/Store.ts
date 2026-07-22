@@ -275,14 +275,19 @@ export class ConveyorStore {
     return this.appendHumanInput(blobId, "review", text, []);
   }
 
-  addHumanFeedback(blobId: string, text: string, evidence: string[] = []): HumanInput {
+  addHumanFeedback(
+    blobId: string,
+    text: string,
+    evidence: string[] = [],
+    schedule = true,
+  ): HumanInput {
     if (!text.trim()) throw new Error("Human feedback cannot be empty.");
-    return this.appendHumanInput(blobId, "feedback", text, evidence);
+    return this.appendHumanInput(blobId, "feedback", text, evidence, schedule);
   }
 
-  approveHumanGate(blobId: string, text: string, evidence: string[]): HumanInput {
+  approveHumanGate(blobId: string, text: string, evidence: string[], schedule = true): HumanInput {
     if (!evidence.length) throw new Error("Human approval requires at least one evidence reference.");
-    return this.appendHumanInput(blobId, "approval", text, evidence);
+    return this.appendHumanInput(blobId, "approval", text, evidence, schedule);
   }
 
   rewindBlob(blobId: string, target: StepDefinition, steps: StepDefinition[]): BlobMutationResult {
@@ -674,6 +679,7 @@ export class ConveyorStore {
     kind: HumanInputKind,
     text: string,
     evidence: string[],
+    schedule = true,
   ): HumanInput {
     return this.database.transaction(() => {
       const blob = this.requireBlob(blobId);
@@ -684,7 +690,7 @@ export class ConveyorStore {
         id, blob.id, blob.state, kind, text, JSON.stringify(evidence), this.now(),
       );
       const approvalId = kind === "approval" ? id : null;
-      const runRequested = kind === "review" ? Number(blob.runRequested) : 1;
+      const runRequested = kind === "review" ? Number(blob.runRequested) : Number(schedule);
       if (kind !== "review") this.database.connection.prepare(localEndpointLeaseStopByBlob)
         .run(kind === "approval" ? "Human approved review." : "Human rejected with feedback.", this.now(), blob.id);
       this.database.connection.prepare(blobHumanGateUpdate).run(

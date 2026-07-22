@@ -266,6 +266,29 @@ test("human feedback and approval append evidence to the current step", () => {
   ]);
 });
 
+test("feedback --no-run records human input before a separate bounded Step", () => {
+  const fixture = createCliFixture();
+  runCli(fixture, [
+    "add", "blob-bounded", "Review me once", "--pipeline", fixture.pipelinePath,
+    "--cwd", fixture.root, "--json",
+  ]);
+  runCli(fixture, ["review", "blob-bounded", "--note", "Await decision", "--json"]);
+
+  const feedback = JSON.parse(runCli(fixture, [
+    "feedback", "blob-bounded", "Proceed once", "--evidence", "human:authorized",
+    "--no-run", "--json",
+  ]).stdout);
+  const held = JSON.parse(runCli(fixture, ["show", "blob-bounded", "--json"]).stdout);
+  runCli(fixture, ["step", "blob-bounded", "--json"]);
+  const stepped = JSON.parse(runCli(fixture, ["show", "blob-bounded", "--json"]).stdout);
+
+  assert.equal(feedback.scheduled, false);
+  assert.equal(held.blob.runRequested, false);
+  assert.equal(held.humanInputs.at(-1).text, "Proceed once");
+  assert.equal(stepped.blob.runRequested, true);
+  assert.equal(stepped.blob.executionMode, "continuous");
+});
+
 test("adopt imports attested prior steps and positions existing work", () => {
   const fixture = createCliFixture();
   writeStep(fixture.pipelinePath, 1, "dev.build");

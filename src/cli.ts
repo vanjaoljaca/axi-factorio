@@ -298,21 +298,34 @@ function armHumanReview(args: string[], store: ConveyorStore, json: boolean): vo
 }
 
 function addHumanFeedback(args: string[], store: ConveyorStore, json: boolean): void {
-  const parsed = parseArgs(args, { "--evidence": "value" });
+  const parsed = parseArgs(args, { "--evidence": "value", "--no-run": "boolean" });
   requirePositionals(parsed, 2, "feedback requires a blob ID and feedback text.");
+  const schedule = !parsed.flags["--no-run"];
   const input = store.addHumanFeedback(
-    parsed.positionals[0], parsed.positionals[1], parsed.flags["--evidence"] ?? [],
+    parsed.positionals[0], parsed.positionals[1], parsed.flags["--evidence"] ?? [], schedule,
   );
-  printOutput({ ok: `feedback ${input.blobId} -> ${input.stepId}`, humanInput: input }, json);
+  printOutput({
+    ok: `feedback ${input.blobId} -> ${input.stepId}`,
+    scheduled: schedule,
+    humanInput: input,
+  }, json);
 }
 
 function approveHumanReview(args: string[], store: ConveyorStore, json: boolean): void {
-  const parsed = parseArgs(args, { "--note": "value", "--evidence": "value" });
+  const parsed = parseArgs(args, {
+    "--note": "value", "--evidence": "value", "--no-run": "boolean",
+  });
   requirePositionals(parsed, 1, "approve requires one blob ID.");
+  const schedule = !parsed.flags["--no-run"];
   const input = store.approveHumanGate(
-    parsed.positionals[0], firstFlag(parsed, "--note") ?? "", parsed.flags["--evidence"] ?? [],
+    parsed.positionals[0], firstFlag(parsed, "--note") ?? "",
+    parsed.flags["--evidence"] ?? [], schedule,
   );
-  printOutput({ ok: `approve ${input.blobId} -> ${input.stepId}`, humanInput: input }, json);
+  printOutput({
+    ok: `approve ${input.blobId} -> ${input.stepId}`,
+    scheduled: schedule,
+    humanInput: input,
+  }, json);
 }
 
 function resetLocalEndpoint(args: string[], store: ConveyorStore, json: boolean): void {
@@ -785,7 +798,7 @@ function serviceAbortController(): AbortController {
 }
 
 function printVersion(): void {
-  process.stdout.write("axi-factorio 0.1.0-rc.48\n");
+  process.stdout.write("axi-factorio 0.1.0-rc.49\n");
 }
 
 function helpCommand(args: string[]): string | undefined {
@@ -856,7 +869,7 @@ const receiptFields = [
 ];
 
 const helpText: Record<string, string> = {
-  root: `axi-factorio 0.1.0-rc.48
+  root: `axi-factorio 0.1.0-rc.49
 
 Usage: axi-factorio <command> [flags]
 Commands: project, add, adopt, relocate, bind-execution, list, status, show, receipts, play, step, stop, retry, review, feedback, approve, reset-endpoint, rebind-endpoint, rewind, kick, run, service, setup, init
@@ -909,11 +922,11 @@ Examples:
   review: commandHelp("axi-factorio review BLOB_ID [--note TEXT]", ["--note TEXT (default: empty)"], [
     "axi-factorio review <id>", "axi-factorio review <id> --note \"<note>\"",
   ]),
-  feedback: commandHelp("axi-factorio feedback BLOB_ID \"TEXT\" [--evidence REF...]", ["--evidence REF (repeatable)"], [
-    "axi-factorio feedback <id> \"<feedback>\"", "axi-factorio feedback <id> \"<feedback>\" --evidence <ref>",
+  feedback: commandHelp("axi-factorio feedback BLOB_ID \"TEXT\" [--evidence REF...] [--no-run]", ["--evidence REF (repeatable)", "--no-run (record without scheduling)"], [
+    "axi-factorio feedback <id> \"<feedback>\"", "axi-factorio feedback <id> \"<feedback>\" --evidence <ref> --no-run",
   ]),
-  approve: commandHelp("axi-factorio approve BLOB_ID --evidence REF... [--note TEXT]", ["--evidence REF (required, repeatable)", "--note TEXT (default: empty)"], [
-    "axi-factorio approve <id> --evidence <ref>", "axi-factorio approve <id> --evidence <git-head-ref> --note \"<note>\"",
+  approve: commandHelp("axi-factorio approve BLOB_ID --evidence REF... [--note TEXT] [--no-run]", ["--evidence REF (required, repeatable)", "--note TEXT (default: empty)", "--no-run (record without scheduling)"], [
+    "axi-factorio approve <id> --evidence <ref>", "axi-factorio approve <id> --evidence <git-head-ref> --note \"<note>\" --no-run",
   ]),
   "reset-endpoint": commandHelp("axi-factorio reset-endpoint BLOB_ID [--reason TEXT]", ["--reason TEXT (default: Local endpoint reset from CLI.)"], [
     "axi-factorio reset-endpoint <id>", "axi-factorio reset-endpoint <id> --reason \"<reason>\"",
