@@ -50,6 +50,7 @@ export type Blob = Omit<BlobInput, "executionWorkspaceRoot" | "pipelineId" | "pr
   paused: boolean;
   executionMode: ExecutionMode;
   runRequested: boolean;
+  singleTransitionRequested: boolean;
   lastCompletedStepId: string | null;
   lastCompletedOrder: number | null;
   forcedStepId: string | null;

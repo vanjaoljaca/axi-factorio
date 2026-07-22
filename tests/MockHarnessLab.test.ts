@@ -59,11 +59,17 @@ test("Workbench scenario catalog prepares every requested learning state", async
     const ids = lab.snapshot().scenarioCatalog.map((scenario) => scenario.id);
     assert.deepEqual(ids, [
       "first-attempt", "blob-edit", "prompt-edit", "rerun", "compare",
-      "retry", "blocked", "failure", "improved", "cancel-invalid",
+      "retry", "bounded-retry", "blocked", "failure", "improved", "cancel-invalid",
     ]);
 
     let snapshot = await lab.selectScenario("retry");
     assert.equal(snapshot.attempts.at(-1)?.decision, "retry");
+
+    snapshot = await lab.selectScenario("bounded-retry");
+    assert.equal(snapshot.receipts.length, 1);
+    assert.equal(snapshot.receipts[0].status, "retry");
+    assert.equal(snapshot.blob.executionMode, "continuous");
+    assert.equal(snapshot.blob.runRequested, false);
 
     snapshot = await lab.selectScenario("blocked");
     assert.equal(snapshot.attempts.at(-1)?.decision, "blocked");
@@ -97,16 +103,18 @@ test("Workbench mock lab exposes deterministic failure and retry", async () => {
   }
 });
 
-test("Workbench mock lab can stop continuous play after the active transition", async () => {
+test("Workbench mock lab can stop and terminalize the active transition", async () => {
   const lab = new MockHarnessLab();
   try {
     const playing = await lab.action("play");
     assert.equal(playing.blob.runRequested, true);
 
     const stopped = await lab.action("stop");
-    assert.equal(stopped.blob.state, "review.human");
+    assert.equal(stopped.blob.state, "build.first");
+    assert.equal(stopped.blob.paused, true);
     assert.equal(stopped.blob.runRequested, false);
     assert.equal(stopped.receipts.length, 1);
+    assert.equal(stopped.receipts[0].status, "interrupted");
   } finally {
     lab.dispose();
   }

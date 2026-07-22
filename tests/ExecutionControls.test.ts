@@ -34,14 +34,15 @@ test("continuous Play halts at a human gate and resumes in the same step", async
   fixture.database.close();
 });
 
-test("Step executes exactly one transition and stays stopped", async () => {
+test("Step executes one transition without replacing the preferred continuous mode", async () => {
   const fixture = createExecutionFixture(["g1.first", "g2.second", "g3.third"]);
   fixture.store.createBlob("blob-1", blobInput(fixture));
   fixture.store.requestStep("blob-1");
 
   assert.equal(await fixture.runner.runOnce(), true);
   assert.deepEqual(executionState(fixture), ["g2.second", false, false]);
-  assert.equal(fixture.store.getBlob("blob-1")?.executionMode, "step");
+  assert.equal(fixture.store.getBlob("blob-1")?.executionMode, "continuous");
+  assert.equal(fixture.store.getBlob("blob-1")?.singleTransitionRequested, false);
   assert.equal(await fixture.runner.runOnce(), false);
 
   fixture.store.requestStep("blob-1");
@@ -145,7 +146,7 @@ test("provider progress invalidates a stale terminal observation", async () => {
   fixture.database.close();
 });
 
-test("duplicate starts are idempotent and Stop prevents the next claim", async () => {
+test("Stop cancels an allocated receipt and prevents the next claim", async () => {
   const adapter = new ControlledAdapter();
   const fixture = createExecutionFixture(["g1.first", "g2.second"], [], adapter);
   fixture.store.createBlob("blob-1", blobInput(fixture));
@@ -157,12 +158,30 @@ test("duplicate starts are idempotent and Stop prevents the next claim", async (
   assert.equal(fixture.store.requestContinuous("blob-1").already, true);
   assert.throws(() => fixture.store.requestStep("blob-1"), /already running/);
   assert.equal(fixture.store.requestStop("blob-1").already, false);
-  adapter.release();
   await running;
 
-  assert.deepEqual(executionState(fixture), ["g2.second", false, false]);
+  assert.deepEqual(executionState(fixture), ["g1.first", true, false]);
   assert.equal(await fixture.runner.runOnce(), false);
   assert.equal(fixture.store.listReceipts("blob-1").length, 1);
+  assert.equal(fixture.store.listReceipts("blob-1")[0].status, "interrupted");
+  assert.equal(adapter.cancelled, true);
+  fixture.database.close();
+});
+
+test("one bounded retry preserves continuous preference without creating a third receipt", async () => {
+  const fixture = createExecutionFixture(["g1.first"], ["retry", "retry"]);
+  fixture.store.createBlob("blob-1", blobInput(fixture));
+  fixture.store.requestContinuous("blob-1");
+  fixture.store.requestStep("blob-1");
+
+  await fixture.runner.runOnce();
+
+  const blob = fixture.store.getBlob("blob-1")!;
+  assert.equal(blob.executionMode, "continuous");
+  assert.equal(blob.runRequested, false);
+  assert.equal(blob.singleTransitionRequested, false);
+  assert.equal(fixture.store.listReceipts("blob-1").length, 1);
+  assert.equal(await fixture.runner.runOnce(), false);
   fixture.database.close();
 });
 
@@ -249,6 +268,7 @@ class OutcomeHarness implements AgentHarness {
 }
 
 class ControlledAdapter extends OutcomeHarness {
+  cancelled = false;
   private resolve!: () => void;
   private readonly released = new Promise<void>((resolve) => {
     this.resolve = resolve;
@@ -265,6 +285,10 @@ class ControlledAdapter extends OutcomeHarness {
 
   release(): void {
     this.resolve();
+  }
+
+  override async cancel(): Promise<void> {
+    this.cancelled = true;
   }
 }
 

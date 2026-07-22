@@ -92,7 +92,7 @@ function frame(
 }
 
 const maxProbeFailures = 3;
-const safetyTimeoutMs = 40;
+const safetyTimeoutMs = 500;
 const runnerOptions = {
   reconcileEveryMs: 2,
   confirmTerminalAfterMs: 2,

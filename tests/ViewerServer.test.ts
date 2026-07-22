@@ -194,7 +194,8 @@ test("viewer execution API persists Play, Step, and Stop without duplicate reque
   assert.equal(played.already, false);
   assert.equal(replayed.already, true);
   assert.equal(stopped.blob.runRequested, false);
-  assert.equal(stepped.blob.executionMode, "step");
+  assert.equal(stepped.blob.executionMode, "continuous");
+  assert.equal(stepped.blob.singleTransitionRequested, true);
   assert.equal(stepped.blob.runRequested, true);
 });
 

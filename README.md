@@ -199,7 +199,7 @@ npm run build
 
 This recreates `release/` with:
 
-- `axi-factorio-0.1.0-rc.47.tgz`, the installable package;
+- `axi-factorio-0.1.0-rc.48.tgz`, the installable package;
 - `SHA256SUMS`, for artifact verification; and
 - `INSTALL.md`, with direct and vendored installation commands.
 
@@ -211,7 +211,7 @@ Do not use `npm link` for a consuming project. Install the exact tarball so
 Install the exact candidate in the consuming npm project:
 
 ```sh
-npm install --save-exact /path/to/axi-factorio-0.1.0-rc.47.tgz
+npm install --save-exact /path/to/axi-factorio-0.1.0-rc.48.tgz
 ```
 
 From the consuming project root, the defaults are:
@@ -262,10 +262,11 @@ npx axi-factorio stop account-export-1
 
 `play` persists a continuous run request. The service keeps claiming automatic
 steps until the blob reaches a human gate, fails, is stopped, or completes.
-`step` persists debug mode and permits exactly one harness receipt before
-stopping again. `stop` cancels queued work immediately; if a harness call is
-already running, that receipt is allowed to finish and no following transition
-is claimed. Mode and run-request state survive service and machine restarts.
+`step` permits exactly one harness receipt before stopping again without
+replacing the blob's preferred continuous mode. `stop` cancels queued work and
+gracefully cancels an allocated harness call; that same receipt terminalizes as
+interrupted and no following transition is claimed. Preference, one-shot budget,
+and run-request state survive service and machine restarts.
 Repeated identical requests are idempotent, and the dispatcher lease prevents
 duplicate concurrent claims.
 
@@ -390,7 +391,7 @@ harness adds only the Git-owned state required to commit through repeatable
 folders. The assigned workspace must equal Git's reported work root; non-Git
 workspaces retain their previous behavior.
 
-Opening an rc.4 through rc.24 database with rc.25 migrates projects, receipt
+Opening an older database with rc.48 migrates projects, receipt
 provenance, durable execution-control columns, blob revisions, and immutable
 attempt evidence, plus durable local-endpoint process leases automatically. Existing blobs receive an
 `executionWorkspaceRoot` equal to their current app root, preserving prior

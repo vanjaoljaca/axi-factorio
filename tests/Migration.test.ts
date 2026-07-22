@@ -26,7 +26,7 @@ test("rc.4 project cwd migrates to distinct project and pipeline roots", () => {
     receiptColumns.some((column) => column.name === name)));
   const blobColumns = database.connection.prepare("PRAGMA table_info(blobs)").all() as
     Array<{ name: string }>;
-  assert(["executionMode", "runRequested", "executionWorkspaceRoot"].every((name) =>
+  assert(["executionMode", "runRequested", "singleTransitionRequested", "executionWorkspaceRoot"].every((name) =>
     blobColumns.some((column) => column.name === name)));
   database.close();
 });

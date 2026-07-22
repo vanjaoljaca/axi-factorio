@@ -5,6 +5,7 @@ export class ConveyorRunner {
   private readonly reconcileEveryMs: number;
   private readonly confirmTerminalAfterMs: number;
   private readonly maxConsecutiveProbeErrors: number;
+  private readonly controlPollEveryMs: number;
   private readonly localEndpoints: LocalEndpointSupervisor | null;
 
   constructor(
@@ -20,6 +21,7 @@ export class ConveyorRunner {
     this.reconcileEveryMs = options.reconcileEveryMs ?? 30_000;
     this.confirmTerminalAfterMs = options.confirmTerminalAfterMs ?? 15_000;
     this.maxConsecutiveProbeErrors = options.maxConsecutiveProbeErrors ?? 3;
+    this.controlPollEveryMs = options.controlPollEveryMs ?? 100;
     this.localEndpoints = localEndpoints;
   }
 
@@ -163,6 +165,12 @@ export class ConveyorRunner {
       terminalStatus = status ?? null;
       log("receipt_completed", { receiptId: claim.receipt.id, status, blobState: blob.state });
     } catch (error) {
+      if (error instanceof RequestedStopError) {
+        cancellationReason = error.message;
+        requestCancel();
+        await cancelPromise;
+        return this.interrupt(claim, ownerId, error.message);
+      }
       if (signal?.aborted) {
         requestCancel();
         await cancelPromise;
@@ -257,12 +265,18 @@ export class ConveyorRunner {
     externalRunId: () => string | null,
     activity: () => number,
   ): Promise<HarnessResult> {
-    if (!this.harness.reconcile) return running;
     const settled = settle(running);
     let consecutiveProbeErrors = 0;
+    let nextReconcileAt = Date.now() + this.reconcileEveryMs;
+    const pollEveryMs = this.harness.reconcile
+      ? Math.min(this.controlPollEveryMs, this.reconcileEveryMs)
+      : this.controlPollEveryMs;
     while (true) {
-      const outcome = await Promise.race([settled, delay(this.reconcileEveryMs)]);
+      const outcome = await Promise.race([settled, delay(pollEveryMs)]);
       if (outcome) return unwrap(outcome);
+      if (!this.store.getBlob(claim.blob.id)?.runRequested) throw new RequestedStopError();
+      if (!this.harness.reconcile || Date.now() < nextReconcileAt) continue;
+      nextReconcileAt = Date.now() + this.reconcileEveryMs;
       const runId = externalRunId();
       if (!runId) continue;
       try {
@@ -447,10 +461,17 @@ class RecoverableHarnessLaunchError extends Error {
 
 class HarnessProbeError extends Error {}
 
+class RequestedStopError extends Error {
+  constructor() {
+    super("Stop requested while the receipt was running.");
+  }
+}
+
 type RunnerOptions = {
   reconcileEveryMs?: number;
   confirmTerminalAfterMs?: number;
   maxConsecutiveProbeErrors?: number;
+  controlPollEveryMs?: number;
 };
 
 type SettledHarness = { result: HarnessResult } | { error: unknown };

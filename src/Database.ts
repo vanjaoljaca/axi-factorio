@@ -74,6 +74,7 @@ export class FactorioDatabase {
     addColumn(this.connection, columns, "humanGateApprovalInputId", "TEXT");
     addColumn(this.connection, columns, "executionMode", "TEXT NOT NULL DEFAULT 'continuous'");
     addColumn(this.connection, columns, "runRequested", "INTEGER NOT NULL DEFAULT 0");
+    addColumn(this.connection, columns, "singleTransitionRequested", "INTEGER NOT NULL DEFAULT 0");
   }
 
   private migrateReceipts(): void {
@@ -145,6 +146,7 @@ const schema = `
     humanGateApprovalInputId TEXT,
     executionMode TEXT NOT NULL DEFAULT 'continuous',
     runRequested INTEGER NOT NULL DEFAULT 0,
+    singleTransitionRequested INTEGER NOT NULL DEFAULT 0,
     createdAt TEXT NOT NULL,
     updatedAt TEXT NOT NULL
   );
@@ -360,6 +362,7 @@ const columnTables: Record<string, string> = {
   humanGateApprovalInputId: "blobs",
   executionMode: "blobs",
   runRequested: "blobs",
+  singleTransitionRequested: "blobs",
   executionWorkspaceRoot: "blobs",
   continuationThreadId: "receipts",
   humanInputJson: "receipts",
