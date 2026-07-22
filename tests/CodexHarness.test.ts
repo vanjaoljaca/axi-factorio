@@ -94,6 +94,20 @@ test("isolates every Codex invocation from unrelated user MCP configuration", as
   assert(calls.every((call) => call.includes("--ignore-user-config")));
 });
 
+test("isolates the lifecycle reader from unrelated user MCP configuration", async () => {
+  const fixture = createAdapterFixture();
+
+  const state = await fixture.adapter.reconcile!({
+    runId: "receipt-1",
+    externalRunId: "thread-interrupted",
+    blob: adapterInput(fixture).blob,
+    step: adapterInput(fixture).step,
+  });
+
+  assert.equal(state.status, "interrupted");
+  assert.match(readFileSync(fixture.argsLog, "utf8"), /app-server -c mcp_servers=\{\} --stdio/u);
+});
+
 test("keeps entry, same-step continuation, and exit evaluation workspace-writable", async () => {
   const fixture = createAdapterFixture();
 
@@ -282,6 +296,13 @@ function readArgvCalls(fixture: AdapterFixture): string[][] {
 const fakeCodex = `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_CODEX_ARGS"
 printf '%s\\0' "$@" >> "$FAKE_CODEX_ARGV"
+if [ "$1" = "app-server" ]; then
+  IFS= read -r initialize
+  printf '%s\\n' '{"id":1,"result":{"userAgent":"factorio-test","codexHome":"/tmp","platformFamily":"unix","platformOs":"macos"}}'
+  IFS= read -r request
+  printf '%s\\n' '{"id":2,"result":{"thread":{"status":{"type":"notLoaded"},"updatedAt":1784704873,"turns":[{"id":"turn-empty","status":"interrupted","error":null,"completedAt":null,"items":[]}]}}}'
+  exit 0
+fi
 if [ "$FAKE_CODEX_MODE" = "malformed" ]; then
   printf '%s\\n' '{not-json}'
   exit 0

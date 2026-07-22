@@ -4,6 +4,7 @@ export class ConveyorRunner {
   private readonly instrumentation: HarnessInstrumentation;
   private readonly reconcileEveryMs: number;
   private readonly confirmTerminalAfterMs: number;
+  private readonly maxConsecutiveProbeErrors: number;
   private readonly localEndpoints: LocalEndpointSupervisor | null;
 
   constructor(
@@ -18,6 +19,7 @@ export class ConveyorRunner {
     this.instrumentation = instrumentation;
     this.reconcileEveryMs = options.reconcileEveryMs ?? 30_000;
     this.confirmTerminalAfterMs = options.confirmTerminalAfterMs ?? 15_000;
+    this.maxConsecutiveProbeErrors = options.maxConsecutiveProbeErrors ?? 3;
     this.localEndpoints = localEndpoints;
   }
 
@@ -253,11 +255,23 @@ export class ConveyorRunner {
   ): Promise<HarnessResult> {
     if (!this.harness.reconcile) return running;
     const settled = settle(running);
+    let consecutiveProbeErrors = 0;
     while (true) {
       const outcome = await Promise.race([settled, delay(this.reconcileEveryMs)]);
       if (outcome) return unwrap(outcome);
       const runId = externalRunId();
-      if (runId) await this.reconcileHarness(settled, claim, runId, activity);
+      if (!runId) continue;
+      try {
+        await this.reconcileHarness(settled, claim, runId, activity);
+        consecutiveProbeErrors = 0;
+      } catch (error) {
+        if (!(error instanceof HarnessProbeError)) throw error;
+        consecutiveProbeErrors += 1;
+        if (consecutiveProbeErrors < this.maxConsecutiveProbeErrors) continue;
+        throw new Error(
+          `External run ${runId} lifecycle probe failed ${consecutiveProbeErrors} consecutive times: ${error.message}`,
+        );
+      }
     }
   }
 
@@ -285,7 +299,7 @@ export class ConveyorRunner {
   private async readExternalState(
     claim: ClaimedExecution,
     externalRunId: string,
-  ): Promise<HarnessExternalState | null> {
+  ): Promise<HarnessExternalState> {
     try {
       const state = await this.harness.reconcile!({
         runId: claim.receipt.id, externalRunId, blob: claim.blob, step: claim.step,
@@ -299,7 +313,7 @@ export class ConveyorRunner {
       this.recordBoundary("reconcile", claim, {
         externalRunId, status: "probe-error", reason: errorMessage(error),
       });
-      return null;
+      throw new HarnessProbeError(errorMessage(error));
     }
   }
 
@@ -427,9 +441,12 @@ class RecoverableHarnessLaunchError extends Error {
   }
 }
 
+class HarnessProbeError extends Error {}
+
 type RunnerOptions = {
   reconcileEveryMs?: number;
   confirmTerminalAfterMs?: number;
+  maxConsecutiveProbeErrors?: number;
 };
 
 type SettledHarness = { result: HarnessResult } | { error: unknown };

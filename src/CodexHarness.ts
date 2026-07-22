@@ -359,7 +359,7 @@ export function classifyCodexLifecycleFailure(
 }
 
 async function readCodexThread(externalRunId: string): Promise<CodexThread> {
-  const child = spawn("codex", ["app-server", "--stdio"], { stdio: ["pipe", "pipe", "pipe"] });
+  const child = spawn("codex", lifecycleArgs, { stdio: ["pipe", "pipe", "pipe"] });
   const state = createAppServerState(child);
   sendAppServerRequest(child, 1, "initialize", initializeParams);
   return waitForThreadRead(child, state, externalRunId);
@@ -373,7 +373,7 @@ function waitForThreadRead(
   return new Promise((resolve, reject) => {
     const lines = createInterface({ input: child.stdout! });
     const timeout = setTimeout(
-      () => finishAppServer(child, lines, reject, new Error("Codex lifecycle probe timed out.")),
+      () => finishAppServer(child, lines, reject, lifecycleTimeoutError(state)),
       lifecycleProbeTimeoutMs,
     );
     child.stderr?.on("data", (chunk) => captureAppServerStderr(state, chunk));
@@ -438,6 +438,11 @@ function createAppServerState(_child: ChildProcess): AppServerState {
 
 function captureAppServerStderr(state: AppServerState, chunk: unknown): void {
   state.stderr = `${state.stderr}${String(chunk)}`.slice(-8_000);
+}
+
+function lifecycleTimeoutError(state: AppServerState): Error {
+  const stderr = state.stderr.trim();
+  return new Error(`Codex lifecycle probe timed out.${stderr ? ` stderr: ${stderr}` : ""}`);
 }
 
 function codexThreadState(thread: CodexThread, externalRunId: string): HarnessExternalState {
@@ -544,6 +549,7 @@ const exitSchemaPath = fileURLToPath(new URL("./exit-result.schema.json", import
 const terminationGraceMs = 2_000;
 const processCheckMs = 10;
 const lifecycleProbeTimeoutMs = 10_000;
+const lifecycleArgs = ["app-server", "-c", "mcp_servers={}", "--stdio"];
 const activeTurnFreshnessMs = 5 * 60_000;
 const initializeParams = {
   clientInfo: { name: "axi-factorio", title: "axi-factorio Codex harness", version: "0.1" },

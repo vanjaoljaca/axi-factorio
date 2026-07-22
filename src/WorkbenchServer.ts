@@ -186,6 +186,10 @@ function scenarioIndex(): object[] {
       description: "notLoaded container · fresh active turn · production receipt path",
     },
     {
+      id: "lifecycle-probe-failure", category: "Harness", name: "Lifecycle probe failure boundary",
+      description: "Probe timeout → bounded retries → honest terminal receipt",
+    },
+    {
       id: "interrupted-continuation-boundary", category: "Harness", name: "Fresh task after interruption",
       description: "same blob + same step · immutable failed receipt · new external task",
     },
@@ -258,6 +262,11 @@ async function scenario(url: URL): Promise<Scenario> {
   if (id === "codex-active-turn") {
     const { runCodexActiveTurnScenario } = await import("../test/harness/CodexActiveTurnScenario.ts");
     return runCodexActiveTurnScenario();
+  }
+  if (id === "lifecycle-probe-failure") {
+    const { runLifecycleProbeFailureScenario } =
+      await import("../test/harness/LifecycleProbeFailureScenario.ts");
+    return runLifecycleProbeFailureScenario();
   }
   if (id === "interrupted-continuation-boundary") {
     const { runInterruptedContinuationScenario } =

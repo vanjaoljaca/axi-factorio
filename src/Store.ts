@@ -571,6 +571,7 @@ export class ConveyorStore {
     attributes: Record<string, string | number | boolean>,
     at: string,
   ): void {
+    if (name === "axi_factorio.harness.reconcile" && attributes.status === "probe-error") return;
     const operation = telemetryOperation(name, attributes);
     this.database.connection.prepare(receiptProgressUpdate).run(operation, at, receiptId);
     if (attributes.eventType !== "metrics") return;
