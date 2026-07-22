@@ -51,7 +51,7 @@ test("Viewer active-project fold keeps vertical scrolling on the document", () =
   const source = readFileSync(join(import.meta.dirname, "..", "src", "ViewerServer.ts"), "utf8");
 
   assert.match(source, /Show all projects/u);
-  assert.match(source, /\.workspace\{overflow-x:auto;overflow-y:visible\}/u);
+  assert.match(source, /\.workspace:not\(\.plain\)\{overflow-y:clip\}/u);
   assert.match(source, /projectHasActiveWork/u);
   assert.doesNotMatch(source, /\.workspace\{[^}]*overflow-y:(auto|scroll)/u);
 });
