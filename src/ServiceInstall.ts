@@ -11,10 +11,13 @@ export function startServiceViewer(
       settled = true;
       error ? rejectViewer(error) : resolveViewer();
     };
-    const stop = (): void => server.close((error) => {
-      if (error && error.code !== "ERR_SERVER_NOT_RUNNING") finish(error);
-      else finish();
-    });
+    const stop = (): void => {
+      server.close((error) => {
+        if (error && error.code !== "ERR_SERVER_NOT_RUNNING") finish(error);
+        else finish();
+      });
+      server.closeAllConnections();
+    };
     server.once("error", (error) => {
       if (!controller.signal.aborted) controller.abort(error);
       finish(error);

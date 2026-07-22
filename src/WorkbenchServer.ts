@@ -10,7 +10,7 @@ type ViewSnapshot = {
   receipts: ViewReceipt[];
   assertions: { label: string; passed: boolean }[];
   evidenceCards?: { label: string; value: string }[];
-  visual?: LiveExecutionVisual | ViewerResilienceVisual | CursorActionVisual | LocalEndpointVisual | OverviewBoundaryVisual | ProjectRemovalVisual | AggregatePollingVisual | ActiveProjectsVisual | AxiValidationVisual;
+  visual?: LiveExecutionVisual | ViewerResilienceVisual | CursorActionVisual | LocalEndpointVisual | OverviewBoundaryVisual | ProjectRemovalVisual | AggregatePollingVisual | ActiveProjectsVisual | AxiValidationVisual | ServiceRecoveryVisual;
 };
 type Scenario = { id: string; frames: ViewSnapshot[] };
 type LiveExecutionVisual = {
@@ -63,6 +63,7 @@ type OverviewBoundaryVisual = {
 type ProjectRemovalVisual = import("../test/harness/ProjectRemovalScenario.ts").ProjectRemovalVisual;
 type AggregatePollingVisual = { kind: "aggregate-polling" };
 type ActiveProjectsVisual = { kind: "active-projects"; active: ScenarioProject[]; inactive: ScenarioProject[] };
+type ServiceRecoveryVisual = { kind: "service-recovery"; phase: import("../test/harness/CoupledServiceRecoveryScenario.ts").ServiceRecoveryPhase };
 type ScenarioProject = { id: string; name: string; blobs: Array<{ id: string; title: string; status: string; stepId: string; completedStepIds: string[] }> };
 
 const port = workbenchPort(process.argv);
@@ -73,6 +74,7 @@ const cursorActionScenario = new CursorActionScenario();
 const localEndpointScenario = new LocalEndpointScenario();
 const projectRemovalScenario = new ProjectRemovalScenario();
 const axiValidationScenario = new AxiValidationScenario();
+const coupledServiceRecoveryScenario = new CoupledServiceRecoveryScenario();
 const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? "/", `http://127.0.0.1:${port}`);
   try {
@@ -145,6 +147,12 @@ const server = createServer(async (request, response) => {
     }
     if (url.pathname === "/api/axi-validation/reset" && request.method === "POST") {
       return json(response, axiValidationScenario.reset());
+    }
+    if (url.pathname === "/api/coupled-service-recovery/play" && request.method === "POST") {
+      return json(response, await coupledServiceRecoveryScenario.play());
+    }
+    if (url.pathname === "/api/coupled-service-recovery/reset" && request.method === "POST") {
+      return json(response, coupledServiceRecoveryScenario.reset());
     }
     if (url.pathname.startsWith("/api/scenarios/")) return json(response, await scenario(url));
     if (url.pathname === "/") return html(response, workbenchHtml);
@@ -222,6 +230,10 @@ function scenarioIndex(): object[] {
       description: "Receipt ends → endpoint lease stays live → restart recovery → owned cleanup",
     },
     {
+      id: "coupled-service-recovery", category: "Service", name: "Coupled listener recovery",
+      description: "Play · listener closes · dispatcher exits · same receipt reconciles · Reset",
+    },
+    {
       id: "project-removal", category: "Store", name: "Safe project removal",
       description: "Preview exact graph · confirm with evidence · remove · Reset",
     },
@@ -285,6 +297,7 @@ async function scenario(url: URL): Promise<Scenario> {
   }
   if (id === "cursor-action") return cursorActionScenario.snapshot();
   if (id === "local-endpoint-supervisor") return localEndpointScenario.snapshot() as unknown as Scenario;
+  if (id === "coupled-service-recovery") return coupledServiceRecoveryScenario.snapshot() as unknown as Scenario;
   if (id === "project-removal") return projectRemovalScenario.snapshot() as unknown as Scenario;
   if (id === "aggregate-polling") return aggregatePollingScenario();
   if (id === "active-projects-fold") {
@@ -498,8 +511,11 @@ async function init(){[scenarios,tests]=await Promise.all([fetch("/api/scenarios
 function renderPickers(){const groups=Object.groupBy(scenarios,item=>item.category||"Other");byId("scenario-picker").innerHTML=Object.entries(groups).map(([category,items])=>'<optgroup label="'+safe(category)+'">'+items.map(item=>'<option value="'+safe(item.id)+'">'+safe(item.name)+'</option>').join("")+'</optgroup>').join("");byId("test-picker").innerHTML=tests.map(item=>'<option value="'+safe(item.id)+'">'+safe(item.category)+' · '+safe(item.name)+'</option>').join("")}
 async function load(){clearInterval(timer);const version=++loadVersion;if(source==="tests"){testRun=null;frames=[];renderTest();return}if(source==="lab"){lab=await fetch("/api/mock-lab").then(r=>r.json());if(version===loadVersion)renderLab();return}const data=source==="database"?await fetch("/api/database").then(r=>r.json()):await fetch("/api/scenarios/"+selected).then(r=>r.json());if(version!==loadVersion)return;frames=data.frames||[data];frame=frames.length-1;renderScenario()}
 function groups(steps){const result=[];for(const step of steps){const id=step.id.split(".")[0]||"pipeline",last=result.at(-1);if(last?.id===id)last.count++;else result.push({id,label:id,count:1})}return result}
-function renderScenario(){const snapshot=frames[frame];if(!snapshot)return;const interactive=["live-execution","cursor-action","local-endpoint","project-removal","aggregate-polling","active-projects","axi-validation"].includes(snapshot.visual?.kind);byId("title").textContent=snapshot.name;byId("description").textContent=snapshot.description;byId("frame").textContent=interactive?"Live temporary state":source==="scenario"?"Frame "+(frame+1)+" / "+frames.length:"Live database";byId("run").hidden=source!=="scenario"||interactive;byId("run").textContent="Run scenario";showFrameControls(source==="scenario"&&!interactive);byId("workspace").innerHTML=scenarioVisual(snapshot);renderEvidence(snapshot);byId("total").textContent=snapshot.visual?.kind==="axi-validation"?"Official 10-principle contract":snapshot.blobs.length+" blob"+(snapshot.blobs.length===1?"":"s")+" · "+snapshot.receipts.length+" receipts";if(snapshot.visual?.kind==="live-execution")wireLiveExecution(snapshot.visual);if(snapshot.visual?.kind==="cursor-action")wireCursorAction();if(snapshot.visual?.kind==="local-endpoint")wireLocalEndpoint();if(snapshot.visual?.kind==="project-removal")wireProjectRemoval();if(snapshot.visual?.kind==="aggregate-polling")wireAggregatePolling();if(snapshot.visual?.kind==="active-projects")wireActiveProjects();if(snapshot.visual?.kind==="axi-validation")wireAxiValidation(snapshot.visual)}
-function scenarioVisual(snapshot){if(snapshot.visual?.kind==="axi-validation")return axiValidationVisual(snapshot.visual);if(snapshot.visual?.kind==="live-execution")return liveExecutionVisual(snapshot);if(snapshot.visual?.kind==="cursor-action")return cursorActionVisual(snapshot);if(snapshot.visual?.kind==="local-endpoint")return localEndpointVisual(snapshot);if(snapshot.visual?.kind==="project-removal")return projectRemovalVisual(snapshot);if(snapshot.visual?.kind==="aggregate-polling")return aggregatePollingVisual();if(snapshot.visual?.kind==="active-projects")return activeProjectsVisual(snapshot.visual);if(snapshot.visual?.kind==="overview-boundary")return overviewBoundaryVisual(snapshot);if(snapshot.visual?.kind==="viewer-resilience")return viewerResilienceVisual(snapshot)+matrix(snapshot)+scenarioEvidence(snapshot);return matrix(snapshot)+scenarioEvidence(snapshot)}
+function renderScenario(){const snapshot=frames[frame];if(!snapshot)return;const interactive=["live-execution","cursor-action","local-endpoint","project-removal","aggregate-polling","active-projects","axi-validation","service-recovery"].includes(snapshot.visual?.kind);byId("title").textContent=snapshot.name;byId("description").textContent=snapshot.description;byId("frame").textContent=interactive?"Live temporary state":source==="scenario"?"Frame "+(frame+1)+" / "+frames.length:"Live database";byId("run").hidden=source!=="scenario"||interactive;byId("run").textContent="Run scenario";showFrameControls(source==="scenario"&&!interactive);byId("workspace").innerHTML=scenarioVisual(snapshot);renderEvidence(snapshot);byId("total").textContent=snapshot.visual?.kind==="axi-validation"?"Official 10-principle contract":snapshot.blobs.length+" blob"+(snapshot.blobs.length===1?"":"s")+" · "+snapshot.receipts.length+" receipts";if(snapshot.visual?.kind==="live-execution")wireLiveExecution(snapshot.visual);if(snapshot.visual?.kind==="cursor-action")wireCursorAction();if(snapshot.visual?.kind==="local-endpoint")wireLocalEndpoint();if(snapshot.visual?.kind==="project-removal")wireProjectRemoval();if(snapshot.visual?.kind==="aggregate-polling")wireAggregatePolling();if(snapshot.visual?.kind==="active-projects")wireActiveProjects();if(snapshot.visual?.kind==="axi-validation")wireAxiValidation(snapshot.visual);if(snapshot.visual?.kind==="service-recovery")wireServiceRecovery()}
+function scenarioVisual(snapshot){if(snapshot.visual?.kind==="service-recovery")return serviceRecoveryVisual(snapshot);if(snapshot.visual?.kind==="axi-validation")return axiValidationVisual(snapshot.visual);if(snapshot.visual?.kind==="live-execution")return liveExecutionVisual(snapshot);if(snapshot.visual?.kind==="cursor-action")return cursorActionVisual(snapshot);if(snapshot.visual?.kind==="local-endpoint")return localEndpointVisual(snapshot);if(snapshot.visual?.kind==="project-removal")return projectRemovalVisual(snapshot);if(snapshot.visual?.kind==="aggregate-polling")return aggregatePollingVisual();if(snapshot.visual?.kind==="active-projects")return activeProjectsVisual(snapshot.visual);if(snapshot.visual?.kind==="overview-boundary")return overviewBoundaryVisual(snapshot);if(snapshot.visual?.kind==="viewer-resilience")return viewerResilienceVisual(snapshot)+matrix(snapshot)+scenarioEvidence(snapshot);return matrix(snapshot)+scenarioEvidence(snapshot)}
+function serviceRecoveryVisual(snapshot){const phases=['ready','lease-lost','restarted','reconciled'],position=phases.indexOf(snapshot.visual.phase),labels=['Healthy unit','Lease lost','Listener closes','Receipt terminal'];return '<section class="endpoint-visual"><div class="endpoint-controls"><button class="play" data-service-recovery="play">Play</button><button data-service-recovery="reset">Reset</button><span>'+safe(snapshot.visual.phase==='stranded'?'Stranded parent · Viewer down':snapshot.visual.phase)+'</span></div><div class="endpoint-flow">'+labels.map((label,index)=>'<div class="endpoint-phase '+(snapshot.visual.phase==='stranded'&&index===2?'current ':index<position?'done ':index===position?'current ':'')+'"><i></i>'+label+'</div>').join('')+'</div>'+matrix(snapshot)+scenarioEvidence(snapshot)+'</section>'}
+function wireServiceRecovery(){document.querySelectorAll('[data-service-recovery]').forEach(button=>button.onclick=()=>serviceRecoveryAction(button.dataset.serviceRecovery))}
+async function serviceRecoveryAction(action){const response=await fetch('/api/coupled-service-recovery/'+action,{method:'POST'});if(!response.ok)return showScenarioError(await response.json());frames=(await response.json()).frames;frame=0;renderScenario();if(action==='play')startReplay(renderScenario)}
 function aggregatePollingVisual(){const progress=[0,25,50,75,100];return '<section class="aggregate-demo"><div class="aggregate-demo-controls"><button class="play" data-aggregate-action="play">Play polling</button><button data-aggregate-action="reset">Reset</button><div class="aggregate-demo-health" id="aggregate-health"><i></i><span>Ready · continuous arcs start at 12 o’clock</span></div></div><div class="aggregate-demo-frame"><div class="aggregate-demo-row" style="grid-template-columns:190px repeat(5,minmax(96px,1fr)) 38px"><div class="aggregate-demo-name">Progress contract</div>'+progress.map((percent,index)=>'<div class="aggregate-demo-stage '+(index===progress.length-1?'last':'')+'"><span>'+percent+'%</span><i class="aggregate-bead" data-aggregate-key="demo::'+index+'" data-aggregate-state="initial" style="--composition:'+demoComposition(index)+'" title="'+percent+'% complete · clockwise from 12 o’clock" aria-label="'+percent+'% complete · clockwise from 12 o’clock"></i></div>').join('')+'<button class="aggregate-demo-disclosure" aria-label="Expand project Progress contract" title="Expand project"><span aria-hidden="true">‹</span></button></div></div><div class="aggregate-demo-legend"><span><i class="complete"></i>Completed arc</span><span><i></i>Neutral remainder</span><span>No separators or spokes</span></div></section>'}
 function activeProjectsVisual(visual){return '<section class="active-projects-demo"><div class="active-projects-controls"><button class="play" data-active-action="play">Play refreshes</button><button data-active-action="reset">Reset</button><span id="active-projects-health">7-day meaningful activity · running and attention always visible</span></div><div class="active-projects-table" id="active-projects-table">'+visual.active.map(activeProjectRow).join('')+'<div class="active-projects-fold"><button data-active-action="toggle" aria-expanded="false"><span aria-hidden="true">⌄</span>Show all projects <small>'+visual.inactive.length+'</small></button></div><div data-inactive-projects hidden>'+visual.inactive.map(activeProjectRow).join('')+'</div></div></section>'}
 function axiValidationVisual(visual){const passed=visual.principles.filter(item=>item.status==='passed').length,done=visual.principles.filter(item=>item.status==='passed'||item.status==='failed').length;return '<section class="axi-validation"><div class="axi-validation-head"><button class="play" data-axi-action="play" '+(visual.phase==='running'?'disabled':'')+'>Play validation</button><button data-axi-action="reset" '+(visual.phase==='running'?'disabled':'')+'>Reset</button><span class="axi-validation-summary" aria-live="polite">'+safe(visual.phase==='ready'?'Ready · 10 actual CLI checks':visual.phase==='running'?done+' / 10 checked':passed+' / 10 passed')+'</span></div><div class="axi-progress" role="progressbar" aria-label="AXI principles passed" aria-valuemin="0" aria-valuemax="10" aria-valuenow="'+passed+'"><i style="width:'+passed*10+'%"></i></div><div class="axi-principles">'+visual.principles.map(axiPrinciple).join('')+'</div></section>'}
@@ -657,5 +673,6 @@ import { CursorActionScenario } from "../test/harness/CursorActionScenario.ts";
 import { LocalEndpointScenario } from "../test/harness/LocalEndpointScenario.ts";
 import { ProjectRemovalScenario } from "../test/harness/ProjectRemovalScenario.ts";
 import { AxiValidationScenario, type AxiValidationVisual } from "../test/harness/AxiValidationScenario.ts";
+import { CoupledServiceRecoveryScenario } from "../test/harness/CoupledServiceRecoveryScenario.ts";
 import { executionOverviewMarkup, liveExecutionStyles } from "./LiveExecutions.ts";
 import { viewerComponentScript } from "./ViewerComponents.ts";
