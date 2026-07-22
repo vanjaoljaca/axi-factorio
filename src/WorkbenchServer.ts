@@ -182,6 +182,10 @@ function scenarioIndex(): object[] {
       description: "Real runner · fresh SQLite · test/harness/default",
     },
     {
+      id: "artifact-conveyor", category: "Conveyor", name: "Artifact fan-out / fan-in",
+      description: "Agent output survives evaluator loss · deterministic artifact verification · next pip",
+    },
+    {
       id: "codex-active-turn", category: "Harness", name: "Active Codex reconciliation",
       description: "notLoaded container · fresh active turn · production receipt path",
     },
@@ -263,6 +267,10 @@ function scenarioIndex(): object[] {
 async function scenario(url: URL): Promise<Scenario> {
   const id = url.pathname.split("/").at(-1);
   if (id === "happy") return runHappyPath();
+  if (id === "artifact-conveyor") {
+    const { runArtifactConveyorScenario } = await import("../test/harness/ArtifactConveyorScenario.ts");
+    return runArtifactConveyorScenario();
+  }
   if (id === "codex-active-turn") {
     const { runCodexActiveTurnScenario } = await import("../test/harness/CodexActiveTurnScenario.ts");
     return runCodexActiveTurnScenario();

@@ -9,6 +9,7 @@ export async function runCodexMcpIsolationScenario(): Promise<CodexMcpIsolationR
 
 function createFixture(): ScenarioFixture {
   const base = createTestHarness();
+  writeFileSync(join(base.pipelinePath, "01.g1.first.exit.md"), "Evaluate blob MCP isolation.");
   const root = dirname(base.pipelinePath);
   const bin = join(root, "bin");
   const argvLog = join(root, "codex-argv.log");
@@ -74,7 +75,7 @@ class ScenarioFixture {
   private frame(receipt: Receipt, argv: string): WorkbenchFrame {
     const isolated = argv.match(/^--ignore-user-config$/gmu)?.length === 2;
     const entrySafe = /\n--\n---\naxi-factorio runtime context\n/u.test(argv);
-    const resumeSafe = /\nresume\nthread-mcp-isolated\n--\n---\naxi-factorio runtime context\n/u.test(argv);
+    const resumeSafe = /\nresume\nthread-mcp-isolated\n--\nEvaluate blob MCP isolation\./u.test(argv);
     return {
       name: "Pinned Codex 0.144.6 MCP isolation",
       description: `Expected advance; observed ${receipt.status}. Exact pinned-CLI argv + production receipt path.`,

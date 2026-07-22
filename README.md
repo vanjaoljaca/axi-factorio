@@ -114,6 +114,40 @@ for each blob, such as `default/v1`, but contains no pipeline definition objects
 or frozen step arrays. A receipt captures the exact Git SHA and combined
 entry/exit SHA-256 content hash used for that execution.
 
+### Ordinary conveyor completion
+
+The exit Markdown selects the smallest completion rule needed by a pip:
+
+- a blank exit file advances when the agent task completes successfully;
+- local Markdown links declare required artifacts, and the pip advances when
+  every linked path exists beneath the execution workspace; and
+- non-empty prose without local links retains the legacy exit-classifier
+  behavior for an explicitly evaluative pip.
+
+For example, an ordinary planning pip can declare its output without a new
+workflow language:
+
+```md
+[Plan artifact](apps/example/.axi-factorio/artifacts/example-change/plan.md)
+```
+
+Factorio records the verified files as receipt output artifacts. Missing files
+leave the blob at the same pip with an `Awaiting declared artifacts` reason;
+they are not converted into a product-level failure. HTTP links, anchors, and
+paths outside the execution workspace do not count as artifact declarations.
+
+If an older attempt already produced its declared artifact before an optional
+evaluator or provider process failed, verify the current checked-in definition
+without launching an agent:
+
+```sh
+npx axi-factorio artifact verify example-change
+```
+
+This writes one append-only `artifact-presence` receipt with current definition
+provenance and advances at most one pip. It does not alter the blob's saved
+continuous/step preference or cascade into later work.
+
 ## Agent harness contract
 
 The runner depends on a narrow `AgentHarness` interface. A harness is selected
@@ -199,7 +233,7 @@ npm run build
 
 This recreates `release/` with:
 
-- `axi-factorio-0.1.0-rc.50.tgz`, the installable package;
+- `axi-factorio-0.1.0-rc.51.tgz`, the installable package;
 - `SHA256SUMS`, for artifact verification; and
 - `INSTALL.md`, with direct and vendored installation commands.
 
@@ -211,7 +245,7 @@ Do not use `npm link` for a consuming project. Install the exact tarball so
 Install the exact candidate in the consuming npm project:
 
 ```sh
-npm install --save-exact /path/to/axi-factorio-0.1.0-rc.50.tgz
+npm install --save-exact /path/to/axi-factorio-0.1.0-rc.51.tgz
 ```
 
 From the consuming project root, the defaults are:
@@ -420,7 +454,7 @@ harness adds only the Git-owned state required to commit through repeatable
 folders. The assigned workspace must equal Git's reported work root; non-Git
 workspaces retain their previous behavior.
 
-Opening an older database with rc.50 migrates projects, receipt
+Opening an older database with rc.51 migrates projects, receipt
 provenance, durable execution-control columns, blob revisions, and immutable
 attempt evidence, plus durable local-endpoint process leases automatically. Existing blobs receive an
 `executionWorkspaceRoot` equal to their current app root, preserving prior

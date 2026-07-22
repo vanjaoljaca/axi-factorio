@@ -35,6 +35,7 @@ async function runCommand(
     case "step":
     case "stop": return controlBlob(args.slice(1), store, json, args[0]);
     case "retry": return retryBlob(args.slice(1), store, json);
+    case "artifact": return runArtifact(args.slice(1), store, json);
     case "review": return armHumanReview(args.slice(1), store, json);
     case "feedback": return addHumanFeedback(args.slice(1), store, json);
     case "approve": return approveHumanReview(args.slice(1), store, json);
@@ -50,6 +51,25 @@ async function runCommand(
     case "service": return runService(args.slice(1), store, json, databasePath);
     default: throw usage(`unknown command ${args[0]}`, "Run `axi-factorio --help`.");
   }
+}
+
+async function runArtifact(args: string[], store: ConveyorStore, json: boolean): Promise<void> {
+  const action = args[0];
+  if (action !== "verify") throw usage("artifact accepts verify.");
+  const parsed = parseArgs(args.slice(1), {});
+  requirePositionals(parsed, 1, "artifact verify requires one blob ID.");
+  const id = parsed.positionals[0];
+  const blob = store.getBlob(id);
+  if (!blob) throw new Error(`Blob ${id} was not found.`);
+  const step = nextStep(blob, discoverPipeline(blob.pipelinePath));
+  if (!step) throw new Error(`Blob ${id} is complete.`);
+  const verification = verifyArtifacts(snapshotDefinition(step, blob.pipelinePath).exit, blob.executionWorkspaceRoot);
+  if (verification.policy.kind !== "artifacts") throw new Error(`Step ${step.id} declares no local artifact links.`);
+  if (blob.paused) store.retryBlob(id, true);
+  else store.requestStep(id);
+  await new ConveyorRunner(store, new ArtifactPresenceHarness()).runBlob(id);
+  const receipt = store.listReceipts(id).at(-1);
+  printOutput({ ok: `artifact verify ${id} -> ${receipt?.status}`, verification, receipt }, json);
 }
 
 function showHome(store: ConveyorStore, json: boolean): void {
@@ -803,14 +823,14 @@ function serviceAbortController(): AbortController {
 }
 
 function printVersion(): void {
-  process.stdout.write("axi-factorio 0.1.0-rc.50\n");
+  process.stdout.write("axi-factorio 0.1.0-rc.51\n");
 }
 
 function helpCommand(args: string[]): string | undefined {
   if (args[0] === "help") return args[1];
   const withoutHelp = args.filter((argument) => argument !== "--help");
   const command = extractGlobals(withoutHelp).args;
-  if ((command[0] === "project" || command[0] === "service") && command[1]) {
+  if (["artifact", "project", "service"].includes(command[0] ?? "") && command[1]) {
     return `${command[0]}:${command[1]}`;
   }
   return command[0];
@@ -874,10 +894,10 @@ const receiptFields = [
 ];
 
 const helpText: Record<string, string> = {
-  root: `axi-factorio 0.1.0-rc.50
+  root: `axi-factorio 0.1.0-rc.51
 
 Usage: axi-factorio <command> [flags]
-Commands: project, add, adopt, relocate, bind-execution, list, status, show, receipts, play, step, stop, retry, review, feedback, approve, reset-endpoint, rebind-endpoint, rewind, kick, run, service, setup, init
+Commands: project, artifact, add, adopt, relocate, bind-execution, list, status, show, receipts, play, step, stop, retry, review, feedback, approve, reset-endpoint, rebind-endpoint, rewind, kick, run, service, setup, init
 Globals: --db PATH, --json, --help, -v, --version
 
 Examples:
@@ -890,6 +910,14 @@ Examples:
     ["Use `axi-factorio project <action> --help` for action-specific flags."],
     ["axi-factorio project list", "axi-factorio project show <project-id>"],
   ),
+  artifact: commandHelp(
+    "axi-factorio artifact verify BLOB_ID",
+    ["Verify local Markdown-linked artifacts for the current step without invoking an agent."],
+    ["axi-factorio artifact verify <id>"],
+  ),
+  "artifact:verify": commandHelp("axi-factorio artifact verify BLOB_ID", [], [
+    "axi-factorio artifact verify <id>",
+  ]),
   "project:list": commandHelp(
     "axi-factorio project list [--fields FIELDS]",
     ["--fields FIELDS  Comma-separated fields (default: id,name,defaultPipeline,resolvedPipeline)"],
@@ -1029,6 +1057,8 @@ import { log } from "./Logger.ts";
 import { printOutput } from "./Output.ts";
 import { discoverPipeline, nextStep, requireStep, snapshotDefinition } from "./Pipeline.ts";
 import { ConveyorRunner } from "./Runner.ts";
+import { ArtifactPresenceHarness } from "./ArtifactPresenceHarness.ts";
+import { verifyArtifacts } from "./ArtifactRules.ts";
 import { LocalEndpointSupervisor } from "./LocalEndpointSupervisor.ts";
 import { ConveyorService } from "./Service.ts";
 import { runCoupledService } from "./ServiceRuntime.ts";

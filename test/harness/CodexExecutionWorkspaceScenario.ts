@@ -9,6 +9,7 @@ export async function runCodexExecutionWorkspaceScenario(): Promise<CodexExecuti
 
 function createFixture(): ScenarioFixture {
   const base = createTestHarness();
+  writeFileSync(join(base.pipelinePath, "01.g1.first.exit.md"), "Evaluate blob workspace outputs.");
   const fixtureRoot = dirname(base.pipelinePath);
   const worktreeRoot = join(fixtureRoot, "worktree");
   const appRoot = join(worktreeRoot, "apps", "example");
@@ -133,7 +134,7 @@ function frame(
     assertions: [
       { label: "Explicit execution-workspace binding succeeds", passed: binding.status === 0 },
       { label: "Project root remains the app subdirectory", passed: blob.cwd === paths.appRoot },
-      { label: "Codex cwd and sandbox root are the assigned workspace", passed: calls.every((call) => cwd(call) === paths.worktreeRoot) },
+      { label: "Codex cwd and sandbox root are the assigned workspace", passed: occurrences(argv, `-C\n${paths.worktreeRoot}`) === 2 },
       { label: "Entry reads app plan and edits app plus sibling Workbench", passed: files.plan && files.app && files.sibling },
       { label: "Exit observes both writes and advances", passed: complete },
       { label: "No write escapes the execution workspace", passed: !files.outside },
@@ -171,11 +172,6 @@ function executionBindings(store: ConveyorStore, id: string): ExecutionBinding[]
 
 function parseArgv(log: string): string[][] {
   return log.trim().split("\n\n").filter(Boolean).map((call) => call.split("\n"));
-}
-
-function cwd(args: string[]): string | undefined {
-  const index = args.indexOf("-C");
-  return index >= 0 ? args[index + 1] : undefined;
 }
 
 function promptsNameRoots(argv: string, paths: ScenarioPaths): boolean {

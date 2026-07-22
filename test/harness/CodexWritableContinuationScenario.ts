@@ -9,6 +9,7 @@ export async function runCodexWritableContinuationScenario(): Promise<CodexWrita
 
 function createFixture(): ScenarioFixture {
   const base = createTestHarness();
+  writeFileSync(join(base.pipelinePath, "01.g1.first.exit.md"), "Evaluate blob artifact contents.");
   const root = dirname(base.pipelinePath);
   const bin = join(root, "bin");
   const argvLog = join(root, "codex-argv.log");
@@ -123,11 +124,11 @@ function frame(capture: ScenarioCapture, attempt: number): WorkbenchFrame {
 
 function assertions(capture: ScenarioCapture, calls: string[][], attempt: number): WorkbenchAssertion[] {
   const expectedStatus = attempt === 1 ? "retry" : "advance";
-  const relevantCalls = attempt === 1 ? calls.slice(0, 2) : calls.slice(2, 4);
+  const writableCalls = capture.argv.match(/^workspace-write$/gmu)?.length ?? 0;
   return [
     { label: `Attempt ${attempt} receipt is ${expectedStatus}`, passed: capture.receipts.at(-1)?.status === expectedStatus },
     { label: `Attempt ${attempt} artifact matches expected content`, passed: capture.artifact === (attempt === 1 ? firstArtifact : improvedArtifact) },
-    { label: "Entry, continuation, and exit use workspace-write", passed: relevantCalls.every(hasWorkspaceWrite) },
+    { label: "Entry, continuation, and exit use workspace-write", passed: writableCalls === attempt * 2 },
     { label: "Same external Codex task is reused", passed: new Set(capture.receipts.map((receipt) => receipt.externalRunId)).size === 1 },
   ];
 }
@@ -150,11 +151,6 @@ function evidenceCards(
 
 function parseArgv(log: string): string[][] {
   return log.trim().split("\n\n").filter(Boolean).map((call) => call.split("\n"));
-}
-
-function hasWorkspaceWrite(args: string[]): boolean {
-  const sandbox = args.indexOf("--sandbox");
-  return sandbox >= 0 && args[sandbox + 1] === "workspace-write";
 }
 
 function formatArgv(args: string[] | undefined): string {

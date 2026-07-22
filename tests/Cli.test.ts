@@ -321,6 +321,35 @@ test("retry --once persists one receipt of work without replacing continuous pre
   assert.equal(blob?.singleTransitionRequested, true);
 });
 
+test("artifact verify advances an existing failed pip from declared file evidence without an agent", () => {
+  const fixture = createCliFixture();
+  writeFileSync(join(fixture.pipelinePath, "0.plan.define.exit.md"), "[Plan](artifacts/plan.md)");
+  mkdirSync(join(fixture.root, "artifacts"));
+  writeFileSync(join(fixture.root, "artifacts", "plan.md"), "accepted plan");
+  runCli(fixture, [
+    "add", "blob-artifact", "Artifact proof", "--pipeline", fixture.pipelinePath,
+    "--cwd", fixture.root, "--db", fixture.databasePath, "--json",
+  ]);
+  const database = new FactorioDatabase(fixture.databasePath);
+  const store = new ConveyorStore(database);
+  store.requestContinuous("blob-artifact");
+  const step = discoverPipeline(fixture.pipelinePath)[0];
+  const claim = store.beginReceipt({
+    blobId: "blob-artifact", step, definition: snapshotDefinition(step, fixture.pipelinePath),
+    adapter: "fixture", inputArtifacts: [],
+  });
+  store.failReceipt(claim.receipt.id, "classifier unavailable");
+  database.close();
+
+  const verified = JSON.parse(runCli(fixture, [
+    "artifact", "verify", "blob-artifact", "--db", fixture.databasePath, "--json",
+  ]).stdout);
+
+  assert.equal(verified.receipt.status, "advance");
+  assert.deepEqual(verified.receipt.outputArtifacts, [`file:${join(fixture.root, "artifacts", "plan.md")}`]);
+  assert.equal(verified.receipt.adapter, "artifact-presence");
+});
+
 test("adopt imports attested prior steps and positions existing work", () => {
   const fixture = createCliFixture();
   writeStep(fixture.pipelinePath, 1, "dev.build");
@@ -370,7 +399,7 @@ import { FactorioDatabase } from "../src/Database.ts";
 import { ConveyorStore } from "../src/Store.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import test from "node:test";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";

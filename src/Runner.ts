@@ -39,6 +39,18 @@ export class ConveyorRunner {
     return true;
   }
 
+  async runBlob(blobId: string, signal?: AbortSignal, ownerId?: string): Promise<boolean> {
+    signal?.throwIfAborted();
+    const blob = this.store.getBlob(blobId);
+    if (!blob) throw new Error(`Blob ${blobId} was not found.`);
+    if (blob.paused || !blob.runRequested) throw new Error(`Blob ${blobId} is not runnable.`);
+    const steps = discoverPipeline(blob.pipelinePath);
+    const step = nextStep(blob, steps);
+    if (!step) return Boolean(this.store.markCompleted(blob.id, ownerId));
+    await this.execute(blob, step, steps, signal, ownerId);
+    return true;
+  }
+
   async reconcileLocalEndpoints(): Promise<void> {
     if (!this.localEndpoints) return;
     for (const lease of this.store.pendingLocalEndpointLeases()) await this.reconcileLocalEndpoint(lease);

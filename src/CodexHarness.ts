@@ -59,6 +59,8 @@ async function executeCodex(
   const writableDirectories = resolveGitWritableDirectories(executionRoot(input));
   const entry = await runEntry(executionInput, onExternalRun, writableDirectories);
   const localEndpoint = await observer.startLocalEndpoint?.() ?? null;
+  const artifactResult = ordinaryCompletion(input, entry.externalRunId, localEndpoint, observer);
+  if (artifactResult) return artifactResult;
   observer.event({ type: "status", status: "running", message: "exit" });
   const exitPrompt = buildExitPrompt(input, localEndpoint);
   const exit = await runCodex(
@@ -79,6 +81,27 @@ async function executeCodex(
     reason: result.reason,
     outputArtifacts,
     externalRunId: entry.externalRunId,
+  };
+}
+
+function ordinaryCompletion(
+  input: CodexInput,
+  externalRunId: string,
+  endpoint: LocalEndpointSession | null,
+  observer: HarnessObserver,
+): HarnessResult | null {
+  const verification = verifyArtifacts(input.definition.exit, executionRoot(input));
+  if (verification.policy.kind === "classifier") return null;
+  const endpointArtifacts = endpoint ? [`local-endpoint:${endpoint.url}`, `git-head:${endpoint.gitHead}`] : [];
+  const outputArtifacts = [...new Set([...verification.present, ...endpointArtifacts, `codex-thread:${externalRunId}`])];
+  for (const artifactRef of outputArtifacts) observer.event({ type: "artifact", artifactRef });
+  return {
+    decision: verification.missing.length ? "blocked" : "advance",
+    reason: verification.missing.length
+      ? `Awaiting declared artifacts: ${verification.missing.join(", ")}`
+      : verification.policy.kind === "completion" ? "Agent task completed." : "Declared artifacts are present.",
+    outputArtifacts,
+    externalRunId,
   };
 }
 
@@ -557,6 +580,7 @@ const initializeParams = {
 };
 
 import type { HarnessDecision } from "./Types.ts";
+import { verifyArtifacts } from "./ArtifactRules.ts";
 import { resolveGitWritableDirectories } from "./GitWritableDirectories.ts";
 import type {
   AgentHarness,

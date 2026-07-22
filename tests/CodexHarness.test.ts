@@ -12,6 +12,25 @@ test("runs entry and exit in one Codex thread through the harness contract", asy
   assert.deepEqual(externalRuns, ["thread-fixture", "thread-fixture"]);
 });
 
+test("ordinary artifact pips advance from declared file evidence without a classifier exit", async () => {
+  const fixture = createAdapterFixture();
+  const input = adapterInput(fixture);
+  const artifact = join(fixture.root, "artifacts", "plan.md");
+  mkdirSync(join(fixture.root, "artifacts"), { recursive: true });
+  input.definition.exit = "Plan output: [workbench plan](artifacts/plan.md)";
+  process.env.FAKE_CODEX_MODE = "artifact-entry-exit-fails";
+  process.env.FAKE_CODEX_ARTIFACT = artifact;
+  try {
+    const result = await fixture.adapter.start(input, observer());
+    assert.equal(result.decision, "advance");
+    assert(result.outputArtifacts.includes(`file:${artifact}`));
+    assert.equal(readArgvCalls(fixture).length, 1);
+  } finally {
+    delete process.env.FAKE_CODEX_MODE;
+    delete process.env.FAKE_CODEX_ARTIFACT;
+  }
+});
+
 test("continues a human review cycle in the existing Codex thread", async () => {
   const fixture = createAdapterFixture();
   const input = adapterInput(fixture);
@@ -43,7 +62,7 @@ test("continues a human review cycle in the existing Codex thread", async () => 
 test("passes every resumed prompt after the option terminator", async () => {
   const fixture = createAdapterFixture();
   const input = adapterInput(fixture);
-  input.definition.exit = "";
+  input.definition.exit = "---\nClassifier exit.";
   input.humanInputs = [{
     id: "input-dashes",
     blobId: "blob-1",
@@ -323,6 +342,12 @@ fi
 if [ "$FAKE_CODEX_MODE" = "malformed" ]; then
   printf '%s\\n' '{not-json}'
   exit 0
+fi
+if [ "$FAKE_CODEX_MODE" = "artifact-entry-exit-fails" ]; then
+  case " $* " in
+    *" resume "*) exit 41 ;;
+    *) mkdir -p "$(dirname "$FAKE_CODEX_ARTIFACT")"; printf artifact > "$FAKE_CODEX_ARTIFACT" ;;
+  esac
 fi
 if [ "$FAKE_CODEX_MODE" = "descendant" ]; then
   (trap 'printf stopped > "$FAKE_CODEX_STOPPED"; exit 0' TERM; printf ready > "$FAKE_CODEX_STOPPED.ready"; while :; do sleep 1; done) &
