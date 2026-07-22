@@ -246,7 +246,7 @@ function learningMutation(
     return null;
   }
   if (action === "retry") {
-    store.retryBlob(blob.id);
+    store.retryBlob(blob.id, body.once === true);
     return null;
   }
   if (action === "feedback") {

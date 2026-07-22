@@ -185,6 +185,56 @@ test("one bounded retry preserves continuous preference without creating a third
   fixture.database.close();
 });
 
+test("bounded failed-receipt retry survives restart and cannot cascade", async () => {
+  const harness = new OutcomeHarness(["throw", "retry", "advance"]);
+  const fixture = createExecutionFixture(["g1.first"], [], harness);
+  fixture.store.createBlob("blob-1", blobInput(fixture));
+  fixture.store.requestContinuous("blob-1");
+  await assert.rejects(fixture.runner.runOnce(), ReceiptRunError);
+
+  fixture.store.retryBlob("blob-1", true);
+  assert.equal(fixture.store.getBlob("blob-1")?.singleTransitionRequested, true);
+  fixture.database.close();
+
+  const database = new FactorioDatabase(join(fixture.root, "factorio.sqlite"));
+  const store = new ConveyorStore(database);
+  const runner = new ConveyorRunner(store, harness);
+  assert.equal(store.getBlob("blob-1")?.executionMode, "continuous");
+  assert.equal(store.getBlob("blob-1")?.runRequested, true);
+  assert.equal(store.getBlob("blob-1")?.singleTransitionRequested, true);
+
+  await runner.runOnce();
+
+  assert.deepEqual(store.listReceipts("blob-1").map((receipt) => receipt.status), ["failed", "retry"]);
+  assert.deepEqual([
+    store.getBlob("blob-1")?.paused,
+    store.getBlob("blob-1")?.runRequested,
+    store.getBlob("blob-1")?.executionMode,
+  ], [false, false, "continuous"]);
+  assert.equal(await runner.runOnce(), false);
+  database.close();
+
+  for (const outcome of ["blocked", "throw"] as const) {
+    const outcomeHarness = new OutcomeHarness(["throw", outcome, "advance"]);
+    const outcomeFixture = createExecutionFixture(["g1.first"], [], outcomeHarness);
+    outcomeFixture.store.createBlob("blob-1", blobInput(outcomeFixture));
+    outcomeFixture.store.requestContinuous("blob-1");
+    await assert.rejects(outcomeFixture.runner.runOnce(), ReceiptRunError);
+    outcomeFixture.store.retryBlob("blob-1", true);
+
+    if (outcome === "throw") await assert.rejects(outcomeFixture.runner.runOnce(), ReceiptRunError);
+    else await outcomeFixture.runner.runOnce();
+
+    assert.deepEqual(
+      outcomeFixture.store.listReceipts("blob-1").map((receipt) => receipt.status),
+      ["failed", outcome === "throw" ? "failed" : "blocked"],
+    );
+    assert.equal(outcomeFixture.store.getBlob("blob-1")?.runRequested, false);
+    assert.equal(await outcomeFixture.runner.runOnce(), false);
+    outcomeFixture.database.close();
+  }
+});
+
 test("record-only feedback followed by Step creates one bounded receipt at a human gate", async () => {
   const fixture = createExecutionFixture(["g1.review", "g2.finish"], ["blocked", "advance"]);
   fixture.store.createBlob("blob-1", blobInput(fixture));

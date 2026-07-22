@@ -243,11 +243,13 @@ export class ConveyorStore {
     });
   }
 
-  retryBlob(blobId: string): BlobMutationResult {
+  retryBlob(blobId: string, once = false): BlobMutationResult {
     return this.database.transaction(() => {
       const blob = this.requireBlob(blobId);
       if (!blob.paused) return { blob, already: true };
-      this.database.connection.prepare(blobPauseAndRunUpdate).run(0, 1, 0, this.now(), blob.id);
+      this.database.connection.prepare(blobPauseAndRunUpdate).run(
+        0, 1, Number(once), this.now(), blob.id,
+      );
       return { blob: this.requireBlob(blob.id), already: false };
     });
   }

@@ -37,6 +37,7 @@ export class MockHarnessLab {
     if (action === "block") return this.block();
     if (action === "retry-decision") return this.retryDecision();
     if (action === "bounded-retry") return this.boundedRetry();
+    if (action === "bounded-failed-retry") return this.boundedFailedRetry();
     if (action === "bounded-human-feedback") return this.boundedHumanFeedback();
     if (action === "rewind-step") return this.rewindAndStep();
     if (action === "restart") return this.restart();
@@ -251,6 +252,18 @@ export class MockHarnessLab {
     this.store.requestStep(blobId);
     await this.startWork();
     this.notice = "One bounded Step returned retry and stopped; the preferred mode remains continuous.";
+    return this.snapshot();
+  }
+
+  private async boundedFailedRetry(): Promise<LabSnapshot> {
+    this.store.requestContinuous(blobId);
+    this.harness.failNext();
+    await this.startWork();
+    this.store.retryBlob(blobId, true);
+    this.restart();
+    this.harness.retryNext();
+    await this.startWork();
+    this.notice = "A paused failure received one bounded retry; retry stopped without changing continuous preference.";
     return this.snapshot();
   }
 
@@ -569,6 +582,7 @@ const scenarioCatalog: LabScenario[] = [
   { id: "compare", category: "Compare", name: "Compare attempts", description: "Compare immutable attempt provenance side by side." },
   { id: "retry", category: "Decisions", name: "Retry decision", description: "The harness asks to retry without advancing." },
   { id: "bounded-retry", category: "Controls", name: "One bounded attempt", description: "Step once from continuous preference · retry stops · no surprise next attempt." },
+  { id: "bounded-failed-retry", category: "Controls", name: "Bounded failed retry", description: "Paused failure · Retry once · restart-safe budget · no cascade." },
   { id: "bounded-human-feedback", category: "Controls", name: "Record feedback, then Step", description: "Paused human gate · durable feedback only · one bounded receipt · continuous preference preserved." },
   { id: "blocked", category: "Decisions", name: "Blocked with human input", description: "Block, append feedback, and retain the run identity." },
   { id: "failure", category: "Decisions", name: "Harness failure", description: "Fail safely with evidence retained." },
@@ -604,6 +618,7 @@ const scenarioPreparers: Record<string, (lab: MockHarnessLab) => Promise<void>> 
   },
   "retry": async (lab) => { await lab.action("retry-decision"); },
   "bounded-retry": async (lab) => { await lab.action("bounded-retry"); },
+  "bounded-failed-retry": async (lab) => { await lab.action("bounded-failed-retry"); },
   "bounded-human-feedback": async (lab) => { await lab.action("bounded-human-feedback"); },
   "blocked": async (lab) => {
     await lab.action("block");
@@ -664,6 +679,7 @@ export type LabAction =
   | "block"
   | "retry-decision"
   | "bounded-retry"
+  | "bounded-failed-retry"
   | "bounded-human-feedback"
   | "rewind-step"
   | "restart";

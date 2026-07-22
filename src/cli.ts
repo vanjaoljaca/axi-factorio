@@ -263,10 +263,15 @@ function showReceipts(args: string[], store: ConveyorStore, json: boolean): void
 }
 
 function retryBlob(args: string[], store: ConveyorStore, json: boolean): void {
-  const parsed = parseArgs(args, {});
+  const parsed = parseArgs(args, { "--once": "boolean" });
   requirePositionals(parsed, 1, "retry requires one blob ID.");
-  const result = store.retryBlob(parsed.positionals[0]);
-  printOutput({ ok: `retry ${result.blob.id} -> ${result.blob.state}`, already: result.already }, json);
+  const once = hasFlag(parsed, "--once");
+  const result = store.retryBlob(parsed.positionals[0], once);
+  printOutput({
+    ok: `retry ${result.blob.id} -> ${result.blob.state}`,
+    once,
+    already: result.already,
+  }, json);
 }
 
 function controlBlob(
@@ -798,7 +803,7 @@ function serviceAbortController(): AbortController {
 }
 
 function printVersion(): void {
-  process.stdout.write("axi-factorio 0.1.0-rc.49\n");
+  process.stdout.write("axi-factorio 0.1.0-rc.50\n");
 }
 
 function helpCommand(args: string[]): string | undefined {
@@ -869,7 +874,7 @@ const receiptFields = [
 ];
 
 const helpText: Record<string, string> = {
-  root: `axi-factorio 0.1.0-rc.49
+  root: `axi-factorio 0.1.0-rc.50
 
 Usage: axi-factorio <command> [flags]
 Commands: project, add, adopt, relocate, bind-execution, list, status, show, receipts, play, step, stop, retry, review, feedback, approve, reset-endpoint, rebind-endpoint, rewind, kick, run, service, setup, init
@@ -918,7 +923,9 @@ Examples:
   play: simpleBlobHelp("play", "request continuous progression"),
   step: simpleBlobHelp("step", "request exactly one transition"),
   stop: simpleBlobHelp("stop", "clear pending execution"),
-  retry: simpleBlobHelp("retry", "retry the current step"),
+  retry: commandHelp("axi-factorio retry BLOB_ID [--once]", [
+    "--once  Retry exactly one receipt without changing continuous preference",
+  ], ["axi-factorio retry <id>", "axi-factorio retry <id> --once"]),
   review: commandHelp("axi-factorio review BLOB_ID [--note TEXT]", ["--note TEXT (default: empty)"], [
     "axi-factorio review <id>", "axi-factorio review <id> --note \"<note>\"",
   ]),

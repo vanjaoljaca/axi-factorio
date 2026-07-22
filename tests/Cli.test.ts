@@ -289,6 +289,38 @@ test("feedback --no-run records human input before a separate bounded Step", () 
   assert.equal(stepped.blob.executionMode, "continuous");
 });
 
+test("retry --once persists one receipt of work without replacing continuous preference", () => {
+  const fixture = createCliFixture();
+  runCli(fixture, [
+    "add", "blob-retry-once", "Retry once", "--pipeline", fixture.pipelinePath,
+    "--cwd", fixture.root, "--db", fixture.databasePath, "--json",
+  ]);
+  let database = new FactorioDatabase(fixture.databasePath);
+  let store = new ConveyorStore(database);
+  store.requestContinuous("blob-retry-once");
+  const step = discoverPipeline(fixture.pipelinePath)[0];
+  const claim = store.beginReceipt({
+    blobId: "blob-retry-once", step,
+    definition: snapshotDefinition(step, fixture.pipelinePath),
+    adapter: "fixture", inputArtifacts: [],
+  });
+  store.failReceipt(claim.receipt.id, "fixture failure");
+  database.close();
+
+  const retried = JSON.parse(runCli(fixture, [
+    "retry", "blob-retry-once", "--once", "--db", fixture.databasePath, "--json",
+  ]).stdout);
+  database = new FactorioDatabase(fixture.databasePath);
+  store = new ConveyorStore(database);
+  const blob = store.getBlob("blob-retry-once");
+  database.close();
+
+  assert.equal(retried.once, true);
+  assert.equal(blob?.executionMode, "continuous");
+  assert.equal(blob?.runRequested, true);
+  assert.equal(blob?.singleTransitionRequested, true);
+});
+
 test("adopt imports attested prior steps and positions existing work", () => {
   const fixture = createCliFixture();
   writeStep(fixture.pipelinePath, 1, "dev.build");
@@ -333,7 +365,9 @@ const cliPath = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 import type { SpawnSyncReturns } from "node:child_process";
 import type { PipelineFixture } from "./Fixtures.ts";
 import { createPipeline, writeStep } from "./Fixtures.ts";
-import { discoverPipeline } from "../src/Pipeline.ts";
+import { discoverPipeline, snapshotDefinition } from "../src/Pipeline.ts";
+import { FactorioDatabase } from "../src/Database.ts";
+import { ConveyorStore } from "../src/Store.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, renameSync } from "node:fs";

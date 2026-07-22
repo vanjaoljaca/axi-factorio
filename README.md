@@ -199,7 +199,7 @@ npm run build
 
 This recreates `release/` with:
 
-- `axi-factorio-0.1.0-rc.49.tgz`, the installable package;
+- `axi-factorio-0.1.0-rc.50.tgz`, the installable package;
 - `SHA256SUMS`, for artifact verification; and
 - `INSTALL.md`, with direct and vendored installation commands.
 
@@ -211,7 +211,7 @@ Do not use `npm link` for a consuming project. Install the exact tarball so
 Install the exact candidate in the consuming npm project:
 
 ```sh
-npm install --save-exact /path/to/axi-factorio-0.1.0-rc.49.tgz
+npm install --save-exact /path/to/axi-factorio-0.1.0-rc.50.tgz
 ```
 
 From the consuming project root, the defaults are:
@@ -368,6 +368,19 @@ changing the blob's preferred continuous mode. Use `approve --no-run` instead
 when the evidence is approval of the current step; feedback alone does not
 pretend that approval occurred.
 
+To retry a paused failed receipt with the same one-receipt budget, use one
+atomic command:
+
+```sh
+npx axi-factorio retry account-export-1 --once
+```
+
+`retry --once` persists the bounded request before returning, preserves a
+blob's continuous-mode preference, and survives service restarts. Its one
+receipt may advance once, or stop on `retry`, `blocked`, or `failed`; it never
+cascades into another receipt. The same operation is available through
+`POST /api/blobs/:id/retry` with `{ "once": true }`.
+
 Relocating an existing blob to a new app workspace is deliberate and audited:
 
 ```sh
@@ -407,7 +420,7 @@ harness adds only the Git-owned state required to commit through repeatable
 folders. The assigned workspace must equal Git's reported work root; non-Git
 workspaces retain their previous behavior.
 
-Opening an older database with rc.49 migrates projects, receipt
+Opening an older database with rc.50 migrates projects, receipt
 provenance, durable execution-control columns, blob revisions, and immutable
 attempt evidence, plus durable local-endpoint process leases automatically. Existing blobs receive an
 `executionWorkspaceRoot` equal to their current app root, preserving prior

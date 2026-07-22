@@ -59,7 +59,7 @@ test("Workbench scenario catalog prepares every requested learning state", async
     const ids = lab.snapshot().scenarioCatalog.map((scenario) => scenario.id);
     assert.deepEqual(ids, [
       "first-attempt", "blob-edit", "prompt-edit", "rerun", "compare",
-      "retry", "bounded-retry", "bounded-human-feedback", "blocked", "failure", "improved", "cancel-invalid",
+      "retry", "bounded-retry", "bounded-failed-retry", "bounded-human-feedback", "blocked", "failure", "improved", "cancel-invalid",
     ]);
 
     let snapshot = await lab.selectScenario("retry");
@@ -70,6 +70,12 @@ test("Workbench scenario catalog prepares every requested learning state", async
     assert.equal(snapshot.receipts[0].status, "retry");
     assert.equal(snapshot.blob.executionMode, "continuous");
     assert.equal(snapshot.blob.runRequested, false);
+
+    snapshot = await lab.selectScenario("bounded-failed-retry");
+    assert.deepEqual(snapshot.receipts.map((receipt) => receipt.status), ["failed", "retry"]);
+    assert.equal(snapshot.blob.executionMode, "continuous");
+    assert.equal(snapshot.blob.runRequested, false);
+    assert.equal(snapshot.blob.paused, false);
 
     snapshot = await lab.selectScenario("bounded-human-feedback");
     assert.deepEqual(snapshot.receipts.map((receipt) => receipt.status), ["blocked", "blocked"]);

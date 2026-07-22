@@ -365,6 +365,36 @@ test("viewer binds a containing execution workspace without moving the app proje
   assert.deepEqual(learning.executionWorkspaceBindings[0].evidence, ["api:worktree"]);
 });
 
+test("viewer retry API can arm exactly one failed-receipt retry", async () => {
+  const fixture = createPipeline(["g1.first"]);
+  const databasePath = join(fixture.root, "factorio.sqlite");
+  let database = new FactorioDatabase(databasePath);
+  let store = new ConveyorStore(database);
+  const step = discoverPipeline(fixture.pipelinePath)[0];
+  store.createBlob("retry-once", blobInput(fixture, "Retry once"));
+  store.requestContinuous("retry-once");
+  const claim = store.beginReceipt({
+    blobId: "retry-once", step,
+    definition: snapshotDefinition(step, fixture.pipelinePath),
+    adapter: "fake", inputArtifacts: [],
+  });
+  store.failReceipt(claim.receipt.id, "fixture failure");
+  database.close();
+  const server = createViewerServer(databasePath);
+  const endpoint = await listen(server);
+
+  await postJson(endpoint, "retry-once", "retry", { once: true });
+  await close(server);
+
+  database = new FactorioDatabase(databasePath);
+  store = new ConveyorStore(database);
+  const blob = store.getBlob("retry-once");
+  database.close();
+  assert.equal(blob?.executionMode, "continuous");
+  assert.equal(blob?.runRequested, true);
+  assert.equal(blob?.singleTransitionRequested, true);
+});
+
 test("production learning API preserves revisions, prompt provenance, reruns, and restart history", async () => {
   const fixture = createPipeline(["build.first", "review.second"]);
   const databasePath = join(fixture.root, "factorio.sqlite");
