@@ -17,6 +17,7 @@ test("aggregate Viewer contract pins disclosure and exposes complete status coun
   assert.match(source, /\.project-disclosure\{position:sticky;right:0/u);
   assert.match(source, /counts\.completed\+' completed/u);
   assert.match(source, /data-aggregate-key/u);
+  assert.match(source, /grid-column:'\+\(index\+2\)\+'/u);
   assert.match(source, /patchOverview\(projects\)/u);
 });
 
