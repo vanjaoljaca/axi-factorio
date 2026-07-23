@@ -42,11 +42,10 @@ test("continuous aggregate arcs start at noon and contain no separator gaps", ()
   assert.doesNotMatch(aggregateProgressGradient(1, 4), /#fff|white/u);
 });
 
-test("progress sorting is deterministic and can be disabled", () => {
+test("project sorting is always alphabetical and stable", () => {
   const alpha = project([blob("ready", "2026-07-22T00:00:00Z", 1)], "a", "Alpha");
   const beta = project([blob("ready", "2026-07-22T00:00:00Z", 3)], "b", "Beta");
-  assert.deepEqual(sortProjects([alpha, beta], true).map((item) => item.id), ["b", "a"]);
-  assert.deepEqual(sortProjects([beta, alpha], false).map((item) => item.id), ["a", "b"]);
+  assert.deepEqual(sortProjects([beta, alpha]).map((item) => item.id), ["a", "b"]);
 });
 
 test("blob sorting uses progress descending, then title and id", () => {
@@ -73,6 +72,8 @@ test("default Viewer pip treatment is green-dot happy path without status copy",
   assert.match(source, /snapshot\.settings\.debugMode\?statusLabel\(blob\.status\):''/u);
   assert.match(source, /snapshot\.settings\.debugMode&&current\?blob\.status:''/u);
   assert.match(source, /for\(const blob of sortBlobs\(project\.blobs\)\).*rows\.appendChild\(row\)/u);
+  assert.match(source, /const track=snapshot\.steps\.map\(\(step,index\)=>aggregateCell\(project,step,index\)\)/u);
+  assert.doesNotMatch(source, /collapsed\?aggregateCell\(project,step,index\)/u);
 });
 
 test("Viewer active-project fold keeps vertical scrolling on the document", () => {

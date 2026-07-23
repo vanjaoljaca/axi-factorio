@@ -223,7 +223,7 @@ test("Viewer Debug setting is durable, manual, and exposed through Settings", as
     }).then(readJson);
     const view = await fetch(`${endpoint}/api/settings/view`, {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ activeProjectDays: 3, sortProjectsByProgress: false }),
+      body: JSON.stringify({ activeProjectDays: 3 }),
     }).then(readJson);
     const play = await fetch(`${endpoint}/api/blobs/debug-controlled/play`, { method: "POST" });
 

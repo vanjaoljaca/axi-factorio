@@ -67,11 +67,9 @@ export function projectHasActiveWork(project: ActivityProject, now = new Date(),
   });
 }
 
-export function sortProjects<T extends ActivityProject>(projects: T[], byProgress: boolean): T[] {
-  return projects.slice().sort((left, right) => {
-    const progress = byProgress ? projectProgress(right) - projectProgress(left) : 0;
-    return progress || left.name.localeCompare(right.name) || left.id.localeCompare(right.id);
-  });
+export function sortProjects<T extends ActivityProject>(projects: T[]): T[] {
+  return projects.slice().sort((left, right) =>
+    left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
 }
 
 export function blobProgress(blob: ProgressBlob): number {
@@ -112,7 +110,7 @@ function updateAggregateMarker(marker,update){if(marker.dataset.aggregateState==
 function aggregateProgressGradient(completed,total){const degrees=total?Math.max(0,Math.min(360,completed/total*360)):0;if(!degrees)return 'conic-gradient(from -90deg, #aeb7b1 0deg 360deg)';if(degrees===360)return 'conic-gradient(from -90deg, var(--green) 0deg 360deg)';return 'conic-gradient(from -90deg, var(--green) 0deg '+degrees+'deg, #aeb7b1 '+degrees+'deg 360deg)'}
 function projectProgress(project){const total=project.blobs.reduce((sum,blob)=>sum+blob.steps.length,0),completed=project.blobs.reduce((sum,blob)=>sum+Math.min(blob.completedStepIds.length,blob.steps.length),0);return total?completed/total:0}
 function projectHasActiveWork(project,now=new Date(),days=7){const cutoff=now.getTime()-days*86400000;return project.blobs.some(blob=>{if(['running','queued','waiting','blocked','failed'].includes(blob.status))return true;if(blob.status==='complete')return false;const activity=[blob.createdAt,blob.latestReceiptAt,blob.latestHumanInputAt].filter(Boolean).reduce((latest,value)=>Date.parse(value)>Date.parse(latest)?value:latest);return Date.parse(activity)>=cutoff})}
-function sortProjects(projects,byProgress){return projects.slice().sort((left,right)=>(byProgress?projectProgress(right)-projectProgress(left):0)||left.name.localeCompare(right.name)||left.id.localeCompare(right.id))}
+function sortProjects(projects){return projects.slice().sort((left,right)=>left.name.localeCompare(right.name)||left.id.localeCompare(right.id))}
 function blobProgress(blob){return blob.status==="complete"?1:blob.steps.length?Math.min(blob.completedStepIds.length,blob.steps.length)/blob.steps.length:0}
 function sortBlobs(blobs){return blobs.slice().sort((left,right)=>blobProgress(right)-blobProgress(left)||left.title.localeCompare(right.title)||left.id.localeCompare(right.id))}
 function componentEscape(value){return String(value).replace(/[&<>"']/g,character=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[character]))}

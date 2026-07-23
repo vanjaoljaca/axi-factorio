@@ -139,11 +139,12 @@ test("configured opener defaults to Cursor and persists only supported choices",
   fixture.database.close();
 });
 
-test("Viewer project recency and progress sorting settings persist with safe defaults", () => {
+test("Viewer project recency persists while project ordering stays alphabetical", () => {
   const fixture = createStoreFixture();
   assert.equal(fixture.store.activeProjectDays(), 7);
-  assert.equal(fixture.store.sortProjectsByProgress(), true);
+  assert.equal(fixture.store.sortProjectsByProgress(), false);
   assert.equal(fixture.store.setActiveProjectDays(3), 3);
+  assert.equal(fixture.store.setSortProjectsByProgress(true), false);
   assert.equal(fixture.store.setSortProjectsByProgress(false), false);
   assert.equal(fixture.store.activeProjectDays(), 3);
   assert.equal(fixture.store.sortProjectsByProgress(), false);

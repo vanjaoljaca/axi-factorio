@@ -1,43 +1,42 @@
 export class HappyPathViewerScenario {
-  private phase: HappyPathViewerPhase = "noisy";
+  private phase: HappyPathViewerPhase = "collapsed";
 
   snapshot(): Scenario {
-    const blobs = this.phase === "clean" ? sortBlobs(fixtures) : fixtures;
+    const blobs = sortBlobs(fixtures);
+    const projects = ["Alpha project", "Beta project", "Zulu project"];
     return {
       id: "happy-path-viewer",
       frames: [{
         name: "Happy-path pipeline rows",
-        description: this.phase === "clean"
-          ? "Simple completed dots · quiet current ring · progress-first task order."
-          : "Before · check badges, technical labels, and alphabetical-only order compete with progress.",
+        description: this.phase === "expanded"
+          ? "Expanded project keeps the same aggregate row and inserts progress-sorted tasks below."
+          : "Alphabetical projects stay collapsed with aggregate pipeline rows intact.",
         source: "scenario",
         steps,
         blobs,
         receipts: [],
-        assertions: assertions(this.phase, blobs),
-        visual: { kind: "happy-path-viewer", phase: this.phase },
+        assertions: assertions(this.phase, blobs, projects),
+        visual: { kind: "happy-path-viewer", phase: this.phase, projects },
       }],
     };
   }
 
   play(): Scenario {
-    this.phase = "clean";
+    this.phase = "expanded";
     return this.snapshot();
   }
 
   reset(): Scenario {
-    this.phase = "noisy";
+    this.phase = "collapsed";
     return this.snapshot();
   }
 }
 
-function assertions(phase: HappyPathViewerPhase, blobs: ScenarioBlob[]) {
-  if (phase === "noisy") return [
-    { label: "Before state reproduces technical status noise", passed: false },
-    { label: "Before state reproduces checkmark completion badges", passed: false },
-  ];
+function assertions(phase: HappyPathViewerPhase, blobs: ScenarioBlob[], projects: string[]) {
   return [
+    { label: "Projects sort alphabetically regardless of progress", passed: projects.join(",") === "Alpha project,Beta project,Zulu project" },
     { label: "Tasks sort by progress descending, then title", passed: blobs.map((blob) => blob.id).join(",") === "complete,review,failed" },
+    { label: "Expansion changes only child-row visibility", passed: ["collapsed", "expanded"].includes(phase) },
     { label: "Underlying technical states remain available without default labels", passed: blobs.some((blob) => blob.status === "failed") },
     { label: "Completed pips use the shared happy-path dot treatment", passed: true },
   ];
@@ -67,7 +66,7 @@ const fixtures: ScenarioBlob[] = [
   },
 ];
 
-type HappyPathViewerPhase = "noisy" | "clean";
+type HappyPathViewerPhase = "collapsed" | "expanded";
 type ScenarioBlob = {
   id: string;
   title: string;

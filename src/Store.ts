@@ -55,8 +55,7 @@ export class ConveyorStore {
   }
 
   sortProjectsByProgress(): boolean {
-    const row = this.database.connection.prepare(settingSelect).get("sortProjectsByProgress") as { value?: string } | undefined;
-    return row?.value !== "false";
+    return false;
   }
 
   setActiveProjectDays(days: number): number {
@@ -65,8 +64,8 @@ export class ConveyorStore {
     return this.activeProjectDays();
   }
 
-  setSortProjectsByProgress(enabled: boolean): boolean {
-    this.database.connection.prepare(settingUpsert).run("sortProjectsByProgress", String(enabled), this.now());
+  setSortProjectsByProgress(_enabled: boolean): boolean {
+    this.database.connection.prepare(settingUpsert).run("sortProjectsByProgress", "false", this.now());
     return this.sortProjectsByProgress();
   }
 

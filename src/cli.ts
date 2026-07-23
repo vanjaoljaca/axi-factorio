@@ -834,7 +834,7 @@ function serviceAbortController(): AbortController {
 }
 
 function printVersion(): void {
-  process.stdout.write("axi-factorio 0.1.0-rc.52\n");
+  process.stdout.write("axi-factorio 0.1.0-rc.53\n");
 }
 
 function helpCommand(args: string[]): string | undefined {
@@ -905,7 +905,7 @@ const receiptFields = [
 ];
 
 const helpText: Record<string, string> = {
-  root: `axi-factorio 0.1.0-rc.52
+  root: `axi-factorio 0.1.0-rc.53
 
 Usage: axi-factorio <command> [flags]
 Commands: project, artifact, add, adopt, relocate, bind-execution, list, status, show, receipts, play, step, stop, retry, review, feedback, approve, reset-endpoint, rebind-endpoint, rewind, kick, run, service, setup, init

@@ -2,8 +2,8 @@ export function runActiveProjectsScenario(): Scenario {
   const databasePath = createFixture();
   const snapshot = createViewSnapshot(databasePath) as ViewerSnapshot;
   const now = new Date("2026-07-22T00:00:00.000Z");
-  const active = sortProjects(snapshot.projects.filter((project) => projectHasActiveWork(project, now, 7)), true);
-  const inactive = sortProjects(snapshot.projects.filter((project) => !projectHasActiveWork(project, now, 7)), true);
+  const active = sortProjects(snapshot.projects.filter((project) => projectHasActiveWork(project, now, 7)));
+  const inactive = sortProjects(snapshot.projects.filter((project) => !projectHasActiveWork(project, now, 7)));
   return { id: "active-projects-fold", frames: [{
     name: "Active projects fold",
     description: "Play refreshes, then reveal completed-only and empty projects without adding a second vertical scroller.",
@@ -12,8 +12,10 @@ export function runActiveProjectsScenario(): Scenario {
       { label: "Running and attention work is active", passed: active.some((project) => project.id === "running-app") },
       { label: "Paused review work is active", passed: active.some((project) => project.id === "review-app") },
       { label: "Fresh inventory remains active", passed: active.some((project) => project.id === "inventory-app") },
+      { label: "Active projects remain alphabetical", passed: active.map((project) => project.name).join(",") === "Inventory app,Review app,Running app" },
       { label: "Stale inventory is inactive", passed: inactive.some((project) => project.id === "stale-inventory") },
       { label: "Completed-only and empty projects are inactive", passed: inactive.some((project) => project.id === "completed-app") && inactive.some((project) => project.id === "empty-app") },
+      { label: "Inactive projects remain alphabetical", passed: inactive.map((project) => project.name).join(",") === "Completed app,Empty app,Stale inventory" },
     ], visual: { kind: "active-projects", active, inactive },
   }] };
 }

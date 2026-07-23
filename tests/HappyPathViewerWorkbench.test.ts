@@ -1,10 +1,11 @@
-test("happy-path Viewer scenario removes technical row noise without rewriting state", () => {
+test("happy-path Viewer scenario keeps the project row stable while expanding sorted blobs", () => {
   const scenario = new HappyPathViewerScenario();
   const before = scenario.snapshot().frames[0];
   const after = scenario.play().frames[0];
 
-  assert.equal((before.visual as { phase: string }).phase, "noisy");
-  assert.equal((after.visual as { phase: string }).phase, "clean");
+  assert.equal((before.visual as { phase: string }).phase, "collapsed");
+  assert.equal((after.visual as { phase: string }).phase, "expanded");
+  assert.deepEqual((after.visual as { projects: string[] }).projects, ["Alpha project", "Beta project", "Zulu project"]);
   assert.deepEqual(
     (after.blobs as Array<{ id: string }>).map((blob) => blob.id),
     ["complete", "review", "failed"],
