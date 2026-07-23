@@ -64,6 +64,7 @@ test("default Viewer pip treatment is green-dot happy path without status copy",
   assert.doesNotMatch(source, /\.bead\.done:after\{content:"✓"/u);
   assert.match(source, /snapshot\.settings\.debugMode\?statusLabel\(blob\.status\):''/u);
   assert.match(source, /snapshot\.settings\.debugMode&&current\?blob\.status:''/u);
+  assert.match(source, /for\(const blob of sortBlobs\(project\.blobs\)\).*rows\.appendChild\(row\)/u);
 });
 
 test("Viewer active-project fold keeps vertical scrolling on the document", () => {
