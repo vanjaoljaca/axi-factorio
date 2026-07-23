@@ -53,8 +53,16 @@ test("blob sorting uses progress descending, then title and id", () => {
   const alpha = { ...blob("ready", "2026-07-22T00:00:00Z", 1), id: "z", title: "Alpha" };
   const beta = { ...blob("ready", "2026-07-22T00:00:00Z", 3), id: "b", title: "Beta" };
   const betaTie = { ...blob("ready", "2026-07-22T00:00:00Z", 3), id: "a", title: "Beta" };
+  const historicalComplete = {
+    ...blob("complete", "2026-07-22T00:00:00Z", 1),
+    id: "complete",
+    title: "Complete",
+  };
 
-  assert.deepEqual(sortBlobs([alpha, beta, betaTie]).map((item) => item.id), ["a", "b", "z"]);
+  assert.deepEqual(
+    sortBlobs([alpha, beta, betaTie, historicalComplete]).map((item) => item.id),
+    ["complete", "a", "b", "z"],
+  );
 });
 
 test("default Viewer pip treatment is green-dot happy path without status copy", () => {

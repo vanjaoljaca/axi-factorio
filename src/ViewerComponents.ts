@@ -37,6 +37,7 @@ export type ActivityProject = { id: string; name: string; blobs: ActivityBlob[] 
 export type ProgressBlob = {
   id: string;
   title: string;
+  status?: string;
   completedStepIds: string[];
   steps: Array<{ id: string }>;
 };
@@ -74,6 +75,7 @@ export function sortProjects<T extends ActivityProject>(projects: T[], byProgres
 }
 
 export function blobProgress(blob: ProgressBlob): number {
+  if (blob.status === "complete") return 1;
   return blob.steps.length ? Math.min(blob.completedStepIds.length, blob.steps.length) / blob.steps.length : 0;
 }
 
@@ -111,7 +113,7 @@ function aggregateProgressGradient(completed,total){const degrees=total?Math.max
 function projectProgress(project){const total=project.blobs.reduce((sum,blob)=>sum+blob.steps.length,0),completed=project.blobs.reduce((sum,blob)=>sum+Math.min(blob.completedStepIds.length,blob.steps.length),0);return total?completed/total:0}
 function projectHasActiveWork(project,now=new Date(),days=7){const cutoff=now.getTime()-days*86400000;return project.blobs.some(blob=>{if(['running','queued','waiting','blocked','failed'].includes(blob.status))return true;if(blob.status==='complete')return false;const activity=[blob.createdAt,blob.latestReceiptAt,blob.latestHumanInputAt].filter(Boolean).reduce((latest,value)=>Date.parse(value)>Date.parse(latest)?value:latest);return Date.parse(activity)>=cutoff})}
 function sortProjects(projects,byProgress){return projects.slice().sort((left,right)=>(byProgress?projectProgress(right)-projectProgress(left):0)||left.name.localeCompare(right.name)||left.id.localeCompare(right.id))}
-function blobProgress(blob){return blob.steps.length?Math.min(blob.completedStepIds.length,blob.steps.length)/blob.steps.length:0}
+function blobProgress(blob){return blob.status==="complete"?1:blob.steps.length?Math.min(blob.completedStepIds.length,blob.steps.length)/blob.steps.length:0}
 function sortBlobs(blobs){return blobs.slice().sort((left,right)=>blobProgress(right)-blobProgress(left)||left.title.localeCompare(right.title)||left.id.localeCompare(right.id))}
 function componentEscape(value){return String(value).replace(/[&<>"']/g,character=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[character]))}
 `;
