@@ -62,7 +62,7 @@ test("viewer isolates and diagnoses one missing project pipeline without hiding 
   assert.match(stale?.pipelineIssue?.detail ?? "", /ENOENT|no vN versions/u);
 });
 
-test("viewer distinguishes imported work awaiting review from failed work", () => {
+test("default Viewer API keeps technical waiting and failure states out of the happy path", () => {
   const fixture = createPipeline(["g1.first", "g2.review", "g3.last"]);
   const databasePath = join(fixture.root, "factorio.sqlite");
   const database = new FactorioDatabase(databasePath);
@@ -89,11 +89,24 @@ test("viewer distinguishes imported work awaiting review from failed work", () =
   const blobs = snapshot.projects.flatMap((project) => project.blobs);
 
   assert.deepEqual(selectState(blobs, "imported"), {
-    id: "imported", status: "waiting", importedStepIds: ["g1.first"],
+    id: "imported", status: "ready", importedStepIds: ["g1.first"],
   });
   assert.deepEqual(selectState(blobs, "failed"), {
-    id: "failed", status: "failed", importedStepIds: [],
+    id: "failed", status: "ready", importedStepIds: [],
   });
+  assert.doesNotMatch(
+    JSON.stringify(blobs.map(({ status, execution }) => ({ status, execution }))),
+    /failed|awaiting review|needs attention/iu,
+  );
+
+  const debugDatabase = new FactorioDatabase(databasePath);
+  new ConveyorStore(debugDatabase).setDebugMode(true);
+  debugDatabase.close();
+  const debugSnapshot = createViewSnapshot(databasePath) as ViewSnapshot;
+  const debugBlobs = debugSnapshot.projects.flatMap((project) => project.blobs);
+
+  assert.equal(selectState(debugBlobs, "failed")?.status, "failed");
+  assert.equal(debugSnapshot.settings.debugMode, true);
 });
 
 test("viewer keeps paused zero-receipt inventory neutral", () => {

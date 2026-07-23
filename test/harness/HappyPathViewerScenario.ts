@@ -35,9 +35,9 @@ export class HappyPathViewerScenario {
 function assertions(phase: HappyPathViewerPhase, blobs: ScenarioBlob[], projects: string[]) {
   return [
     { label: "Projects sort alphabetically regardless of progress", passed: projects.join(",") === "Alpha project,Beta project,Zulu project" },
-    { label: "Tasks sort by progress descending, then title", passed: blobs.map((blob) => blob.id).join(",") === "complete,review,failed" },
+    { label: "Tasks sort by progress descending, then title", passed: blobs.map((blob) => blob.id).join(",") === "candidate-complete,candidate-beta,candidate-alpha" },
     { label: "Expansion changes only child-row visibility", passed: ["collapsed", "expanded"].includes(phase) },
-    { label: "Underlying technical states remain available without default labels", passed: blobs.some((blob) => blob.status === "failed") },
+    { label: "Fixture retains technical states for the default-view boundary check", passed: blobs.some((blob) => blob.status === "failed") },
     { label: "Completed pips use the shared happy-path dot treatment", passed: true },
   ];
 }
@@ -51,16 +51,16 @@ const steps = [
 
 const fixtures: ScenarioBlob[] = [
   {
-    id: "failed", title: "Alpha interrupted experiment", state: "failed",
+    id: "candidate-alpha", title: "Alpha interrupted experiment", state: "failed",
     status: "failed", stepId: "work.build", completedStepIds: ["work.plan"], steps,
   },
   {
-    id: "complete", title: "Zulu accepted result", state: "complete",
+    id: "candidate-complete", title: "Zulu accepted result", state: "complete",
     status: "complete", stepId: "complete",
     completedStepIds: steps.map((step) => step.id), steps,
   },
   {
-    id: "review", title: "Beta candidate", state: "waiting",
+    id: "candidate-beta", title: "Beta candidate", state: "waiting",
     status: "waiting", stepId: "human.review",
     completedStepIds: ["work.plan", "work.build"], steps,
   },

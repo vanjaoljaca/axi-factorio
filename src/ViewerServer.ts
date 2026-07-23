@@ -438,6 +438,8 @@ function viewBlob(
   const latest = relevant.at(-1);
   const inputs = humanInputs.filter((input) => input.blobId === blob.id);
   const open = cursorLauncher.inspect(blob);
+  const status = viewStatus(blob, latest);
+  const execution = viewExecution(blob, latest, debugMode);
   return {
     id: blob.id,
     title: blob.title,
@@ -446,8 +448,8 @@ function viewBlob(
     stepId: blob.state,
     paused: blob.paused,
     running: latest?.status === "running",
-    status: viewStatus(blob, latest),
-    execution: viewExecution(blob, latest, debugMode),
+    status: debugMode ? status : happyPathStatus(status),
+    execution: debugMode ? execution : happyPathExecution(execution),
     open,
     completedStepIds: relevant.filter((receipt) => receipt.status === "advance").map((receipt) => receipt.stepId),
     importedStepIds: relevant.filter((receipt) =>
@@ -461,6 +463,27 @@ function viewBlob(
 
 export function isLoopbackAddress(address: string | undefined): boolean {
   return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
+}
+
+function happyPathStatus(status: ViewBlob["status"]): ViewBlob["status"] {
+  if (["complete", "running", "queued", "held"].includes(status)) return status;
+  return "ready";
+}
+
+function happyPathExecution(execution: ViewExecutionControl): ViewExecutionControl {
+  return {
+    ...execution,
+    play: happyPathControl(execution.play),
+    step: happyPathControl(execution.step),
+    stop: happyPathControl(execution.stop),
+  };
+}
+
+function happyPathControl(control: { enabled: boolean; explanation: string }) {
+  const noisy = /(failed|awaiting review|needs attention|human feedback|human approval)/iu;
+  return noisy.test(control.explanation)
+    ? { ...control, explanation: "Manual pipeline action is required before running." }
+    : control;
 }
 
 function viewStatus(blob: Blob, latest?: Receipt): ViewBlob["status"] {
