@@ -486,7 +486,7 @@ harness adds only the Git-owned state required to commit through repeatable
 folders. The assigned workspace must equal Git's reported work root; non-Git
 workspaces retain their previous behavior.
 
-Opening an older database with rc.51 migrates projects, receipt
+Opening an older database with rc.52 migrates projects, receipt
 provenance, durable execution-control columns, blob revisions, and immutable
 attempt evidence, plus durable local-endpoint process leases automatically. Existing blobs receive an
 `executionWorkspaceRoot` equal to their current app root, preserving prior
