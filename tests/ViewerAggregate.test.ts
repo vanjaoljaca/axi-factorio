@@ -49,6 +49,23 @@ test("progress sorting is deterministic and can be disabled", () => {
   assert.deepEqual(sortProjects([beta, alpha], false).map((item) => item.id), ["a", "b"]);
 });
 
+test("blob sorting uses progress descending, then title and id", () => {
+  const alpha = { ...blob("ready", "2026-07-22T00:00:00Z", 1), id: "z", title: "Alpha" };
+  const beta = { ...blob("ready", "2026-07-22T00:00:00Z", 3), id: "b", title: "Beta" };
+  const betaTie = { ...blob("ready", "2026-07-22T00:00:00Z", 3), id: "a", title: "Beta" };
+
+  assert.deepEqual(sortBlobs([alpha, beta, betaTie]).map((item) => item.id), ["a", "b", "z"]);
+});
+
+test("default Viewer pip treatment is green-dot happy path without status copy", () => {
+  const source = readFileSync(join(import.meta.dirname, "..", "src", "ViewerServer.ts"), "utf8");
+
+  assert.match(source, /\.bead\.done\{[^}]*background:var\(--green\)/u);
+  assert.doesNotMatch(source, /\.bead\.done:after\{content:"✓"/u);
+  assert.match(source, /snapshot\.settings\.debugMode\?statusLabel\(blob\.status\):''/u);
+  assert.match(source, /snapshot\.settings\.debugMode&&current\?blob\.status:''/u);
+});
+
 test("Viewer active-project fold keeps vertical scrolling on the document", () => {
   const source = readFileSync(join(import.meta.dirname, "..", "src", "ViewerServer.ts"), "utf8");
 
@@ -90,7 +107,7 @@ function project(blobs: ReturnType<typeof blob>[], id = "project", name = "Proje
 type FakeMarker = AggregateMarker & { styleWrites: number; attributeWrites: number };
 
 import type { AggregateMarker, AggregateMarkerUpdate } from "../src/ViewerComponents.ts";
-import { aggregateProgressGradient, projectHasActiveWork, sortProjects, updateAggregateMarker } from "../src/ViewerComponents.ts";
+import { aggregateProgressGradient, projectHasActiveWork, sortBlobs, sortProjects, updateAggregateMarker } from "../src/ViewerComponents.ts";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import assert from "node:assert/strict";
