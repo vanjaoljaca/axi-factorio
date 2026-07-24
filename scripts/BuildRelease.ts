@@ -106,7 +106,9 @@ when the harness needs a containing workspace without changing app identity.
 Existing rc.4 through rc.19 databases
 migrate on first open, including imported-receipt provenance and durable
 execution-control columns, blob revisions, immutable attempt evidence, and the
-append-only harness event table. Existing blobs preserve prior behavior with
+append-only harness event table. rc.55 also imports untracked legacy local
+endpoint sidecars into Factorio-owned SQLite declarations and removes only the
+known sidecar file. Existing blobs preserve prior behavior with
 their current app root as the execution workspace. Use
 \`project upsert\` to replace the migrated
 \`<old-cwd>/pipelines\` root with the shared workspace pipeline root.

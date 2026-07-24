@@ -9,6 +9,7 @@ async function main(args = process.argv.slice(2)): Promise<void> {
   const database = new FactorioDatabase(options.databasePath);
   const store = new ConveyorStore(database);
   try {
+    migrateLegacyLocalEndpointDeclarations(store);
     await runCommand(options.args, store, options.json, databaseAlreadyExisted, options.databasePath);
   } finally {
     database.close();
@@ -36,6 +37,7 @@ async function runCommand(
     case "stop": return controlBlob(args.slice(1), store, json, args[0]);
     case "retry": return retryBlob(args.slice(1), store, json);
     case "artifact": return runArtifact(args.slice(1), store, json);
+    case "endpoint": return runEndpoint(args.slice(1), store, json);
     case "review": return armHumanReview(args.slice(1), store, json);
     case "feedback": return addHumanFeedback(args.slice(1), store, json);
     case "approve": return approveHumanReview(args.slice(1), store, json);
@@ -70,6 +72,46 @@ async function runArtifact(args: string[], store: ConveyorStore, json: boolean):
   await new ConveyorRunner(store, new ArtifactPresenceHarness()).runBlob(id);
   const receipt = store.listReceipts(id).at(-1);
   printOutput({ ok: `artifact verify ${id} -> ${receipt?.status}`, verification, receipt }, json);
+}
+
+function runEndpoint(args: string[], store: ConveyorStore, json: boolean): void {
+  const action = args[0];
+  if (action === "declare") return declareLocalEndpoint(args.slice(1), store, json);
+  if (action === "show") return showLocalEndpointDeclaration(args.slice(1), store, json);
+  if (action === "clear") return clearLocalEndpointDeclaration(args.slice(1), store, json);
+  throw usage("endpoint accepts declare, show, or clear.");
+}
+
+function declareLocalEndpoint(args: string[], store: ConveyorStore, json: boolean): void {
+  const parsed = parseArgs(args, {
+    "--command": "value", "--arg": "value", "--health-path": "value",
+  });
+  requirePositionals(parsed, 1, "endpoint declare requires one blob ID.");
+  const blob = requireBlob(store, parsed.positionals[0]);
+  const value = validateLocalEndpointDeclaration({
+    command: requireFlag(parsed, "--command"),
+    args: parsed.flags["--arg"] ?? [],
+    healthPath: firstFlag(parsed, "--health-path") ?? "/",
+  });
+  const declaration = store.declareLocalEndpoint(blob.id, {
+    workspaceRoot: blob.executionWorkspaceRoot, ...value,
+  });
+  printOutput({ ok: `endpoint declare ${blob.id}`, localEndpointDeclaration: declaration }, json);
+}
+
+function showLocalEndpointDeclaration(args: string[], store: ConveyorStore, json: boolean): void {
+  const parsed = parseArgs(args, {});
+  requirePositionals(parsed, 1, "endpoint show requires one blob ID.");
+  const blob = requireBlob(store, parsed.positionals[0]);
+  printOutput({ localEndpointDeclaration: store.getLocalEndpointDeclaration(blob.id) }, json);
+}
+
+function clearLocalEndpointDeclaration(args: string[], store: ConveyorStore, json: boolean): void {
+  const parsed = parseArgs(args, {});
+  requirePositionals(parsed, 1, "endpoint clear requires one blob ID.");
+  const blob = requireBlob(store, parsed.positionals[0]);
+  const cleared = store.clearLocalEndpointDeclaration(blob.id);
+  printOutput({ ok: `endpoint clear ${blob.id}`, cleared }, json);
 }
 
 function showHome(store: ConveyorStore, json: boolean): void {
@@ -378,14 +420,19 @@ async function rebindLocalEndpoint(args: string[], store: ConveyorStore, json: b
   requirePositionals(parsed, 1, "rebind-endpoint requires one lease ID.");
   const evidence = parsed.flags["--evidence"] ?? [];
   if (evidence.length === 0) throw usage("rebind-endpoint requires at least one --evidence value.");
+  const lease = store.listLocalEndpointLeases().find((item) => item.id === parsed.positionals[0]);
+  if (!lease) throw new Error(`Local endpoint lease ${parsed.positionals[0]} was not found.`);
+  const declaration = store.getLocalEndpointDeclaration(lease.blobId) ?? {
+    command: lease.command, args: lease.args, healthPath: new URL(lease.url).pathname,
+  };
   const workspace = await new LocalEndpointSupervisor().inspectWorkspace(
-    requireFlag(parsed, "--workspace"), requireFlag(parsed, "--git-head"),
+    requireFlag(parsed, "--workspace"), requireFlag(parsed, "--git-head"), declaration,
   );
-  const lease = store.rebindLocalEndpoint(parsed.positionals[0], {
+  const rebound = store.rebindLocalEndpoint(parsed.positionals[0], {
     workspaceRoot: workspace.root, gitHead: requireFlag(parsed, "--git-head"),
     command: workspace.command, args: workspace.args, healthPath: workspace.healthPath, evidence,
   });
-  printOutput({ ok: `rebind-endpoint ${lease.id} -> ${lease.gitHead}`, localEndpointLease: lease }, json);
+  printOutput({ ok: `rebind-endpoint ${rebound.id} -> ${rebound.gitHead}`, localEndpointLease: rebound }, json);
 }
 
 function adoptBlob(args: string[], store: ConveyorStore, json: boolean): void {
@@ -834,14 +881,14 @@ function serviceAbortController(): AbortController {
 }
 
 function printVersion(): void {
-  process.stdout.write("axi-factorio 0.1.0-rc.54\n");
+  process.stdout.write("axi-factorio 0.1.0-rc.55\n");
 }
 
 function helpCommand(args: string[]): string | undefined {
   if (args[0] === "help") return args[1];
   const withoutHelp = args.filter((argument) => argument !== "--help");
   const command = extractGlobals(withoutHelp).args;
-  if (["artifact", "project", "service"].includes(command[0] ?? "") && command[1]) {
+  if (["artifact", "endpoint", "project", "service"].includes(command[0] ?? "") && command[1]) {
     return `${command[0]}:${command[1]}`;
   }
   return command[0];
@@ -905,10 +952,10 @@ const receiptFields = [
 ];
 
 const helpText: Record<string, string> = {
-  root: `axi-factorio 0.1.0-rc.54
+  root: `axi-factorio 0.1.0-rc.55
 
 Usage: axi-factorio <command> [flags]
-Commands: project, artifact, add, adopt, relocate, bind-execution, list, status, show, receipts, play, step, stop, retry, review, feedback, approve, reset-endpoint, rebind-endpoint, rewind, kick, run, service, setup, init
+Commands: project, artifact, endpoint, add, adopt, relocate, bind-execution, list, status, show, receipts, play, step, stop, retry, review, feedback, approve, reset-endpoint, rebind-endpoint, rewind, kick, run, service, setup, init
 Globals: --db PATH, --json, --help, -v, --version
 
 Examples:
@@ -928,6 +975,22 @@ Examples:
   ),
   "artifact:verify": commandHelp("axi-factorio artifact verify BLOB_ID", [], [
     "axi-factorio artifact verify <id>",
+  ]),
+  endpoint: commandHelp(
+    "axi-factorio endpoint <declare|show|clear>",
+    ["Declarations live in Factorio's database, never in consumer source."],
+    ["axi-factorio endpoint declare <id> --command npm --arg run --arg preview --health-path /healthz"],
+  ),
+  "endpoint:declare": commandHelp(
+    "axi-factorio endpoint declare BLOB_ID --command PATH [--arg VALUE...] [--health-path PATH]",
+    ["--command PATH (required)", "--arg VALUE (repeatable)", "--health-path PATH (default: /)"],
+    ["axi-factorio endpoint declare <id> --command npm --arg run --arg preview --health-path /healthz"],
+  ),
+  "endpoint:show": commandHelp("axi-factorio endpoint show BLOB_ID", [], [
+    "axi-factorio endpoint show <id>",
+  ]),
+  "endpoint:clear": commandHelp("axi-factorio endpoint clear BLOB_ID", [], [
+    "axi-factorio endpoint clear <id>",
   ]),
   "project:list": commandHelp(
     "axi-factorio project list [--fields FIELDS]",
@@ -1070,7 +1133,11 @@ import { discoverPipeline, nextStep, requireStep, snapshotDefinition } from "./P
 import { ConveyorRunner } from "./Runner.ts";
 import { ArtifactPresenceHarness } from "./ArtifactPresenceHarness.ts";
 import { verifyArtifacts } from "./ArtifactRules.ts";
-import { LocalEndpointSupervisor } from "./LocalEndpointSupervisor.ts";
+import {
+  LocalEndpointSupervisor,
+  migrateLegacyLocalEndpointDeclarations,
+  validateLocalEndpointDeclaration,
+} from "./LocalEndpointSupervisor.ts";
 import { ConveyorService } from "./Service.ts";
 import { runCoupledService } from "./ServiceRuntime.ts";
 import { axiDescription, axiHomeHelp } from "./AxiGuidance.ts";

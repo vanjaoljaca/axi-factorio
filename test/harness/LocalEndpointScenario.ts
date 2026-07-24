@@ -18,6 +18,9 @@ export class LocalEndpointScenario {
     this.store = new ConveyorStore(this.database);
     this.runner = new ConveyorRunner(this.store, harness, undefined, {}, this.supervisor);
     this.store.createBlob(blobId, blobInput(this.fixture));
+    this.store.declareLocalEndpoint(blobId, {
+      workspaceRoot: this.fixture.workspace, ...endpointDeclaration(),
+    });
     this.store.armHumanGate(blobId, "Hold the exact-head endpoint for a delayed human decision.");
     this.store.requestStep(blobId);
     await this.runner.runOnce();
@@ -144,7 +147,7 @@ class EndpointHarness implements AgentHarness {
     this.onPhase("committed", null);
     const legacy = new LocalEndpointSupervisor({ healthTimeoutMs: legacyHealthTimeoutMs });
     try {
-      await legacy.start("legacy-timeout", input.blob.executionWorkspaceRoot);
+      await legacy.start("legacy-timeout", input.blob.executionWorkspaceRoot, endpointDeclaration());
       throw new Error("Legacy endpoint budget unexpectedly reached health.");
     } catch (error) {
       if (!/health timed out/u.test(String(error))) throw error;
@@ -176,11 +179,7 @@ function createFixture(): Fixture {
   mkdirSync(pipelinePath, { recursive: true });
   writeFileSync(join(pipelinePath, "01.build.endpoint.entry.md"), "Produce a declared local endpoint.");
   writeFileSync(join(pipelinePath, "01.build.endpoint.exit.md"), "Verify its endpoint artifact.");
-  mkdirSync(join(workspace, ".axi-factorio"), { recursive: true });
   mkdirSync(join(workspace, "apps", "example"), { recursive: true });
-  writeFileSync(join(workspace, ".axi-factorio", "local-endpoint.json"), JSON.stringify({
-    command: npmCommand(), args: ["--prefix", "apps/example", "run", "workbench"], healthPath: "/healthz",
-  }, null, 2));
   writeFileSync(join(workspace, "apps", "example", "package.json"), JSON.stringify({
     private: true, scripts: { workbench: "node endpoint-server.ts" },
   }, null, 2));
@@ -210,6 +209,8 @@ function frame(
     receipts: receipt ? [viewReceipt(receipt)] : [], assertions: assertions(fixture, phase, session, head),
     evidenceCards: [
       { label: "Declared argv", value: `${npmCommand()} --prefix apps/example run workbench` },
+      { label: "Factorio-owned state", value: fixture.databasePath },
+      { label: "Consumer sidecar", value: "absent" },
       { label: "Startup budgets", value: `legacy ${legacyHealthTimeoutMs}ms → fixed ${defaultHealthTimeoutMs}ms` },
     ],
     visual: {
@@ -227,6 +228,7 @@ function assertions(
 ): Assertion[] {
   return [
     { label: "Agent never binds the endpoint port", passed: true },
+    { label: "Consumer workspace contains no Factorio endpoint sidecar", passed: !existsSync(join(fixture.workspace, ".axi-factorio", "local-endpoint.json")) },
     { label: "Declared package-script argv remains literal", passed: !session || session.command === npmCommand() && session.args.join(" ") === "--prefix apps/example run workbench" },
     { label: "Legacy startup timeout is reproduced", passed: phase !== "startup-timeout" || session === null },
     { label: "Supervisor uses the assigned workspace", passed: !session || session.cwd === realpathSync(fixture.workspace) },
@@ -296,6 +298,12 @@ function blobInput(fixture: Fixture): BlobInput {
 
 function git(cwd: string, args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
+}
+
+function endpointDeclaration(): { command: string; args: string[]; healthPath: string } {
+  return {
+    command: npmCommand(), args: ["--prefix", "apps/example", "run", "workbench"], healthPath: "/healthz",
+  };
 }
 
 function disposeFixture(fixture: Fixture): void {

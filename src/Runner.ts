@@ -122,7 +122,10 @@ export class ConveyorRunner {
         },
         startLocalEndpoint: async () => {
           if (!this.localEndpoints) return null;
-          localEndpoint = await this.localEndpoints.start(claim.receipt.id, claim.blob.executionWorkspaceRoot);
+          const declaration = this.store.getLocalEndpointDeclaration(claim.blob.id);
+          localEndpoint = await this.localEndpoints.start(
+            claim.receipt.id, claim.blob.executionWorkspaceRoot, declaration,
+          );
           if (localEndpoint) {
             this.store.registerLocalEndpoint(claim.receipt.id, localEndpoint);
             observer.event({ type: "local-endpoint", status: "healthy", ...localEndpoint });

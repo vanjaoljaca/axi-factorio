@@ -447,6 +447,32 @@ export class ConveyorStore {
     return rows.map((row) => mapHumanInput(asRecord(row)));
   }
 
+  declareLocalEndpoint(blobId: string, input: LocalEndpointDeclarationInput): LocalEndpointDeclaration {
+    return this.database.transaction(() => {
+      const blob = this.requireBlob(blobId);
+      if (blob.executionWorkspaceRoot !== input.workspaceRoot) {
+        throw new Error("Local endpoint declaration must use the blob execution workspace.");
+      }
+      const at = this.now();
+      this.database.connection.prepare(localEndpointDeclarationUpsert).run(
+        blobId, input.workspaceRoot, input.command, JSON.stringify(input.args),
+        input.healthPath, at, at,
+      );
+      return this.getLocalEndpointDeclaration(blobId)!;
+    });
+  }
+
+  getLocalEndpointDeclaration(blobId: string): LocalEndpointDeclaration | null {
+    const row = this.database.connection.prepare(localEndpointDeclarationSelect).get(blobId);
+    return row ? mapLocalEndpointDeclaration(asRecord(row)) : null;
+  }
+
+  clearLocalEndpointDeclaration(blobId: string): boolean {
+    const active = this.listLocalEndpointLeases(blobId).some((lease) => lease.desiredState === "active");
+    if (active) throw new Error("Local endpoint declaration cannot clear while a lease is active.");
+    return this.database.connection.prepare(localEndpointDeclarationDelete).run(blobId).changes > 0;
+  }
+
   registerLocalEndpoint(receiptId: string, input: LocalEndpointRegistration): LocalEndpointLease {
     return this.database.transaction(() => {
       const receipt = this.requireReceipt(receiptId);
@@ -967,6 +993,9 @@ export class ConveyorStore {
     this.database.connection.prepare(blobWorkspaceUpdate).run(
       newRoot, blob.cwd, newRoot, relocation.createdAt, blob.id,
     );
+    this.database.connection.prepare(localEndpointDeclarationWorkspaceUpdate).run(
+      newRoot, relocation.createdAt, blob.id, blob.executionWorkspaceRoot,
+    );
     this.database.connection.prepare(workspaceRelocationInsert).run(
       relocation.id, relocation.blobId, relocation.projectId,
       relocation.oldCwd, relocation.newCwd, relocation.oldProjectRoot, relocation.newProjectRoot,
@@ -991,6 +1020,8 @@ export class ConveyorStore {
     const binding = executionWorkspaceBinding(blob, projectRoot, executionRoot, evidence, this.now());
     this.database.connection.prepare(blobExecutionWorkspaceUpdate)
       .run(executionRoot, binding.createdAt, blob.id);
+    this.database.connection.prepare(localEndpointDeclarationWorkspaceUpdate)
+      .run(executionRoot, binding.createdAt, blob.id, blob.executionWorkspaceRoot);
     this.database.connection.prepare(executionWorkspaceBindingInsert).run(
       binding.id, binding.blobId, binding.projectId, binding.projectRoot,
       binding.oldExecutionWorkspaceRoot, binding.newExecutionWorkspaceRoot,
@@ -1289,6 +1320,7 @@ const projectRemovalInsert = `INSERT INTO projectRemovals
   VALUES (?, ?, ?, ?, ?, ?, ?)`;
 const projectGraphDeletes = [
   "DELETE FROM localEndpointLeases WHERE blobId IN (SELECT id FROM blobs WHERE projectId = ?)",
+  "DELETE FROM localEndpointDeclarations WHERE blobId IN (SELECT id FROM blobs WHERE projectId = ?)",
   "DELETE FROM executionEvents WHERE blobId IN (SELECT id FROM blobs WHERE projectId = ?)",
   "DELETE FROM humanInputs WHERE blobId IN (SELECT id FROM blobs WHERE projectId = ?)",
   "DELETE FROM attemptEvidence WHERE receiptId IN (SELECT id FROM receipts WHERE blobId IN (SELECT id FROM blobs WHERE projectId = ?))",
@@ -1403,6 +1435,16 @@ const localEndpointLeaseInsert = `INSERT INTO localEndpointLeases
   (id, blobId, stepId, receiptId, workspaceRoot, gitHead, url, port, pid, command,
    argsJson, ownership, desiredState, observedState, createdAt, updatedAt)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'receipt', 'active', 'healthy', ?, ?)`;
+const localEndpointDeclarationUpsert = `INSERT INTO localEndpointDeclarations
+  (blobId, workspaceRoot, command, argsJson, healthPath, createdAt, updatedAt)
+  VALUES (?, ?, ?, ?, ?, ?, ?)
+  ON CONFLICT(blobId) DO UPDATE SET workspaceRoot = excluded.workspaceRoot,
+  command = excluded.command, argsJson = excluded.argsJson, healthPath = excluded.healthPath,
+  updatedAt = excluded.updatedAt`;
+const localEndpointDeclarationSelect = "SELECT * FROM localEndpointDeclarations WHERE blobId = ?";
+const localEndpointDeclarationDelete = "DELETE FROM localEndpointDeclarations WHERE blobId = ?";
+const localEndpointDeclarationWorkspaceUpdate = `UPDATE localEndpointDeclarations
+  SET workspaceRoot = ?, updatedAt = ? WHERE blobId = ? AND workspaceRoot = ?`;
 const localEndpointLeaseSelect = "SELECT * FROM localEndpointLeases WHERE id = ?";
 const localEndpointLeaseList = "SELECT * FROM localEndpointLeases ORDER BY createdAt, id";
 const localEndpointLeaseListByBlob = "SELECT * FROM localEndpointLeases WHERE blobId = ? ORDER BY createdAt, id";
@@ -1525,6 +1567,14 @@ function mapLocalEndpointLease(row: Record<string, unknown>): LocalEndpointLease
   };
 }
 
+function mapLocalEndpointDeclaration(row: Record<string, unknown>): LocalEndpointDeclaration {
+  return {
+    blobId: String(row.blobId), workspaceRoot: String(row.workspaceRoot),
+    command: String(row.command), args: JSON.parse(String(row.argsJson)) as string[],
+    healthPath: String(row.healthPath), createdAt: String(row.createdAt), updatedAt: String(row.updatedAt),
+  };
+}
+
 import type {
   ExecutionResult,
   ClaimedExecution,
@@ -1546,6 +1596,7 @@ import type {
   BlobRevision,
   WorkspaceRelocation,
   ExecutionWorkspaceBinding,
+  LocalEndpointDeclaration,
   LocalEndpointLease,
 } from "./Types.ts";
 export type ProjectRemovalPreview = {
@@ -1564,6 +1615,9 @@ import { realpathSync, statSync } from "node:fs";
 
 type LocalEndpointRegistration = {
   url: string; cwd: string; gitHead: string; port: number; pid: number; command: string; args: string[];
+};
+export type LocalEndpointDeclarationInput = {
+  workspaceRoot: string; command: string; args: string[]; healthPath: string;
 };
 type LocalEndpointRebind = {
   workspaceRoot: string; gitHead: string; command: string; args: string[];

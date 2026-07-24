@@ -13,6 +13,7 @@ test("a delayed decision keeps its exact-head endpoint alive after the receipt e
     assert.equal(final.visual.endpoint?.cwd, final.visual.workspace);
     assert.equal(final.assertions.every((item) => item.passed), true);
     assert.equal((await fetch(healthy.visual.endpoint!.url)).status, 200);
+    assertLegacyMigration();
   } finally {
     await scenario.dispose();
   }
@@ -91,8 +92,6 @@ test("reset terminates endpoint ownership before replacing its temporary fixture
 test("local endpoint supervisor rejects an uncommitted workspace before launch", async () => {
   const root = mkdtempSync(join(tmpdir(), "axi-factorio-dirty-review-"));
   try {
-    mkdirSync(join(root, ".axi-factorio"), { recursive: true });
-    writeFileSync(join(root, ".axi-factorio", "local-endpoint.json"), JSON.stringify({ command: process.execPath, args: ["endpoint.ts"] }));
     writeFileSync(join(root, "endpoint.ts"), "throw new Error('must not launch');\n");
     git(root, ["init", "-b", "main"]);
     git(root, ["config", "user.email", "factorio@example.test"]);
@@ -100,7 +99,9 @@ test("local endpoint supervisor rejects an uncommitted workspace before launch",
     git(root, ["add", "."]);
     git(root, ["commit", "-m", "Initial fixture"]);
     writeFileSync(join(root, "dirty.txt"), "not committed\n");
-    await assert.rejects(new LocalEndpointSupervisor().start("dirty-run", root), /clean committed workspace head/);
+    await assert.rejects(new LocalEndpointSupervisor().start("dirty-run", root, {
+      command: process.execPath, args: ["endpoint.ts"], healthPath: "/",
+    }), /clean committed workspace head/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -111,6 +112,52 @@ test("endpoint children remain temporary supervisor processes, not app-specific 
   assert.doesNotMatch(source, /launchctl|LaunchAgent|ServiceInstall/);
   assert.match(source, /spawn\(declaration.command, declaration.args/);
 });
+
+function assertLegacyMigration(): void {
+  const root = mkdtempSync(join(tmpdir(), "axi-factorio-endpoint-migration-"));
+  const pipeline = join(root, "pipelines", "default", "v1");
+  const database = new FactorioDatabase(join(root, "factorio.sqlite"));
+  try {
+    mkdirSync(pipeline, { recursive: true });
+    writeFileSync(join(pipeline, "01.build.endpoint.entry.md"), "Build.");
+    writeFileSync(join(pipeline, "01.build.endpoint.exit.md"), "Check.");
+    mkdirSync(join(root, ".axi-factorio"), { recursive: true });
+    writeFileSync(join(root, ".axi-factorio", "local-endpoint.json"), JSON.stringify({
+      command: process.execPath, args: ["endpoint.ts"], healthPath: "/healthz",
+    }));
+    git(root, ["init", "-b", "main"]);
+    git(root, ["config", "user.email", "factorio@example.test"]);
+    git(root, ["config", "user.name", "Factorio Fixture"]);
+    git(root, ["add", "pipelines"]);
+    git(root, ["commit", "-m", "Initial fixture"]);
+    const store = new ConveyorStore(database);
+    store.createBlob("legacy-endpoint", {
+      title: "Legacy endpoint", body: "", cwd: root, executionWorkspaceRoot: root,
+      pipelineId: "default/v1", pipelinePath: pipeline, inputArtifacts: [],
+    });
+    store.createBlob("legacy-endpoint-peer", {
+      title: "Legacy endpoint peer", body: "", cwd: root, executionWorkspaceRoot: root,
+      pipelineId: "default/v1", pipelinePath: pipeline, inputArtifacts: [],
+    });
+
+    const migrations = migrateLegacyLocalEndpointDeclarations(store);
+
+    assert.equal(migrations[0]?.imported, true);
+    assert.equal(migrations[0]?.removed, true);
+    assert.equal(migrations.length, 2);
+    assert.equal(existsSync(join(root, ".axi-factorio", "local-endpoint.json")), false);
+    assert.deepEqual(store.getLocalEndpointDeclaration("legacy-endpoint"), {
+      blobId: "legacy-endpoint", workspaceRoot: root, command: process.execPath,
+      args: ["endpoint.ts"], healthPath: "/healthz",
+      createdAt: store.getLocalEndpointDeclaration("legacy-endpoint")?.createdAt,
+      updatedAt: store.getLocalEndpointDeclaration("legacy-endpoint")?.updatedAt,
+    });
+    assert.equal(store.getLocalEndpointDeclaration("legacy-endpoint-peer")?.healthPath, "/healthz");
+  } finally {
+    database.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+}
 
 function git(cwd: string, args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
@@ -131,10 +178,15 @@ async function assertDisposition(action: "approve" | "reject"): Promise<void> {
 }
 
 import { LocalEndpointScenario } from "../test/harness/LocalEndpointScenario.ts";
-import { LocalEndpointSupervisor } from "../src/LocalEndpointSupervisor.ts";
+import {
+  LocalEndpointSupervisor,
+  migrateLegacyLocalEndpointDeclarations,
+} from "../src/LocalEndpointSupervisor.ts";
+import { FactorioDatabase } from "../src/Database.ts";
+import { ConveyorStore } from "../src/Store.ts";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";

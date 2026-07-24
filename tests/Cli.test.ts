@@ -82,7 +82,7 @@ test("root help exposes service installation and keeps workbench internal", () =
 test("every public command exposes concise help without opening runtime state", () => {
   const fixture = createCliFixture();
   const commands = [
-    "project", "add", "adopt", "relocate", "bind-execution", "list", "status", "show", "receipts",
+    "project", "artifact", "endpoint", "add", "adopt", "relocate", "bind-execution", "list", "status", "show", "receipts",
     "play", "step", "stop", "retry", "review", "feedback", "approve", "reset-endpoint", "rebind-endpoint", "rewind",
     "kick", "run", "evaluate", "service", "setup", "init",
   ];
@@ -96,7 +96,11 @@ test("every public command exposes concise help without opening runtime state", 
 
 test("grouped AXI actions expose action-specific help with defaults and examples", () => {
   const fixture = createCliFixture();
-  for (const args of [["project", "list", "--help"], ["service", "install", "--help"]]) {
+  for (const args of [
+    ["project", "list", "--help"],
+    ["endpoint", "declare", "--help"],
+    ["service", "install", "--help"],
+  ]) {
     const result = runCli(fixture, args);
     assert.equal(result.status, 0);
     assert.match(result.stdout, /default:/u);
@@ -138,6 +142,11 @@ test("projects own default pipeline selectors and blobs attach to projects", () 
     "add", "blob-project", "Project blob", "--project", "app", "--json",
   ]).stdout);
   const shown = JSON.parse(runCli(fixture, ["show", "blob-project", "--json"]).stdout);
+  const declared = JSON.parse(runCli(fixture, [
+    "endpoint", "declare", "blob-project", "--command", "npm",
+    "--arg", "run", "--arg", "preview", "--health-path", "/healthz", "--json",
+  ]).stdout);
+  const endpoint = JSON.parse(runCli(fixture, ["endpoint", "show", "blob-project", "--json"]).stdout);
 
   assert.equal(project.project.defaultPipeline, "default");
   assert.equal(project.project.root, appRoot);
@@ -148,6 +157,9 @@ test("projects own default pipeline selectors and blobs attach to projects", () 
   assert.equal(blob.blob.project, "app");
   assert.equal(shown.blob.cwd, appRoot);
   assert.equal(shown.blob.pipeline, "default/v1");
+  assert.equal(declared.localEndpointDeclaration.workspaceRoot, appRoot);
+  assert.equal(endpoint.localEndpointDeclaration.healthPath, "/healthz");
+  assert.equal(existsSync(join(appRoot, ".axi-factorio", "local-endpoint.json")), false);
 });
 
 test("project remove is preview-first and requires exact confirmation plus evidence", () => {

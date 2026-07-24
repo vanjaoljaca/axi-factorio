@@ -44,7 +44,8 @@ test("fresh storage includes projects, blobs, receipts, and the dispatcher lease
     rows.map((row) => row.name),
     [
       "attemptEvidence", "blobRevisions", "blobs", "dispatcherLeases",
-      "executionEvents", "executionWorkspaceBindings", "humanInputs", "localEndpointLeases",
+      "executionEvents", "executionWorkspaceBindings", "humanInputs", "localEndpointDeclarations",
+      "localEndpointLeases",
       "projectRemovals", "projects", "receipts", "settings", "workspaceRelocations",
     ],
   );
@@ -162,6 +163,10 @@ test("execution workspace binding keeps app identity and pipeline while widening
   const blob = fixture.store.createBlob("bound", {
     ...blobInput(fixture), cwd: appRoot, projectId: "example",
   }).blob;
+  fixture.store.declareLocalEndpoint(blob.id, {
+    workspaceRoot: blob.executionWorkspaceRoot,
+    command: "npm", args: ["run", "preview"], healthPath: "/healthz",
+  });
 
   const binding = fixture.store.bindExecutionWorkspace(blob.id, worktree, ["worktree:exact-head"]);
   const updated = fixture.store.getBlob(blob.id)!;
@@ -170,6 +175,7 @@ test("execution workspace binding keeps app identity and pipeline while widening
   assert.equal(updated.executionWorkspaceRoot, realpathSync(worktree));
   assert.equal(updated.pipelineId, blob.pipelineId);
   assert.equal(updated.pipelinePath, blob.pipelinePath);
+  assert.equal(fixture.store.getLocalEndpointDeclaration(blob.id)?.workspaceRoot, realpathSync(worktree));
   assert.deepEqual(fixture.store.listExecutionWorkspaceBindings(blob.id), [binding]);
   fixture.database.close();
 });

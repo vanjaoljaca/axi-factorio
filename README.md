@@ -242,7 +242,7 @@ npm run build
 
 This recreates `release/` with:
 
-- `axi-factorio-0.1.0-rc.54.tgz`, the installable package;
+- `axi-factorio-0.1.0-rc.55.tgz`, the installable package;
 - `SHA256SUMS`, for artifact verification; and
 - `INSTALL.md`, with direct and vendored installation commands.
 
@@ -254,7 +254,7 @@ Do not use `npm link` for a consuming project. Install the exact tarball so
 Install the exact candidate in the consuming npm project:
 
 ```sh
-npm install --save-exact /path/to/axi-factorio-0.1.0-rc.54.tgz
+npm install --save-exact /path/to/axi-factorio-0.1.0-rc.55.tgz
 ```
 
 From the consuming project root, the defaults are:
@@ -486,7 +486,7 @@ harness adds only the Git-owned state required to commit through repeatable
 folders. The assigned workspace must equal Git's reported work root; non-Git
 workspaces retain their previous behavior.
 
-Opening an older database with rc.54 migrates projects, receipt
+Opening an older database with rc.55 migrates projects, receipt
 provenance, durable execution-control columns, blob revisions, and immutable
 attempt evidence, plus durable local-endpoint process leases automatically. Existing blobs receive an
 `executionWorkspaceRoot` equal to their current app root, preserving prior
@@ -521,10 +521,20 @@ argument to Cursor without shell interpolation. Missing folders or a missing
 Cursor installation disable the action with an explanation; launch failures
 remain visible in the Viewer.
 
-An execution workspace can opt into a Factorio-owned local endpoint by writing
-`.axi-factorio/local-endpoint.json` with a literal executable `command`, an
-`args` string array, and optional loopback `healthPath`. The pipeline or agent
-harness owns that declaration; Factorio has no knowledge of the consumer UI.
+An execution workspace can opt into a Factorio-owned local endpoint by storing
+a literal executable `command`, repeatable argv values, and an optional
+loopback `healthPath` against its blob in Factorio's SQLite database:
+
+```sh
+axi-factorio endpoint declare <blob-id> \
+  --command npm --arg run --arg preview --health-path /healthz
+```
+
+`endpoint show` inspects the declaration and `endpoint clear` removes it when
+no active lease owns it. Declarations and active leases are Factorio runtime
+state; no `.axi-factorio` file is written into the consumer workspace. The
+pipeline or agent harness owns the generic declaration; Factorio has no
+knowledge of the consumer UI.
 After entry finishes, the runner requires a clean committed Git head, allocates
 a loopback-only port, and starts the declared argv from that exact workspace,
 outside the agent sandbox. Factorio verifies HTTP health, supplies the endpoint,
@@ -541,6 +551,13 @@ executables are rejected, and a dirty workspace fails before launch.
 Factorio does not decide what the endpoint represents or which audits precede
 a human gate. Those requirements belong in ordinary pipeline Markdown; the
 process lease only preserves a generic endpoint until its human disposition.
+
+On first use after upgrading, Factorio imports an untracked legacy
+`.axi-factorio/local-endpoint.json` into SQLite and removes that exact file.
+It removes the now-empty `.axi-factorio` directory only when nothing else is
+inside. A tracked legacy file is imported but deliberately retained for an
+explicit source-control change; Factorio logs that disposition rather than
+silently editing tracked consumer source.
 
 The execution-session panel shows in-flight and recent completed receipts.
 Every receipt retains queued, started, last-progress, finished, and elapsed

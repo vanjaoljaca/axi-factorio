@@ -6,22 +6,28 @@ export class LocalEndpointSupervisor {
     this.healthTimeoutMs = options.healthTimeoutMs ?? defaultHealthTimeoutMs;
   }
 
-  async inspectWorkspace(workspaceRoot: string, expectedHead: string): Promise<LocalEndpointWorkspace> {
+  async inspectWorkspace(
+    workspaceRoot: string,
+    expectedHead: string,
+    declaration: LocalEndpointDeclarationValue,
+  ): Promise<LocalEndpointWorkspace> {
     const root = realpathSync(workspaceRoot);
     await requireExactIdentity(root, expectedHead);
-    const declaration = readDeclaration(root);
-    if (!declaration) throw new Error("Local endpoint declaration is not available in the assigned workspace.");
-    return { root, ...declaration };
+    return { root, ...validateDeclaration(declaration) };
   }
 
-  async start(runId: string, workspaceRoot: string, port?: number): Promise<LocalEndpointSession | null> {
+  async start(
+    runId: string,
+    workspaceRoot: string,
+    declaration?: LocalEndpointDeclarationValue | null,
+    port?: number,
+  ): Promise<LocalEndpointSession | null> {
     const root = realpathSync(workspaceRoot);
-    const declaration = readDeclaration(root);
     if (!declaration) return null;
     if (this.sessions.has(runId)) return this.sessions.get(runId)!.session;
     const identity = await requireCleanGitIdentity(root);
     const assignedPort = port ?? await availablePort();
-    return this.launchAndVerify(runId, root, identity.head, assignedPort, declaration);
+    return this.launchAndVerify(runId, root, identity.head, assignedPort, validateDeclaration(declaration));
   }
 
   async recover(lease: LocalEndpointLease): Promise<LocalEndpointSession> {
@@ -34,7 +40,12 @@ export class LocalEndpointSupervisor {
     if (processAlive(lease.pid) && await isHealthy(lease.url)) return this.adopt(lease, root);
     if (processAlive(lease.pid)) await terminatePid(lease.pid);
     this.sessions.delete(lease.id);
-    const session = await this.start(lease.id, root, lease.port);
+    const declaration = {
+      command: lease.command,
+      args: lease.args,
+      healthPath: new URL(lease.url).pathname,
+    };
+    const session = await this.start(lease.id, root, declaration, lease.port);
     if (!session) throw new Error("Local endpoint declaration is no longer available.");
     return session;
   }
@@ -83,16 +94,91 @@ function samePersistedSession(
     && active.session.gitHead === lease.gitHead;
 }
 
-function readDeclaration(root: string): LocalEndpointDeclaration | null {
-  const path = join(root, ".axi-factorio", "local-endpoint.json");
-  if (!existsSync(path)) return null;
-  const value = JSON.parse(readFileSync(path, "utf8")) as Partial<LocalEndpointDeclaration>;
+export function validateLocalEndpointDeclaration(value: unknown): LocalEndpointDeclarationValue {
+  return validateDeclaration(value as Partial<LocalEndpointDeclarationValue>);
+}
+
+function validateDeclaration(value: Partial<LocalEndpointDeclarationValue>): LocalEndpointDeclarationValue {
   if (typeof value.command !== "string" || !value.command.trim()) throw invalidDeclaration("command");
   if (!Array.isArray(value.args) || !value.args.every((item) => typeof item === "string")) {
     throw invalidDeclaration("args");
   }
   requireSafeArgv(value.command, value.args);
   return { command: value.command, args: value.args, healthPath: requireHealthPath(value.healthPath) };
+}
+
+export function migrateLegacyLocalEndpointDeclarations(
+  store: ConveyorStore,
+): LegacyLocalEndpointMigration[] {
+  const workspaces = groupBlobsByWorkspace(store.listBlobs());
+  return [...workspaces.values()].flatMap((blobs) => {
+    try {
+      return migrateLegacyWorkspace(store, blobs);
+    } catch (error) {
+      const [blob] = blobs;
+      log("local_endpoint_declaration_migration_failed", {
+        blobIds: blobs.map((item) => item.id),
+        path: join(blob.executionWorkspaceRoot, legacyDirectory, legacyFile),
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return [];
+    }
+  });
+}
+
+function migrateLegacyWorkspace(store: ConveyorStore, blobs: Blob[]): LegacyLocalEndpointMigration[] {
+  const root = blobs[0].executionWorkspaceRoot;
+  const path = join(root, legacyDirectory, legacyFile);
+  if (!existsSync(path)) return [];
+  const declaration = validateLocalEndpointDeclaration(JSON.parse(readFileSync(path, "utf8")));
+  const results = blobs.map((blob) => {
+    const existing = store.getLocalEndpointDeclaration(blob.id);
+    if (!existing) store.declareLocalEndpoint(blob.id, { workspaceRoot: root, ...declaration });
+    return { blobId: blob.id, path, imported: !existing, removed: false };
+  });
+  const removed = removeLegacyDeclaration(root, path);
+  const migrations = results.map((result) => ({ ...result, removed }));
+  log("local_endpoint_declaration_migrated", {
+    blobIds: migrations.map((item) => item.blobId),
+    path,
+    importedCount: migrations.filter((item) => item.imported).length,
+    removed,
+  });
+  return migrations;
+}
+
+function groupBlobsByWorkspace(blobs: Blob[]): Map<string, Blob[]> {
+  const result = new Map<string, Blob[]>();
+  for (const blob of blobs) {
+    const group = result.get(blob.executionWorkspaceRoot) ?? [];
+    group.push(blob);
+    result.set(blob.executionWorkspaceRoot, group);
+  }
+  return result;
+}
+
+function removeLegacyDeclaration(root: string, path: string): boolean {
+  if (gitTracksLegacyDeclaration(root)) {
+    log("local_endpoint_legacy_declaration_retained", { path, reason: "tracked-source-file" });
+    return false;
+  }
+  unlinkSync(path);
+  const directory = join(root, legacyDirectory);
+  if (readdirSync(directory).length === 0) rmdirSync(directory);
+  return true;
+}
+
+function gitTracksLegacyDeclaration(root: string): boolean {
+  try {
+    execFileSync(
+      "git",
+      ["-C", root, "ls-files", "--error-unmatch", "--", `${legacyDirectory}/${legacyFile}`],
+      { stdio: "ignore" },
+    );
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function requireSafeArgv(command: string, args: string[]): void {
@@ -199,7 +285,7 @@ function processAlive(pid: number): boolean {
 }
 
 function invalidDeclaration(field: string): Error {
-  return new Error(`Invalid .axi-factorio/local-endpoint.json ${field}.`);
+  return new Error(`Invalid local endpoint declaration ${field}.`);
 }
 
 function isGone(error: unknown): boolean {
@@ -220,7 +306,11 @@ export type LocalEndpointSession = {
 };
 export type LocalEndpointSupervisorOptions = { healthTimeoutMs?: number };
 export type LocalEndpointWorkspace = LocalEndpointDeclaration & { root: string };
-type LocalEndpointDeclaration = { command: string; args: string[]; healthPath: string };
+export type LocalEndpointDeclarationValue = { command: string; args: string[]; healthPath: string };
+export type LegacyLocalEndpointMigration = {
+  blobId: string; path: string; imported: boolean; removed: boolean;
+};
+type LocalEndpointDeclaration = LocalEndpointDeclarationValue;
 type ActiveLocalEndpoint = { child: ChildProcess | null; session: LocalEndpointSession; output: string };
 
 const defaultHealthTimeoutMs = 60_000;
@@ -228,11 +318,14 @@ const healthPollMs = 100;
 const healthRequestMs = 500;
 const terminationMs = 1_000;
 const forbiddenShells = new Set(["sh", "bash", "zsh", "fish", "cmd", "cmd.exe", "powershell", "pwsh"]);
+const legacyDirectory = ".axi-factorio";
+const legacyFile = "local-endpoint.json";
 
 import type { ChildProcess } from "node:child_process";
-import type { LocalEndpointLease } from "./Types.ts";
-import { execFile, spawn } from "node:child_process";
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import type { Blob, LocalEndpointLease } from "./Types.ts";
+import type { ConveyorStore } from "./Store.ts";
+import { execFile, execFileSync, spawn } from "node:child_process";
+import { existsSync, readFileSync, readdirSync, realpathSync, rmdirSync, unlinkSync } from "node:fs";
 import { createServer } from "node:net";
 import { once } from "node:events";
 import { join } from "node:path";

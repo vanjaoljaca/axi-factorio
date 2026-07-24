@@ -254,8 +254,8 @@ function scenarioIndex(): object[] {
       description: "Title menu · default Cursor · assigned root + unavailable path · real action component",
     },
     {
-      id: "local-endpoint-supervisor", category: "Service", name: "Durable declared local endpoint",
-      description: "Receipt ends → endpoint lease stays live → restart recovery → owned cleanup",
+      id: "local-endpoint-supervisor", category: "Service", name: "Factorio-owned endpoint state",
+      description: "No consumer sidecar → endpoint lease stays live → restart recovery → owned cleanup",
     },
     {
       id: "coupled-service-recovery", category: "Service", name: "Coupled listener recovery",

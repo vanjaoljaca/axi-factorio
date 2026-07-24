@@ -291,6 +291,16 @@ const schema = `
   CREATE INDEX IF NOT EXISTS executionWorkspaceBindingsByBlob
     ON executionWorkspaceBindings(blobId, createdAt);
 
+  CREATE TABLE IF NOT EXISTS localEndpointDeclarations (
+    blobId TEXT PRIMARY KEY REFERENCES blobs(id),
+    workspaceRoot TEXT NOT NULL,
+    command TEXT NOT NULL,
+    argsJson TEXT NOT NULL,
+    healthPath TEXT NOT NULL,
+    createdAt TEXT NOT NULL,
+    updatedAt TEXT NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS localEndpointLeases (
     id TEXT PRIMARY KEY,
     blobId TEXT NOT NULL REFERENCES blobs(id),

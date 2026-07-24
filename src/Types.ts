@@ -185,6 +185,16 @@ export type LocalEndpointLease = {
   stoppedAt: string | null;
 };
 
+export type LocalEndpointDeclaration = {
+  blobId: string;
+  workspaceRoot: string;
+  command: string;
+  args: string[];
+  healthPath: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type ImportAttestation = {
   step: StepDefinition;
   definition: DefinitionSnapshot;
